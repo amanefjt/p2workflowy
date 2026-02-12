@@ -117,34 +117,57 @@ def main():
         sys.exit(1)
 
     # Translation
-    print_progress("Step 4/4: アカデミック翻訳を実施中 (辞書適用)...", 75)
+    print_progress("Step 4/4: アカデミック翻訳を実施中 (辞書適用・並列処理)...", 75)
     
     # セクション分割して翻訳
     sections = Utils.split_into_sections(structured_md)
-    translated_parts = []
+    translated_parts = [""] * len(sections)  # 順序保持用のリスト
     
-    for i, section in enumerate(sections):
-        content = section["content"].strip()
-        if not content:
-            continue
-
-        msg = f"翻訳中... ({i+1}/{len(sections)})"
-        print_progress(f"Step 4/4: {msg}", 75 + int((i / len(sections)) * 20))
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+    # 並列処理用の関数
+    def process_section(idx, section_content, section_title):
         try:
-            translated = skills.translate_academic(
-                content,
+            if not section_content.strip():
+                return idx, ""
+            
+            # 各スレッドでAPIコール
+            trans = skills.translate_academic(
+                section_content,
                 glossary_text,
                 progress_callback=None
             )
-            # 翻訳結果からもマーカーを除去
-            translated = re.sub(r'^```(markdown)?\n', '', translated, flags=re.MULTILINE)
-            translated = re.sub(r'\n```$', '', translated, flags=re.MULTILINE)
-            translated_parts.append(translated.strip())
-        except Exception as e:
-            print(f"\n警告: セクション '{section['title']}' の翻訳に失敗: {e}")
-            translated_parts.append(f"[翻訳エラー: {section['title']}]")
+            # 翻訳結果からマーカーを除去
+            trans = re.sub(r'^```(markdown)?\n', '', trans, flags=re.MULTILINE)
+            trans = re.sub(r'\n```$', '', trans, flags=re.MULTILINE)
+            return idx, trans.strip()
+        except Exception as ex:
+            print(f"\n警告: セクション '{section_title}' の翻訳に失敗: {ex}")
+            return idx, f"[翻訳エラー: {section_title}]"
 
-    full_translation_md = "\n\n".join(translated_parts)
+    # ThreadPoolExecutorによる並列実行
+    # max_workersはAPIレートリミットを考慮して調整（Geminiは比較的高速だが、多すぎるとエラーになる可能性があるため5〜10程度推奨）
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_idx = {}
+        for i, section in enumerate(sections):
+            content = section["content"]
+            title = section["title"]
+            future = executor.submit(process_section, i, content, title)
+            future_to_idx[future] = i
+        
+        completed_count = 0
+        total_sections = len(sections)
+        
+        for future in as_completed(future_to_idx):
+            idx, result = future.result()
+            translated_parts[idx] = result
+            
+            completed_count += 1
+            progress = 75 + int((completed_count / total_sections) * 20)
+            print_progress(f"Step 4/4: 翻訳中... ({completed_count}/{total_sections})", progress)
+
+    # 空要素を除去して結合
+    full_translation_md = "\n\n".join([p for p in translated_parts if p])
     translation_workflowy = Utils.markdown_to_workflowy(full_translation_md)
     print_progress("Step 4/4: 翻訳完了", 95)
 

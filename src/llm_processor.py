@@ -21,18 +21,18 @@ class LLMProcessor:
     MAX_RETRIES = 3
     BASE_DELAY = 2  # 秒
 
-    def __init__(self, api_key: str | None = None, model_name: str = DEFAULT_MODEL):
+    def __init__(self, api_key: str | None = None, model_name: str | None = None):
         """
         Args:
             api_key: Google API Key。Noneの場合は環境変数から取得
-            model_name: 使用するモデル名
+            model_name: 使用するモデル名。Noneの場合はDEFAULT_MODELを使用
         """
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
         if not self.api_key:
             raise ValueError("GOOGLE_API_KEY が設定されていません")
         
         self.client = genai.Client(api_key=self.api_key)
-        self.model_name = model_name
+        self.model_name = model_name or DEFAULT_MODEL
 
     def call_api(self, prompt: str, progress_callback=None) -> str:
         """

@@ -10,6 +10,14 @@ class Utils:
     """ユーティリティクラス"""
 
     @staticmethod
+    def process_uploaded_file(uploaded_file) -> str:
+        """StreamlitのUploadedFileを読み込んで文字列として返す"""
+        if uploaded_file is None:
+            return ""
+        # バイト列を文字列に変換
+        return uploaded_file.getvalue().decode("utf-8")
+
+    @staticmethod
     def read_text_file(path: str | Path) -> str:
         """テキストファイルを読み込む"""
         return Path(path).read_text(encoding="utf-8")

@@ -15,8 +15,8 @@ from .constants import (
 class PaperProcessorSkills:
     """学術論文処理の認知スキルを提供するクラス"""
 
-    def __init__(self, model_name: str = DEFAULT_MODEL):
-        self.llm = LLMProcessor(model_name=model_name)
+    def __init__(self, api_key: str | None = None, model_name: str | None = None):
+        self.llm = LLMProcessor(api_key=api_key, model_name=model_name)
 
     async def summarize_raw_text(self, raw_text: str, progress_callback: Optional[Callable] = None) -> str:
         """

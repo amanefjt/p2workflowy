@@ -66,6 +66,7 @@ async def main():
     
     # スキルとユーティリティの初期化
     try:
+        # main.py (CLI) では引数なしで初期化することで、.envのGOOGLE_API_KEYを使用
         skills = PaperProcessorSkills()
     except ValueError as e:
         print(f"\nエラー: {e}")

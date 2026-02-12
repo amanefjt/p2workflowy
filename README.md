@@ -24,7 +24,7 @@ PDFから抽出された学術論文のテキストを、AI（Gemini 3 Flash）�
 ターミナルを開き、以下のコマンドをコピー＆ペーストして実行してください。
 
 ```bash
-cd /Users/shufujita/Antigravity && python -m p2workflowy.src.main
+cd /Users/（ユーザー名）/Antigravity && python -m p2workflowy.src.main
 ```
 
 ## 使い方

@@ -87,46 +87,83 @@ class Utils:
     @staticmethod
     def split_into_sections(text: str, max_chars: int = 15000) -> list[dict]:
         """
-        長いテキストを翻訳用にセクション分割する。
+        見出しを基準にテキストを分割し、意味的なまとまりを維持しながらチャンク化する。
         """
-        sections = []
+        # 1. まず見出し（#〜###）を基準にバラバラの構成単位にする
+        units = []
         lines = text.split('\n')
-        current_chunk = []
-        current_length = 0
         current_title = "Intro"
+        current_lines = []
 
         for line in lines:
             if re.match(r'^#+\s+', line.strip()):
-                if current_chunk:
-                    sections.append({
-                        "title": current_title,
-                        "content": "\n".join(current_chunk)
-                    })
-                    current_chunk = []
-                    current_length = 0
-                
+                if current_lines:
+                    units.append({"title": current_title, "content": "\n".join(current_lines)})
                 current_title = line.strip().lstrip('#').strip()
-                current_chunk.append(line)
-                current_length += len(line)
+                current_lines = [line]
             else:
-                current_chunk.append(line)
-                current_length += len(line)
+                current_lines.append(line)
+        
+        if current_lines:
+            units.append({"title": current_title, "content": "\n".join(current_lines)})
 
-            if current_length > max_chars:
-                sections.append({
-                    "title": f"{current_title} (cont.)",
-                    "content": "\n".join(current_chunk)
+        # 2. 構成単位を max_chars に収まるようにグループ化する
+        final_sections = []
+        current_group_content = []
+        current_group_length = 0
+        current_group_title = ""
+
+        for unit in units:
+            content_len = len(unit["content"])
+            
+            # 単体で max_chars を超える巨大なセクションの場合
+            if content_len > max_chars:
+                # 溜まっているものがあれば出力
+                if current_group_content:
+                    final_sections.append({
+                        "title": current_group_title,
+                        "content": "\n".join(current_group_content)
+                    })
+                    current_group_content, current_group_length, current_group_title = [], 0, ""
+
+                # 巨大セクションを強制分割
+                sub_chunks = Utils.split_text_into_chunks(unit["content"], chunk_size=max_chars)
+                for i, sub in enumerate(sub_chunks):
+                    suffix = f" ({i+1})" if len(sub_chunks) > 1 else ""
+                    final_sections.append({
+                        "title": unit["title"] + suffix,
+                        "content": sub
+                    })
+                continue
+
+            # 現在のグループに追加できるかチェック
+            if current_group_length + content_len > max_chars:
+                # 溢れるので現在のグループを確定
+                final_sections.append({
+                    "title": current_group_title,
+                    "content": "\n".join(current_group_content)
                 })
-                current_chunk = []
-                current_length = 0
+                # 新しいグループを開始
+                current_group_content = [unit["content"]]
+                current_group_length = content_len
+                current_group_title = unit["title"]
+            else:
+                # 追加可能
+                current_group_content.append(unit["content"])
+                current_group_length += content_len
+                if not current_group_title:
+                    current_group_title = unit["title"]
+                elif len(current_group_title) < 50: # タイトルが長くなりすぎないように
+                    current_group_title += f" & {unit['title']}"
 
-        if current_chunk:
-            sections.append({
-                "title": current_title,
-                "content": "\n".join(current_chunk)
+        # 残りを出力
+        if current_group_content:
+            final_sections.append({
+                "title": current_group_title,
+                "content": "\n".join(current_group_content)
             })
 
-        return sections
+        return final_sections
 
     @staticmethod
     def split_text_into_chunks(text: str, chunk_size: int = 15000) -> list[str]:

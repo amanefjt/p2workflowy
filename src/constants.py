@@ -32,6 +32,28 @@ STRUCTURING_PROMPT = """あなたは学術論文の編集AIです。
 </input>
 """
 
+# --- Skill: AnchoredStructuring (要約をガイドにした構造化) ---
+STRUCTURING_WITH_HINT_PROMPT = """あなたは学術専門の編集AIです。
+提供された「要約（章立てのヒント）」をガイドとして使い、入力された「崩れた論文テキスト」に意味論的に正しいMarkdown構造（見出し）を付与してください。
+
+<summary_hint>
+{summary_hint}
+</summary_hint>
+
+<rules>
+- **重要**: 本文の内容は絶対に要約・変更せず、元の英語の文章をそのまま維持してください(Keep the output in English)。行の結合（Hyphenationの修正）や不自然な改行の修正のみを行ってください。
+- `summary_hint` に示されているセクション構成を読み取り、原文内の対応する箇所にMarkdown見出し（#, ##, ###）を挿入してください。
+- ページ番号、ジャーナル名、DOI、ヘッダー、フッターなどのノイズ行を削除してください。
+- 参考文献、謝辞、著者情報などの付随的なセクションは、要約の指示に従って除外してください。
+- 文脈から判断し、Introductionなどの見出しが欠落している場合は、要約の構成に基づいて補完してください。
+- **出力形式**: 構造化された英語のMarkdownテキストのみを出力してください。あなたの解説や挨拶は一切不要です。
+</rules>
+
+<raw_text>
+{raw_text}
+</raw_text>
+"""
+
 # --- Skill: ContentSummarizer (要約) ---
 SUMMARY_PROMPT = """あなたは文化人類学を専門とするシニア・リサーチャーです。
 入力されたMarkdownドキュメントを精査し、各節の論理展開を Chain of Thought（段階的思考）を用いて詳細に抽出した上で、Workflowy（アウトライナー）に貼り付けるための学術的レジュメを作成してください。

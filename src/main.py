@@ -5,6 +5,7 @@ p2workflowy - 英語論文処理プログラム (Agentic Skills版)
 import sys
 import time
 import re
+import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -23,12 +24,13 @@ def print_progress(message: str, percentage: int | None = None) -> None:
         print(f"\n{message}")
 
 
-def main():
-    """メイン処理パイプライン"""
+async def main():
+    """メイン処理パイプライン (Summary-First Approach)"""
     # パス設定
     project_dir = Path(__file__).parent.parent
     glossary_file = project_dir / "glossary.csv"
     inter_dir = project_dir / "intermediate"
+    output_dir = project_dir / "output"
     
     # 引数またはユーザー入力から入力ファイルを取得
     if len(sys.argv) > 1:
@@ -49,15 +51,17 @@ def main():
         print(f"エラー: 入力ファイルが見つかりません: {input_file}")
         sys.exit(1)
         
-    # 出力ファイルの設定（入力ファイルと同じディレクトリに _output.txt を作成）
+    # 出力ファイルの設定
     output_final = input_file.parent / f"{input_file.stem}_output.txt"
+    output_summary = input_file.parent / f"{input_file.stem}_summary.txt"
     structured_md_file = inter_dir / "structured.md"
     
     # ディレクトリ作成
     inter_dir.mkdir(exist_ok=True)
+    output_dir.mkdir(exist_ok=True)
     
     print("=" * 60)
-    print("p2workflowy - Cognitive Skills Pipeline")
+    print("p2workflowy - Summary-First Sequential Pipeline")
     print("=" * 60)
     
     # スキルとユーティリティの初期化
@@ -65,133 +69,67 @@ def main():
         skills = PaperProcessorSkills()
     except ValueError as e:
         print(f"\nエラー: {e}")
-        print("ヒント: .envファイルにGOOGLE_API_KEYを設定してください")
         sys.exit(1)
 
-    # 1. Load Input
-    print_progress("Step 1/4: 入力ファイルを読み込み中...", 0)
+    # Step 1: Load Input & Glossary
     raw_text = Utils.read_text_file(input_file)
     glossary_text = Utils.load_glossary(glossary_file) if glossary_file.exists() else ""
-    print_progress("Step 1/4: 入力ファイルを読み込み中...", 25)
 
-    # 2. Phase 1 - Structuring
-    print_progress("Step 2/4: 文献の構造を復元中 (Cognitive Structuring)...", 25)
+    # Phase 1: Semantic Mapping (要約生成)
+    print_progress("Phase 1: 原文から意味的な構造（地図）を把握中...", 10)
+    summary_text = await skills.summarize_raw_text(
+        raw_text,
+        progress_callback=lambda msg: print_progress(f"Phase 1: {msg}")
+    )
+    # 要約単体でも保存
+    Utils.write_text_file(output_summary, summary_text)
+    print_progress("Phase 1: 要約生成完了 (出力を保存しました)", 30)
+
+    # Phase 2: Anchored Structuring (構造化)
+    print_progress("Phase 2: 要約をガイドにして原文の構造を復元中...", 30)
     try:
-        structured_md = skills.restore_structure(
+        structured_md = await skills.structure_text_with_hint(
             raw_text,
-            progress_callback=lambda msg: print_progress(f"Step 2/4: {msg}")
+            summary_text,
+            progress_callback=lambda msg: print_progress(f"Phase 2: {msg}")
         )
-        
-        # 思考プロセス（<thought>）を除去
-        if "</thought>" in structured_md:
-            structured_md = structured_md.split("</thought>")[-1].strip()
-        
-        # コードブロックマーカー（```markdown / ```）を除去
-        structured_md = re.sub(r'^```(markdown)?\n', '', structured_md, flags=re.MULTILINE)
-        structured_md = re.sub(r'\n```$', '', structured_md, flags=re.MULTILINE)
-        structured_md = structured_md.strip()
-        
         Utils.write_text_file(structured_md_file, structured_md)
-        print_progress("Step 2/4: 構造復元完了", 50)
+        print_progress("Phase 2: 構造化完了", 50)
     except Exception as e:
-        print(f"\nエラー: 構造復元に失敗しました: {e}")
+        print(f"\nエラー: 構造化に失敗しました: {e}")
         sys.exit(1)
 
-    # 3. Phase 2 - Parallel Processing (Summarization & Translation)
-    
-    # Summarization
-    print_progress("Step 3/4: Workflowy形式の要約を生成中...", 50)
+    # Phase 3: Contextual Translation (並列翻訳)
+    print_progress("Phase 3: 文脈を考慮した並列翻訳を実施中...", 50)
     try:
-        summary_workflowy = skills.summarize_workflowy(
+        translated_text = await skills.translate_academic(
             structured_md,
-            progress_callback=lambda msg: print_progress(f"Step 3/4: {msg}")
+            glossary_text,
+            summary_text=summary_text,
+            progress_callback=lambda msg: print_progress(f"Phase 3: {msg}")
         )
-        # 要約からもマーカーを除去
-        summary_workflowy = re.sub(r'^```(markdown)?\n', '', summary_workflowy, flags=re.MULTILINE)
-        summary_workflowy = re.sub(r'\n```$', '', summary_workflowy, flags=re.MULTILINE)
-        summary_workflowy = summary_workflowy.strip()
-
-        print_progress("Step 3/4: 要約生成完了", 75)
+        print_progress("Phase 3: 翻訳完了", 90)
     except Exception as e:
-        print(f"\nエラー: 要約生成に失敗しました: {e}")
+        print(f"\nエラー: 翻訳に失敗しました: {e}")
         sys.exit(1)
 
-    # Translation
-    print_progress("Step 4/4: アカデミック翻訳を実施中 (辞書適用・並列処理)...", 75)
+    # Phase 4: Assembly (結合)
+    print_progress("Phase 4: 成果物を統合中...", 90)
     
-    # セクション分割して翻訳
-    sections = Utils.split_into_sections(structured_md)
-    translated_parts = [""] * len(sections)  # 順序保持用のリスト
+    # Workflowy形式への変換
+    summary_workflowy = Utils.markdown_to_workflowy(summary_text)
+    translation_workflowy = Utils.markdown_to_workflowy(translated_text)
     
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    final_content = f"# {input_file.stem}\n\n## 要約 (Summary)\n{summary_workflowy}\n\n## 翻訳 (Translation)\n{translation_workflowy}"
+    Utils.write_text_file(output_final, final_content)
     
-    # 並列処理用の関数
-    def process_section(idx, section_content, section_title, summary_context):
-        try:
-            if not section_content.strip():
-                return idx, ""
-            
-            # 各スレッドでAPIコール
-            trans = skills.translate_academic(
-                section_content,
-                glossary_text,
-                summary_text=summary_context,
-                progress_callback=None
-            )
-            # 翻訳結果からマーカーを除去
-            trans = re.sub(r'^```(markdown)?\n', '', trans, flags=re.MULTILINE)
-            trans = re.sub(r'\n```$', '', trans, flags=re.MULTILINE)
-            return idx, trans.strip()
-        except Exception as ex:
-            print(f"\n警告: セクション '{section_title}' の翻訳に失敗: {ex}")
-            return idx, f"[翻訳エラー: {section_title}]"
-
-    # ThreadPoolExecutorによる並列実行
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_idx = {}
-        for i, section in enumerate(sections):
-            content = section["content"]
-            title = section["title"]
-            future = executor.submit(process_section, i, content, title, summary_workflowy)
-            future_to_idx[future] = i
-        
-        completed_count = 0
-        total_sections = len(sections)
-        
-        for future in as_completed(future_to_idx):
-            idx, result = future.result()
-            translated_parts[idx] = result
-            
-            completed_count += 1
-            progress = 75 + int((completed_count / total_sections) * 20)
-            print_progress(f"Step 4/4: 翻訳中... ({completed_count}/{total_sections})", progress)
-
-    # 空要素を除去して結合
-    full_translation_md = "\n\n".join([p for p in translated_parts if p])
-    translation_workflowy = Utils.markdown_to_workflowy(full_translation_md)
-    print_progress("Step 4/4: 翻訳完了", 95)
-
-    # 4. Assembly
-    print_progress("Step 5/5: 最終出力を構築中...", 95)
-    
-    # タイトル取得
-    title_lines = [l.lstrip("# ").strip() for l in structured_md.split("\n") if l.strip()]
-    title_line = title_lines[0] if title_lines else "Untitled Paper"
-    
-    final_output = f"{title_line}\n\n- 要約\n{summary_workflowy}\n{translation_workflowy}"
-    Utils.write_text_file(output_final, final_output)
-    
-    print_progress("Step 5/5: 処理完了!", 100)
-    
-    # 完了
+    print_progress("Phase 4: 処理完了!", 100)
     print("\n" + "=" * 60)
-    print("リファクタリング後のパイプライン処理が完了しました")
+    print(f"成果物が生成されました:")
+    print(f"  - 最終出力 (Workflowy形式): {output_final}")
+    print(f"  - 要約のみ: {output_summary}")
     print("=" * 60)
-    print(f"\n出力ファイル:")
-    print(f"  1. 中間ファイル (Markdown): {structured_md_file}")
-    print(f"  2. 最終成果物 (Workflowy): {output_final}")
-    print()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

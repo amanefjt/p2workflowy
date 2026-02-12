@@ -6,6 +6,7 @@ from typing import Optional, Callable
 from .llm_processor import LLMProcessor
 from .constants import (
     STRUCTURING_PROMPT,
+    STRUCTURING_WITH_HINT_PROMPT,
     SUMMARY_PROMPT,
     TRANSLATION_PROMPT,
     DEFAULT_MODEL
@@ -16,6 +17,38 @@ class PaperProcessorSkills:
 
     def __init__(self, model_name: str = DEFAULT_MODEL):
         self.llm = LLMProcessor(model_name=model_name)
+
+    async def summarize_raw_text(self, raw_text: str, progress_callback: Optional[Callable] = None) -> str:
+        """
+        【Phase 1】崩れたテキストから直接意味的な要約（論理構造の地図）を作成する。
+        """
+        # 長い場合はチャンク分割して要約する機能が本来は必要だが、
+        # Geminiの大きなコンテキストを活かし、ここでは1回で試みる（または統合要約を生成）。
+        prompt = SUMMARY_PROMPT.format(text=raw_text)
+        import asyncio
+        return await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
+
+    async def structure_text_with_hint(self, raw_text: str, summary_text: str, progress_callback: Optional[Callable] = None) -> str:
+        """
+        【Phase 2】要約（地図）をヒントにして、生テキストを Markdown 構造化する。
+        """
+        # 一度に出力できるトークン制限に注意しつつ実行
+        prompt = STRUCTURING_WITH_HINT_PROMPT.format(
+            raw_text=raw_text,
+            summary_hint=summary_text
+        )
+        import asyncio
+        structured = await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
+        
+        # クリーニング処理
+        import re
+        if "</thought>" in structured:
+            structured = structured.split("</thought>")[-1].strip()
+        structured = re.sub(r'^```(markdown)?\n', '', structured, flags=re.MULTILINE)
+        structured = re.sub(r'\n```$', '', structured, flags=re.MULTILINE)
+        structured = re.sub(r'<thought>.*?</thought>', '', structured, flags=re.DOTALL)
+        
+        return structured.strip()
 
     def restore_structure(self, raw_text: str, progress_callback: Optional[Callable] = None) -> str:
         """
@@ -87,7 +120,7 @@ class PaperProcessorSkills:
         prompt = SUMMARY_PROMPT.format(text=clean_markdown)
         return self.llm.call_api(prompt, progress_callback)
 
-    def translate_academic(
+    async def translate_academic(
         self, 
         clean_markdown: str, 
         glossary_text: str = "", 
@@ -95,37 +128,56 @@ class PaperProcessorSkills:
         progress_callback: Optional[Callable] = None
     ) -> str:
         """
-        Markdown構造を維持し、要約と辞書をコンテキストとして与えて翻訳するスキル。
+        Markdown構造を維持し、要約と辞書をコンテキストとして与えて並列翻訳するスキル。
         """
-        prompt = TRANSLATION_PROMPT.format(
-            text=clean_markdown,
-            glossary_content=glossary_text,
-            summary_content=summary_text
-        )
-        translated = self.llm.call_api(prompt, progress_callback)
-        
-        # クリーニング
+        from .utils import Utils
         import re
-        
-        # <result> タグがある場合はその中身を抽出
-        if "<result>" in translated and "</result>" in translated:
-            match = re.search(r'<result>(.*?)</result>', translated, re.DOTALL)
-            if match:
-                translated = match.group(1).strip()
-        elif "</thought>" in translated:
-            translated = translated.split("</thought>")[-1].strip()
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # セクション分割
+        sections = Utils.split_into_sections(clean_markdown)
+        translated_parts = [""] * len(sections)
+
+        def process_section(idx, section_content, section_title):
+            try:
+                if not section_content.strip():
+                    return idx, ""
+                
+                # APIコール
+                p = TRANSLATION_PROMPT.format(
+                    text=section_content,
+                    glossary_content=glossary_text,
+                    summary_content=summary_text
+                )
+                trans = self.llm.call_api(p, None)
+                
+                # クリーニング
+                if "<result>" in trans and "</result>" in trans:
+                    match = re.search(r'<result>(.*?)</result>', trans, re.DOTALL)
+                    if match: trans = match.group(1).strip()
+                
+                trans = re.sub(r'^```(markdown)?\n', '', trans, flags=re.MULTILINE)
+                trans = re.sub(r'\n```$', '', trans, flags=re.MULTILINE)
+                trans = re.sub(r'<thought>.*?</thought>', '', trans, flags=re.DOTALL)
+                trans = re.sub(r'<[^>]+>', '', trans)
+                trans = re.sub(r'\*\*([^*]+)\*\*', r'\1', trans) 
+                
+                return idx, trans.strip()
+            except Exception as ex:
+                return idx, f"[翻訳エラー: {section_title}]"
+
+        # 並列実行
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_idx = {executor.submit(process_section, i, s["content"], s["title"]): i for i, s in enumerate(sections)}
             
-        # Markdownコードブロックを削除
-        translated = re.sub(r'^```(markdown)?\n', '', translated, flags=re.MULTILINE)
-        translated = re.sub(r'\n```$', '', translated, flags=re.MULTILINE)
-        
-        # 思考タグの除去
-        translated = re.sub(r'<thought>.*?</thought>', '', translated, flags=re.DOTALL)
-        
-        # 不要なメタタグを除去
-        translated = re.sub(r'<[^>]+>', '', translated)
-        
-        # ボールドの過剰適用を抑制
-        translated = re.sub(r'\*\*([^*]+)\*\*', r'\1', translated) 
-        
-        return translated.strip()
+            completed = 0
+            for future in as_completed(future_to_idx):
+                idx, result = future.result()
+                translated_parts[idx] = result
+                completed += 1
+                if progress_callback:
+                    progress_callback(f"翻訳中... ({completed}/{len(sections)})")
+
+        return "\n\n".join([p for p in translated_parts if p])

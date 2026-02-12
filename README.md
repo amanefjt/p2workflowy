@@ -1,6 +1,9 @@
 # p2workflowy
 
-PDFから抽出された学術論文のテキストを、AI（Gemini 3 Flash）を使って構造化し、Workflowy（アウトライナー）形式のレジュメ（翻訳・要約）に変換するツールです。
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://p2workflowy.streamlit.app)
+
+PDFから抽出されたテキストを、AIによって構造化・要約・翻訳し、Workflowyへ直接貼り付け可能な形式に変換するツールです。
+のレジュメ（翻訳・要約）に変換するツールです。
 
 ## 主な機能
 

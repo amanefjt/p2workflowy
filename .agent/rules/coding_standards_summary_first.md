@@ -15,9 +15,18 @@
     - 構造化された Markdown を翻訳する際、Phase 1 の要約をコンテキストとして全スレッド（チャンク）に共有する。
 
 ## 2. インターフェースの共通化
-- コアロジックは必ず `src/skills.py` または `src/utils.py` に実装し、CLI (`main.py`) と Web UI (`app.py`) の両方から呼び出し可能にする。
+- **CLI版** (`src/main.py`) と **Web版** (`web/src/App.tsx`) の両方から同じコアロジックを呼び出せるようにする。
+- Python版は `src/skills.py`, `src/utils.py` に実装。
+- TypeScript版は `web/src/processor.ts`, `web/src/utils.ts` に実装。
+- 両者のロジックは完全に一致させ、同じ入力に対して同じ出力を生成する。
 - API キーやモデル名などの設定値は、コンストラクタ経由で動的に注入（Injection）できるように設計する。
 
 ## 3. 見出し階層の正規化
 - 最終的な出力直前に `Utils.normalize_markdown_headings` を通し、文書全体の階層が `# (H1)` から始まるように強制補正する。
 - Workflowy への貼り付けを考慮し、本文は直近の見出しよりも一段階深いインデントで出力する。
+
+## 4. Web版の特性
+- ブラウザ完結型（サーバー不要）
+- BYOK (Bring Your Own Key) モデル: ユーザーが各自の Gemini API キーを入力
+- 静的サイトとして Cloudflare Pages 等で公開可能
+- UI は日本語、モデル選択は `gemini-3-flash-preview` (推奨) と `gemini-2.5-flash`

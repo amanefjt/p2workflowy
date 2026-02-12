@@ -38,7 +38,7 @@ async def main():
     else:
         print("\n" + "=" * 60)
         print("処理する論文のテキストファイル（.txt）のパスを入力してください。")
-        print("例: /Users/shufujita/Downloads/paper.txt")
+        print("例: /Users/username/Downloads/paper.txt")
         print("=" * 60)
         input_path_str = input("ファイルパス: ").strip()
     

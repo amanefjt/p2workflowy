@@ -97,27 +97,33 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def main():
+    # --- Sidebar: Settings ---
     st.sidebar.markdown("# ⚙️ Settings")
     
-    # APIキー入力
+    # APIキー入力 (BYOK)
     api_key = st.sidebar.text_input(
-        "Google API Key", 
+        "Google API Key (Gemini)", 
         type="password", 
-        placeholder="Enter your Gemini API key...",
-        help="Your key is only used for this session and never stored on the server.",
+        placeholder="AI Studio キーを入力...",
+        help="ブラウザのタブを閉じるとリセットされます。サーバーには保存されません。",
         value=st.session_state.get("api_key", "")
     )
     if api_key:
         st.session_state["api_key"] = api_key
+    
+    # APIキー取得のヘルプ
+    if not st.session_state.get("api_key"):
+        st.sidebar.info("""
+        **[Gemini API キーを取得する](https://aistudio.google.com/app/apikey)**  
+        (Google AI Studio で無料で取得可能です)
+        """)
 
-    # モデル選択
     model_name = st.sidebar.selectbox(
         "AI Model",
         ["gemini-2.0-flash", "gemini-2.0-flash-lite-preview-02-05", "gemini-1.5-pro", "gemini-1.5-flash"],
         index=0
     )
 
-    # グロッサリーアップロード
     st.sidebar.divider()
     st.sidebar.markdown("### 📖 Custom Glossary")
     glossary_file = st.sidebar.file_uploader("Upload glossary.csv (Optional)", type=["csv"])
@@ -134,26 +140,40 @@ def main():
                     glossary_lines.append(f"{term} -> {trans}")
         glossary_text = "\n".join(glossary_lines)
 
-    # Main Area
+    # --- Main Area ---
     st.title("📚 p2workflowy")
     st.markdown("##### AI-Powered Academic Paper Structuring & Translation")
-    
-    # メインエリア: 論文ファイルアップロード
+
+    # APIキーがない場合のウェルカム画面
+    if not st.session_state.get("api_key"):
+        st.markdown("""
+        <div class="result-box">
+        <h3>👋 Welcome to p2workflowy</h3>
+        <p>このツールは、PDFから抽出された乱雑なテキストを、AI（Gemini）を使って美しく構造化・翻訳し、Workflowyへ直接貼り付け可能な形式に変換します。</p>
+        
+        <h4>利用を開始するには：</h4>
+        <ol>
+            <li>サイドバーの <b>Google API Key</b> 欄に Gemini の API キーを入力してください。</li>
+            <li>キーが設定されると、ファイルアップローダーが表示されます。</li>
+        </ol>
+        <p><small>※ 入力されたキーはブラウザセッション内でのみ使用され、サーバーに保存されたり、開発者に送信されることはありません。</small></p>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    # APIキーがある場合の機能エリア
+    st.write("") 
     with st.container():
         st.markdown('<div class="result-box">', unsafe_allow_html=True)
         uploaded_file = st.file_uploader("Upload Paper Text (.txt)", type=["txt"])
         st.markdown('</div>', unsafe_allow_html=True)
     
-    st.write("") # Spacer
+    st.write("")
 
-    if st.button("🚀 Start Processing", disabled=not uploaded_file or not api_key):
-        if not api_key:
-            st.error("Please enter your API key in the sidebar.")
-            return
-            
+    if st.button("🚀 Start Processing", disabled=not uploaded_file):
         try:
-            # スキルの初期化
-            skills = PaperProcessorSkills(api_key=api_key, model_name=model_name)
+            # スキルの初期化 (ユーザーのキーを使用)
+            skills = PaperProcessorSkills(api_key=st.session_state["api_key"], model_name=model_name)
             raw_text = Utils.process_uploaded_file(uploaded_file)
             
             # 各フェーズの実行

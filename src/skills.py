@@ -91,14 +91,16 @@ class PaperProcessorSkills:
         self, 
         clean_markdown: str, 
         glossary_text: str = "", 
+        summary_text: str = "",
         progress_callback: Optional[Callable] = None
     ) -> str:
         """
-        Markdown構造を維持し、辞書（Glossary）を適用して翻訳するスキル。
+        Markdown構造を維持し、要約と辞書をコンテキストとして与えて翻訳するスキル。
         """
         prompt = TRANSLATION_PROMPT.format(
             text=clean_markdown,
-            glossary_content=glossary_text
+            glossary_content=glossary_text,
+            summary_content=summary_text
         )
         translated = self.llm.call_api(prompt, progress_callback)
         

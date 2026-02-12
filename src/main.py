@@ -126,7 +126,7 @@ def main():
     from concurrent.futures import ThreadPoolExecutor, as_completed
     
     # 並列処理用の関数
-    def process_section(idx, section_content, section_title):
+    def process_section(idx, section_content, section_title, summary_context):
         try:
             if not section_content.strip():
                 return idx, ""
@@ -135,6 +135,7 @@ def main():
             trans = skills.translate_academic(
                 section_content,
                 glossary_text,
+                summary_text=summary_context,
                 progress_callback=None
             )
             # 翻訳結果からマーカーを除去
@@ -146,13 +147,12 @@ def main():
             return idx, f"[翻訳エラー: {section_title}]"
 
     # ThreadPoolExecutorによる並列実行
-    # max_workersはAPIレートリミットを考慮して調整（Geminiは比較的高速だが、多すぎるとエラーになる可能性があるため5〜10程度推奨）
     with ThreadPoolExecutor(max_workers=5) as executor:
         future_to_idx = {}
         for i, section in enumerate(sections):
             content = section["content"]
             title = section["title"]
-            future = executor.submit(process_section, i, content, title)
+            future = executor.submit(process_section, i, content, title, summary_workflowy)
             future_to_idx[future] = i
         
         completed_count = 0

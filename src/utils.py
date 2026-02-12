@@ -44,10 +44,56 @@ class Utils:
         return "\n".join(glossary_lines)
 
     @staticmethod
+    def normalize_markdown_headings(markdown_text: str) -> str:
+        """
+        Markdownの見出し階層を正規化する。
+        例: いきなり ## から始まっていたら # に昇格させる。
+            # の次に ### が来たら ## に修正する。
+        """
+        lines = markdown_text.split('\n')
+        normalized_lines = []
+        
+        # 文書内で使用されている最小の見出しレベルを探す
+        min_level = 100
+        for line in lines:
+            match = re.match(r'^(#+)\s', line)
+            if match:
+                level = len(match.group(1))
+                if level < min_level:
+                    min_level = level
+        
+        # 見出しが見つからなかった場合はそのまま返す
+        if min_level == 100:
+            return markdown_text
+
+        # 補正値（最小レベルが ## (2) なら、-1 して # (1) にする）
+        offset = min_level - 1
+
+        for line in lines:
+            match = re.match(r'^(#+)\s+(.*)', line)
+            if match:
+                original_hashes = match.group(1)
+                content = match.group(2)
+                current_level = len(original_hashes)
+                
+                # レベルを補正（最低1）
+                new_level = max(1, current_level - offset)
+                
+                # 再構築
+                normalized_lines.append(f"{'#' * new_level} {content}")
+            else:
+                normalized_lines.append(line)
+        
+        return "\n".join(normalized_lines)
+
+    @staticmethod
     def markdown_to_workflowy(markdown_text: str) -> str:
         """
         MarkdownテキストをWorkflowy(OPML)貼り付け用フォーマットに変換する。
         """
+        # ★ ここでまず正規化を行う
+        markdown_text = Utils.normalize_markdown_headings(markdown_text)
+
         lines = markdown_text.split('\n')
         workflowy_lines = []
         

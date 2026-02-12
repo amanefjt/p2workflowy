@@ -33,25 +33,34 @@ STRUCTURING_PROMPT = """あなたは学術論文の編集AIです。
 """
 
 # --- Skill: AnchoredStructuring (要約をガイドにした構造化) ---
-STRUCTURING_WITH_HINT_PROMPT = """あなたは学術専門の編集AIです。
-提供された「要約（章立てのヒント）」をガイドとして使い、入力された「崩れた論文テキスト」に意味論的に正しいMarkdown構造（見出し）を付与してください。
+STRUCTURING_WITH_HINT_PROMPT = """You are an expert academic editor.
+Your task is to structure the provided "Raw OCR Text" into a clean Markdown format, using the "Summary Outline" as your absolute structural guide.
 
-<summary_hint>
+# INPUT DATA
+1. **Summary Outline**: The correct table of contents for this paper.
+2. **Raw OCR Text**: The messy text extracted from a PDF.
+
+# STRICT RULES FOR HEADINGS (Crucial)
+You must apply Markdown headings (#) strictly according to the following hierarchy. **Do not deviate.**
+
+1. **# (H1)**: Use ONLY for the **Paper Title**. (There should be only one H1).
+2. **## (H2)**: Use for **Major Sections** (e.g., Abstract, Introduction, Methodology, Results, Discussion, Conclusion, References).
+3. **### (H3)**: Use for **Sub-sections** inside a major section.
+4. **#### (H4)**: Use only if absolutely necessary for deep nesting.
+
+# RULES FOR TEXT PROCESSING
+1. **Insert Missing Headings**: If the "Raw Text" lacks a clear heading (e.g., "Introduction") but the "Summary Outline" has it, you MUST insert the heading `## Introduction` at the appropriate semantic break.
+2. **De-hyphenation**: Fix broken words caused by line breaks (e.g., "condi- tion" -> "condition").
+3. **Remove Noise**: Delete page numbers, headers, footers, and copyright info.
+4. **Keep English**: Do NOT translate the body text. Keep it in original English.
+5. **Consistency**: Ensure the heading structure matches the "Summary Outline" exactly.
+
+# INPUT
+[Summary Outline]
 {summary_hint}
-</summary_hint>
 
-<rules>
-- **重要**: 本文の内容は絶対に要約・変更せず、元の英語の文章をそのまま維持してください(Keep the output in English)。行の結合（Hyphenationの修正）や不自然な改行の修正のみを行ってください。
-- `summary_hint` に示されているセクション構成を読み取り、原文内の対応する箇所にMarkdown見出し（#, ##, ###）を挿入してください。
-- ページ番号、ジャーナル名、DOI、ヘッダー、フッターなどのノイズ行を削除してください。
-- 参考文献、謝辞、著者情報などの付随的なセクションは、要約の指示に従って除外してください。
-- 文脈から判断し、Introductionなどの見出しが欠落している場合は、要約の構成に基づいて補完してください。
-- **出力形式**: 構造化された英語のMarkdownテキストのみを出力してください。あなたの解説や挨拶は一切不要です。
-</rules>
-
-<raw_text>
+[Raw OCR Text]
 {raw_text}
-</raw_text>
 """
 
 # --- Skill: ContentSummarizer (要約) ---

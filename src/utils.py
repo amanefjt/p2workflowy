@@ -96,6 +96,7 @@ class Utils:
 
         lines = markdown_text.split('\n')
         workflowy_lines = []
+        current_level = 0 # 現在の見出しレベルを追跡
         
         for line in lines:
             stripped = line.strip()
@@ -106,10 +107,11 @@ class Utils:
             if stripped.startswith('#'):
                 level = stripped.count('#') - 1
                 if level < 0: level = 0
+                current_level = level
                 content = stripped.lstrip('#').strip()
                 
                 # Workflowy用インデント: 4スペース = 1階層
-                indent = "    " * level
+                indent = "    " * current_level
                 workflowy_lines.append(f"{indent}- {content}")
                 continue
 
@@ -119,14 +121,20 @@ class Utils:
                 original_indent = match.group(1)
                 content = match.group(3)
                 spaces = original_indent.replace('\t', '    ')
-                level = len(spaces) // 2
-                new_indent = "    " * level
+                # 内部的なリストの深さを考慮 (2スペース1段階)
+                list_internal_level = len(spaces) // 2
+                
+                # 見出しレベル + 1 をベースにネスト
+                new_level = current_level + 1 + list_internal_level
+                new_indent = "    " * new_level
                 workflowy_lines.append(f"{new_indent}- {content}")
             
             else:
                 # リストでも見出しでもない行（本文など）
-                # インデント付きの項目として追加
-                workflowy_lines.append(f"    - {stripped}")
+                # 常に見出しの1段階下に配置
+                body_level = current_level + 1
+                new_indent = "    " * body_level
+                workflowy_lines.append(f"{new_indent}- {stripped}")
 
         return "\n".join(workflowy_lines)
 

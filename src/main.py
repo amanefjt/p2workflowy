@@ -27,22 +27,34 @@ def main():
     """メイン処理パイプライン"""
     # パス設定
     project_dir = Path(__file__).parent.parent
-    input_file = project_dir / "input.txt"
     glossary_file = project_dir / "glossary.csv"
-    output_dir = project_dir / "output"
     inter_dir = project_dir / "intermediate"
     
-    # ディレクトリ作成
-    output_dir.mkdir(exist_ok=True)
-    inter_dir.mkdir(exist_ok=True)
+    # 引数またはユーザー入力から入力ファイルを取得
+    if len(sys.argv) > 1:
+        input_path_str = sys.argv[1]
+    else:
+        print("\n" + "=" * 60)
+        print("処理する論文のテキストファイル（.txt）のパスを入力してください。")
+        print("例: /Users/shufujita/Downloads/paper.txt")
+        print("=" * 60)
+        input_path_str = input("ファイルパス: ").strip()
     
-    output_final = output_dir / "Final_Output.txt"
-    structured_md_file = inter_dir / "structured.md"
+    # 引用符（ドラッグ&ドロップで付く場合がある）を削除
+    input_path_str = input_path_str.strip("'\"")
+    input_file = Path(input_path_str)
     
     # 入力ファイルの確認
     if not input_file.exists():
         print(f"エラー: 入力ファイルが見つかりません: {input_file}")
         sys.exit(1)
+        
+    # 出力ファイルの設定（入力ファイルと同じディレクトリに _output.txt を作成）
+    output_final = input_file.parent / f"{input_file.stem}_output.txt"
+    structured_md_file = inter_dir / "structured.md"
+    
+    # ディレクトリ作成
+    inter_dir.mkdir(exist_ok=True)
     
     print("=" * 60)
     print("p2workflowy - Cognitive Skills Pipeline")

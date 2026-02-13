@@ -106,7 +106,7 @@ async def main():
         translated_text = await skills.translate_academic(
             structured_md,
             glossary_text,
-            summary_text=summary_text,
+            summary_context=summary_text,
             progress_callback=lambda msg: print_progress(f"Phase 3: {msg}")
         )
         print_progress("Phase 3: 翻訳完了", 90)
@@ -117,11 +117,36 @@ async def main():
     # Phase 4: Assembly (結合)
     print_progress("Phase 4: 成果物を統合中...", 90)
     
-    # Workflowy形式への変換
-    summary_workflowy = Utils.markdown_to_workflowy(summary_text)
-    translation_workflowy = Utils.markdown_to_workflowy(translated_text)
+    # Workflowy形式への変換と階層調整
     
-    final_content = f"# {input_file.stem}\n\n## 要約 (Summary)\n{summary_workflowy}\n\n## 翻訳 (Translation)\n{translation_workflowy}"
+    # 1. 要約の処理
+    # 要約はすでにリスト形式になっていると仮定
+    summary_workflowy = Utils.markdown_to_workflowy(summary_text)
+    # インデントを追加 (ルートの下にぶら下げるため)
+    summary_section = "    - 要約 (Summary)\n" + "\n".join(["        " + line for line in summary_workflowy.splitlines()])
+
+    # 2. 翻訳の処理
+    # 翻訳結果から最初の行（タイトルである可能性が高い # 行）を削除して、
+    # Abstractなどが最上位（レベル0）に来るようにする
+    lines = translated_text.splitlines()
+    if lines and lines[0].strip().startswith('# '):
+        # 最初の行がH1なら削除（ファイル名をルートにするため）
+        lines = lines[1:]
+    
+    body_text_no_title = "\n".join(lines).strip()
+    
+    # 見出しレベルの正規化（## Abstract -> # Abstract -> - Abstract）
+    # markdown_to_workflowy 内部で normalize_markdown_headings が呼ばれるため、
+    # H1を消しておけば自動的に H2 が H1 に昇格され、結果としてレベル0のリストになる
+    translation_workflowy = Utils.markdown_to_workflowy(body_text_no_title)
+    
+    # インデントを追加
+    translation_section = "\n".join(["    " + line for line in translation_workflowy.splitlines()])
+    
+    # 3. 結合
+    # ルートノード: ファイル名
+    final_content = f"- {input_file.stem}\n{summary_section}\n{translation_section}"
+    
     Utils.write_text_file(output_final, final_content)
     
     print_progress("Phase 4: 処理完了!", 100)

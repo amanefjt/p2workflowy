@@ -1,4 +1,17 @@
-# p2workflowy
+## p2workflowy (Python & Web)
+
+A tool to convert academic papers/images into [WorkFlowy](https://workflowy.com/) compatible text format.
+
+### Versions
+- **Desktop (Python)**: CLI tool for PDF processing. See `src/`.
+- **Web (React/Vite)**: Browser-based tool for Image processing. See `web/`.
+
+## Web Version Quick Start
+```bash
+cd web
+npm install
+npm run dev
+```
 
 **PDFから抽出したテキストを、AIで構造化・要約・翻訳し、Workflowyへ直接貼り付け可能な形式に変換するツール**
 

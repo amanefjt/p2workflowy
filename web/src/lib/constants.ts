@@ -1,0 +1,9 @@
+import prompts from './prompts.json';
+
+export const DEFAULT_MODEL = prompts.DEFAULT_MODEL;
+export const MAX_TRANSLATION_CHUNK_SIZE = prompts.MAX_TRANSLATION_CHUNK_SIZE;
+export const STRUCTURING_PROMPT = prompts.STRUCTURING_PROMPT;
+export const STRUCTURING_WITH_HINT_PROMPT = prompts.STRUCTURING_WITH_HINT_PROMPT;
+export const SUMMARY_PROMPT = prompts.SUMMARY_PROMPT;
+export const TRANSLATION_PROMPT = prompts.TRANSLATION_PROMPT;
+export const EXCLUDE_SECTION_KEYWORDS = prompts.EXCLUDE_SECTION_KEYWORDS;

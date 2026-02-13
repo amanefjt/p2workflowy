@@ -1,156 +1,34 @@
 # -*- coding: utf-8 -*-
 """
 定数とプロンプトの定義
+shared/prompts.json から読み込むように変更
 """
+import json
+from pathlib import Path
 
-# Gemini モデル設定
-DEFAULT_MODEL = "gemini-3-flash-preview"
+# プロジェクトルートディレクトリの取得
+# src/constants.py -> src/ -> p2workflowy/
+PROJECT_ROOT = Path(__file__).parent.parent
+SHARED_PROMPTS_PATH = PROJECT_ROOT / "shared" / "prompts.json"
 
-# --- Skill: StructureRestorer (構造復元) ---
-STRUCTURING_PROMPT = """あなたは学術論文の編集AIです。
-入力されたテキストはPDFから抽出されたもので、改行が崩れ、ノイズが含まれています。
-意味論的に正しいMarkdown構造を復元してください。
+def load_prompts():
+    """shared/prompts.json からプロンプト設定を読み込む"""
+    try:
+        with open(SHARED_PROMPTS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Warning: Failed to load shared prompts from {SHARED_PROMPTS_PATH}: {e}")
+        return {}
 
-<rules>
-- 文中の不自然な改行（Hyphenation）を連結し、文を繋ぎ直す。
-- ページ番号、ジャーナル名、DOI、ヘッダー、フッターなどのノイズ行を削除する。
-- **除外ルール**: 以下の項目およびそれに類するセクションは、内容を含め一切出力しないでください（構造復元から除外する）。
-    - 参考文献（References, Bibliography）, 謝辞（Acknowledgements）, 利益相反（Conflict of Interest, Funding）, 著者情報・所属（Author Contributions, Affiliations, ORCID）
-    - 付録（Appendix）※ただし本文に不可欠な注釈は残す
-- **構造の一貫性**: 
-    - 文脈を読み取り、適切なMarkdown見出し (#, ##, ###) を付与する。
-    - **禁止**: セクション見出しにリスト記号（-）や数字書き（1.）を使用しないでください。必ずMarkdownの見出し記号（#）を使用すること。
-    - 特に新しいトピックや議論の切り替わりには積極的に見出しを挿入し、構造を明確にする。
-    - 本文の開始地点が見出しで明示されていない場合、推測して `# Introduction` を挿入する。
-    - **重要**: 一つの論文には一つの Introduction と一つの Conclusion のみを含めてください。
-- 翻訳対象の限定：タイトル、要旨（Abstract）、本文、注（Footnotes/Endnotes）のみを構造化の対象とする。
-- 推論プロセス：まず最初に出力として <thought> タグ内で見出し構成案を考えてから、本文（Markdown）を出力してください。
-</rules>
+_prompts = load_prompts()
 
-<input>
-{text}
-</input>
-"""
+# 定数として展開（これまでのコードとの互換性のため）
+DEFAULT_MODEL = _prompts.get("DEFAULT_MODEL", "gemini-3-flash-preview")
+MAX_TRANSLATION_CHUNK_SIZE = _prompts.get("MAX_TRANSLATION_CHUNK_SIZE", 4000)
 
-# --- Skill: AnchoredStructuring (要約をガイドにした構造化) ---
-STRUCTURING_WITH_HINT_PROMPT = """You are an expert academic editor.
-Your task is to structure the provided "Raw OCR Text" into a clean Markdown format, using the "Summary Outline" as your absolute structural guide.
+STRUCTURING_PROMPT = _prompts.get("STRUCTURING_PROMPT", "")
+STRUCTURING_WITH_HINT_PROMPT = _prompts.get("STRUCTURING_WITH_HINT_PROMPT", "")
+SUMMARY_PROMPT = _prompts.get("SUMMARY_PROMPT", "")
+TRANSLATION_PROMPT = _prompts.get("TRANSLATION_PROMPT", "")
 
-# INPUT DATA
-1. **Summary Outline**: The correct table of contents for this paper.
-2. **Raw OCR Text**: The messy text extracted from a PDF.
-
-# STRICT RULES FOR HEADINGS (Crucial)
-You must apply Markdown headings (#) strictly according to the following hierarchy. **Do not deviate.**
-
-1. **# (H1)**: Use ONLY for the **Paper Title**. (There should be only one H1).
-2. **## (H2)**: Use for **Major Sections** (e.g., Abstract, Introduction, Methodology, Results, Discussion, Conclusion, References).
-3. **### (H3)**: Use for **Sub-sections** inside a major section.
-4. **#### (H4)**: Use only if absolutely necessary for deep nesting.
-
-# RULES FOR TEXT PROCESSING
-1. **Insert Missing Headings**: If the "Raw Text" lacks a clear heading (e.g., "Introduction") but the "Summary Outline" has it, you MUST insert the heading `## Introduction` at the appropriate semantic break.
-2. **De-hyphenation**: Fix broken words caused by line breaks (e.g., "condi- tion" -> "condition").
-3. **Remove Noise**: Delete page numbers, headers, footers, and copyright info.
-4. **Keep English**: Do NOT translate the body text. Keep it in original English.
-5. **Consistency**: Ensure the heading structure matches the "Summary Outline" exactly.
-
-# INPUT
-[Summary Outline]
-{summary_hint}
-
-[Raw OCR Text]
-{raw_text}
-"""
-
-# --- Skill: ContentSummarizer (要約) ---
-SUMMARY_PROMPT = """あなたは文化人類学を専門とするシニア・リサーチャーです。
-入力されたMarkdownドキュメントを精査し、各節の論理展開を Chain of Thought（段階的思考）を用いて詳細に抽出した上で、Workflowy（アウトライナー）に貼り付けるための学術的レジュメを作成してください。
-
-<Goals>
-*指定された部分の内容を学術的な視点から精緻に要約し、読者がその論理構造を深く理解できるようにする。
-*各節の議論の積み重ねを明示し、全体の結論に至るプロセスを再現する。
-</Goals>
-
-<elements>
-a) リサーチ・クエスチョン: この文献において著者がどのような『問い』を立てているかを明確に記述する。
-b) 核心的主張（Thesis）: 先行研究や既存のパラダイムに対し、指定された部分がどのような独自の貢献をしているか、および最終的な結論を記述する。
-c) 各節の主張とその根拠: 節ごとに中心的主張を特定する。その主張を支える論理的ステップ（Chain of Thought）を段階的に明示し、どのような証拠や議論が用いられているかを詳述する。
-</elements>
-
-<rules>
-- インデント（スペース4つ）のみで階層を表現し、Markdownの見出し記号（#）は絶対に使わない。
-- 全ての行を「- 」（ハイフンとスペース）で始める。
-- 以下の構成を含める：
-    - 論文タイトル、リサーチ・クエスチョン、核心的主張（Thesis）。
-    - 各セクションの論理展開（Chain of Thought）。
-- 日本語2000〜3000字程度の詳細な内容。
-- 導入や挨拶は不要。
-</rules>
-
-<example>
-- 論文タイトル: [タイトル]
-    - リサーチ・クエスチョン
-        - この論文が問うていること...
-    - 核心的主張
-        - 著者の主要な主張...
-    - 各セクションの中心的な主張と論理展開（Chain of Thought）
-        - Introduction
-            - 中心的な主張
-            - 論点1...
-            - 論点2...
-        - 見出し1
-            - 中心的な主張
-            - 論点1...
-            - 論点2...
-        - 
-</example>
-
-<input>
-{text}
-</input>
-"""
-
-# --- Skill: AcademicTranslator (翻訳・辞書適用) ---
-TRANSLATION_PROMPT = """あなたは学術翻訳の専門家です。
-以下の要約（全体のあらすじ）と辞書を参考に、提供されたテキストを構造を維持したまま学術的な日本語へ翻訳してください。
-全体の文脈を把握することで、指示代名詞や用語の不一致を防いでください。
-
-<summary>
-{summary_content}
-</summary>
-
-<rules>
-- Markdown構造（# 見出し、リスト記号、太字など）を厳密に維持する。
-- 専門用語、特に文化人類学の文脈に沿った用語を使用する。
-- 一つの段落は一つの項目として出力し、段落途中で改行しない。
-- 要約ではなく全文を忠実に翻訳する。
-- <glossary> 内の指定がある場合、必ずその訳語を使用すること。
-- **絶対禁止事項**: 
-    - あなたの思考プロセス、上記ルール、辞書の内容、挨拶などを出力に含めること。
-    - `<result>` タグの外にテキストを出力すること。
-    - `<result>` タグの中にルールや辞書をコピーすること。
-- **出力形式**: 翻訳結果（Markdownテキスト）のみを `<result>` タグで囲んで出力してください。
-</rules>
-
-<glossary>
-{glossary_content}
-</glossary>
-
-<input>
-{text}
-</input>
-"""
-
-# 除外キーワード（パススルーで使う可能性があるが、基本はLLMが判断）
-EXCLUDE_SECTION_KEYWORDS = [
-    "references",
-    "bibliography",
-    "conflict of interest",
-    "funding",
-    "acknowledgements",
-    "keywords",
-    "author contributions",
-    "orcid",
-    "affiliations"
-]
+EXCLUDE_SECTION_KEYWORDS = _prompts.get("EXCLUDE_SECTION_KEYWORDS", [])

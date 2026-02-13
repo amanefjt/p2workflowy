@@ -13,6 +13,8 @@ function App() {
     const [error, setError] = useState<string>('');
     const [progress, setProgress] = useState<string>('');
     const [fileName, setFileName] = useState<string>('');
+    const [inputMode, setInputMode] = useState<'file' | 'text'>('file');
+    const [directText, setDirectText] = useState<string>('');
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -20,20 +22,35 @@ function App() {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        if (!apiKey) {
-            setError('Gemini APIキーを設定してください。');
-            return;
-        }
-
-        setFileName(file.name);
-        setProcessing(true);
-        setError('');
-        setResult('');
-        setProgress('初期化中...');
-
         try {
             const gemini = new GeminiService(apiKey);
-            const text = await file.text();
+
+            // Get text either from file or direct input
+            let text = '';
+            let currentFileName = '';
+
+            if (inputMode === 'file') {
+                const file = fileInputRef.current?.files?.[0];
+                if (!file) {
+                    setError('ファイルを選択してください。');
+                    return;
+                }
+                text = await file.text();
+                currentFileName = file.name;
+            } else {
+                if (!directText.trim()) {
+                    setError('テキストを入力してください。');
+                    return;
+                }
+                text = directText;
+                currentFileName = 'Direct Input';
+            }
+
+            setFileName(currentFileName);
+            setProcessing(true);
+            setError('');
+            setResult('');
+            setProgress('初期化中...');
 
             // 1. Structuring (Raw Text -> Structured Markdown)
             setProgress(`AIが文書構造を解析中... (${DEFAULT_MODEL})`);
@@ -70,6 +87,20 @@ function App() {
             setProcessing(false);
             if (fileInputRef.current) fileInputRef.current.value = '';
         }
+    };
+
+    const handleProcess = () => {
+        if (!apiKey) {
+            setError('Gemini APIキーを設定してください。');
+            return;
+        }
+        processContent();
+    };
+
+    const processContent = async () => {
+        // Reuse logic from handleFileUpload but unified
+        // We'll rename the original logic to startProcess for clarity
+        handleFileUpload({} as any);
     };
 
     const copyToClipboard = () => {
@@ -180,29 +211,66 @@ function App() {
 
                 {/* Main Processor */}
                 <section className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                    <h2 className="text-base font-bold mb-4 flex items-center gap-2 text-gray-700">
-                        <FileText className="w-4 h-4" />
-                        テキスト処理
-                    </h2>
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-base font-bold flex items-center gap-2 text-gray-700">
+                            <FileText className="w-4 h-4" />
+                            テキスト処理
+                        </h2>
+
+                        <div className="flex bg-gray-100 p-1 rounded-lg">
+                            <button
+                                onClick={() => { setInputMode('file'); setError(''); }}
+                                className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${inputMode === 'file' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                            >
+                                ファイルアップロード
+                            </button>
+                            <button
+                                onClick={() => { setInputMode('text'); setError(''); }}
+                                className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${inputMode === 'text' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                            >
+                                テキスト直接入力
+                            </button>
+                        </div>
+                    </div>
 
                     {!processing && !result && (
-                        <div className="relative border-2 border-dashed border-indigo-100 bg-indigo-50/50 rounded-lg p-10 text-center hover:bg-indigo-50 hover:border-indigo-300 transition-all cursor-pointer group">
-                            <div className="flex flex-col items-center gap-3">
-                                <div className="bg-indigo-100 p-3 rounded-full group-hover:scale-110 transition-transform">
-                                    <Upload className="w-6 h-6 text-indigo-600" />
+                        <div className="space-y-4">
+                            {inputMode === 'file' ? (
+                                <div className="relative border-2 border-dashed border-indigo-100 bg-indigo-50/50 rounded-lg p-10 text-center hover:bg-indigo-50 hover:border-indigo-300 transition-all cursor-pointer group">
+                                    <div className="flex flex-col items-center gap-3">
+                                        <div className="bg-indigo-100 p-3 rounded-full group-hover:scale-110 transition-transform">
+                                            <Upload className="w-6 h-6 text-indigo-600" />
+                                        </div>
+                                        <div>
+                                            <h3 className="text-base font-bold text-gray-900">テキストファイルをアップロード</h3>
+                                            <p className="text-xs text-gray-500 mt-1">.txt ファイルをここにドロップ</p>
+                                        </div>
+                                    </div>
+                                    <input
+                                        ref={fileInputRef}
+                                        type="file"
+                                        className="absolute inset-0 opacity-0 cursor-pointer"
+                                        accept=".txt"
+                                        onChange={handleFileUpload}
+                                    />
                                 </div>
-                                <div>
-                                    <h3 className="text-base font-bold text-gray-900">テキストファイルをアップロード</h3>
-                                    <p className="text-xs text-gray-500 mt-1">.txt ファイルをここにドロップ</p>
+                            ) : (
+                                <div className="space-y-4">
+                                    <textarea
+                                        className="w-full h-64 p-4 bg-gray-50 rounded-lg border border-gray-200 font-mono text-sm focus:ring-2 focus:ring-indigo-500 outline-none resize-y"
+                                        placeholder="ここに論文のテキストを貼り付けてください..."
+                                        value={directText}
+                                        onChange={(e) => setDirectText(e.target.value)}
+                                    />
+                                    <button
+                                        onClick={handleProcess}
+                                        className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition-colors shadow-md flex items-center justify-center gap-2"
+                                    >
+                                        <Check className="w-5 h-5" />
+                                        実行する
+                                    </button>
                                 </div>
-                            </div>
-                            <input
-                                ref={fileInputRef}
-                                type="file"
-                                className="absolute inset-0 opacity-0 cursor-pointer"
-                                accept=".txt"
-                                onChange={handleFileUpload}
-                            />
+                            )}
                         </div>
                     )}
 

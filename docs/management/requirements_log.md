@@ -33,3 +33,9 @@ Port existing Python desktop tool `p2workflowy` to a Web application.
 ## Implementation Details
 - **OCR Logic**: Since Python source inputs text files, the Web version must implement pure Gemini Vision OCR (Image -> Text -> Structured Text).
 - **Shared Config**: Use `shared/prompts.json` for prompts to ensure consistency between Python and Web versions.
+
+## v1.0 Alpha (Web Port) - Text Mode
+- **Input**: Changed from Image to `.txt` files only (as per user request).
+- **Localization**: UI fully localized to Japanese.
+- **Processing**: Removed Vision-based OCR. Now focuses on structuring and translating raw text.
+- **Service-like UI**: Polished interface for general use.

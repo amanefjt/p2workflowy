@@ -1,28 +1,24 @@
 # p2workflowy Web
 
-A web-based version of p2workflowy that converts paper images into Workflowy-formatted text using Google Gemini API.
+PDFなどのテキストをWorkflowy形式に変換するためのWebツールです。
+Google Gemini APIを使用し、構造化・翻訳・整形を行います。
 
-## Features
-- **Image to Text**: Uses Gemini Vision to extract and structure text from images.
-- **Workflowy Format**: Automatically formats text with correct indentation.
-- **Translation**: Translates content to Japanese (or specified language) using custom dictionaries.
-- **Custom Dictionaries**: Upload your own CSV/TXT glossaries for consistent translation.
-- **Secure**: API Key is stored only in your browser's local storage.
+## 特徴
+- **テキスト構造化**: 崩れたテキスト（PDFからのコピーなど）を正しいMarkdown構造に復元。
+- **Workflowy形式**: インデント付きのテキストとして出力。
+- **翻訳機能**: 辞書を使用した高精度な翻訳（オプション）。
+- **セキュア**: APIキーはブラウザにのみ保存されます。
 
-## Setup
-1.  Install dependencies:
-    ```bash
-    npm install
-    ```
-2.  Start development server:
-    ```bash
-    npm run dev
-    ```
-3.  Build for production:
-    ```bash
-    npm run build
-    ```
+## 使い方
+1. Google Gemini APIキーを入力（初回のみ）。
+2. 必要に応じて辞書ファイルをアップロード。
+3. テキストファイル (.txt) をドラッグ＆ドロップ。
+4. 処理結果をコピーしてWorkflowyに貼り付け。
 
-## Deployment
-This project is built with Vite and can be easily deployed to Cloudflare Pages, Vercel, or Netlify.
-Output directory is `dist`.
+## 開発・デプロイ
+```bash
+npm install
+npm run dev
+# ビルド
+npm run build
+```

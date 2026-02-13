@@ -1,11 +1,18 @@
 
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-.env
 .venv
-.DS_Store
 intermediate/
 output/
+
+# Web
+web/node_modules/
+web/dist/
+
+# Env & Secrets
+.env
+.DS_Store
 glossary.csv
 input.txt

@@ -7,10 +7,13 @@
 `shared/prompts.json` で定義されている現在の設定値は以下の通りです：
 
 - **DEFAULT_MODEL**: `gemini-3-flash-preview`
-- **MAX_TRANSLATION_CHUNK_SIZE**: `30000` (文字)
+- **MAX_TRANSLATION_CHUNK_SIZE**: `40000` (文字)
 
-### なぜ 30,000 文字なのか？
-Gemini 3 Flash Preview は最大 65,536 トークンの出力をサポートしていますが、以下の理由から 30,000 文字（日本語に翻訳すると約 1.5倍〜2倍の文字数/トークン数になる可能性がある）を一つの単位としています。
+### 公式ドキュメント
+[Gemini 3 Flash (Preview) の詳細](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-flash?hl=ja)
+
+### なぜ 40,000 文字なのか？
+Gemini 3 Flash Preview は最大 65,536 トークンの出力をサポートしていますが、以下の理由から 40,000 文字（日本語に翻訳すると約 1.5倍〜2倍の文字数/トークン数になる可能性がある）を一つの単位としています。
 
 1. **出力上限の安全性**: 日本語翻訳後のトークン数が 64k を超えないようにするため。
 2. **処理の安定性**: 一度に極端に長い文章を渡すと、モデルの注意が散漫になり、特定の段落を飛ばしたり誤訳が発生したりするリスクを防ぐため。
@@ -35,7 +38,7 @@ Gemini 3 Flash Preview は最大 65,536 トークンの出力をサポートし�
 
 | モデル名 | 推奨 Chunk Size (文字) | 理由 |
 | :--- | :--- | :--- |
-| **Gemini 3 Flash Preview** | **30,000** | 64k出力対応のため大きく設定可能 |
+| **Gemini 3 Flash Preview** | **40,000** | 64k出力対応のため大きく設定可能 |
 | **Gemini 1.5 Flash** | **8,192** | 出力トークン制限 (8k) に合わせる |
 | **Gemini 1.5 Pro** | **15,000 - 20,000** | 性能は高いが、出力の安定性を考慮 |
 

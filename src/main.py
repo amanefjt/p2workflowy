@@ -127,26 +127,27 @@ async def main():
     summary_section = "    - 要約 (Summary)\n" + "\n".join(["        " + line for line in summary_workflowy.splitlines()])
 
     # 2. 翻訳の処理
-    # 翻訳結果から最初の行（タイトルである可能性が高い # 行）を削除して、
-    # Abstractなどが最上位（レベル0）に来るようにする
     lines = translated_text.splitlines()
+    title = input_file.stem  # デフォルト（タイトルの抽出に失敗した場合のフォールバック）
+    
+    # 最初の行がH1 (# タイトル) であれば、それをルートノードの名前として使用する
     if lines and lines[0].strip().startswith('# '):
-        # 最初の行がH1なら削除（ファイル名をルートにするため）
+        title = lines[0].strip().replace('# ', '').strip()
+        # 本文中からはタイトル行を削除し、Abstractなどが H1 レベルに昇格するようにする
         lines = lines[1:]
     
     body_text_no_title = "\n".join(lines).strip()
     
     # 見出しレベルの正規化（## Abstract -> # Abstract -> - Abstract）
-    # markdown_to_workflowy 内部で normalize_markdown_headings が呼ばれるため、
-    # H1を消しておけば自動的に H2 が H1 に昇格され、結果としてレベル0のリストになる
+    # H1を抜いたので、H2が最上位見出しとなり、Workflowy変換時にレベル0（ルート直下）になる
     translation_workflowy = Utils.markdown_to_workflowy(body_text_no_title)
     
-    # インデントを追加
+    # インデントを追加（ルートノードの下にぶら下げるため、4スペース分下げる）
     translation_section = "\n".join(["    " + line for line in translation_workflowy.splitlines()])
     
     # 3. 結合
-    # ルートノード: ファイル名
-    final_content = f"- {input_file.stem}\n{summary_section}\n{translation_section}"
+    # ルートノードを論文タイトルにし、その下に要約と翻訳本文を配置する
+    final_content = f"- {title}\n{summary_section}\n{translation_section}"
     
     Utils.write_text_file(output_final, final_content)
     

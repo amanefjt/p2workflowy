@@ -119,18 +119,12 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
     toc_match = re.split(r'# Table of Contents', structure_info, flags=re.IGNORECASE)
     overall_summary = toc_match[0].replace("# Overall Summary", "").strip()
 
-    print_progress("Phase 2 (書籍): 章ごとに分割し、個別要約を作成中...", 30)
+    print_progress("Phase 2 (書籍): 章ごとに分割し、並列処理を開始...", 30)
     # 本文を見出しベースで分割
     chapters = skills._split_markdown_by_headers(raw_text)
     
-    clean_chapters_eng = []
-    translated_chapters_jp = []
-    all_chapter_summaries = []
-
-    for i, chapter_text in enumerate(chapters):
+    async def process_single_chapter(i, chapter_text):
         idx = i + 1
-        print_progress(f"Chapter {idx}/{len(chapters)} 処理中...", 30 + int(60 * idx / len(chapters)))
-        
         # タイトルの仮抽出
         lines_temp = chapter_text.strip().splitlines()
         first_line = lines_temp[0].strip() if lines_temp else ""
@@ -138,30 +132,39 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
         
         # 1. 参考文献等の除外
         if any(kw in title_for_check for kw in EXCLUDE_SECTION_KEYWORDS):
-            print_progress(f"  ... '{first_line}' を除外キーワードに基づきスキップします。")
-            continue
+            return None
 
         # 2. 部 (Part) の判定
-        # 「部」または「Part」を含み、「章」や「Chapter」を含まない見出し
         is_part = any(kw in first_line for kw in ["部", "Part", "PART"]) and not any(kw in first_line for kw in ["章", "Chapter"])
-        # 本文が極端に短い（見出し＋数行程度）場合は「部」の見出しのみと判断
         has_body = len(lines_temp) > 3
 
         if is_part and not has_body:
-            # 部のみ（要約・翻訳スキップ）
-            all_chapter_summaries.append("") # 空の要約
-            clean_chapters_eng.append(first_line)
-            translated_chapters_jp.append(first_line) # そのまま
-            continue
+            return {
+                "summary": "",
+                "clean_eng": first_line,
+                "translated_jp": first_line
+            }
         
+        # ユーザー指定の順序: 要旨 -> 構造 -> 翻訳 (直列 awaited)
         chapter_summary = await skills.summarize_chapter(overall_summary, chapter_text)
-        all_chapter_summaries.append(chapter_summary)
-        
         clean_chapter = await skills.structure_chapter(overall_summary, chapter_text)
-        clean_chapters_eng.append(clean_chapter)
-        
         translated_chapter = await skills.translate_chapter(overall_summary, chapter_summary, clean_chapter, glossary_text)
-        translated_chapters_jp.append(translated_chapter)
+        
+        return {
+            "summary": chapter_summary,
+            "clean_eng": clean_chapter,
+            "translated_jp": translated_chapter
+        }
+
+    # 全章を並列で実行
+    tasks = [process_single_chapter(i, text) for i, text in enumerate(chapters)]
+    results = await asyncio.gather(*tasks)
+
+    # 結果を整理
+    valid_results = [r for r in results if r is not None]
+    all_chapter_summaries = [r["summary"] for r in valid_results]
+    clean_chapters_eng = [r["clean_eng"] for r in valid_results]
+    translated_chapters_jp = [r["translated_jp"] for r in valid_results]
 
     # 各章の構造を構築
     chapter_combined_list = []

@@ -194,7 +194,7 @@ function App() {
                 <section className="bg-indigo-50/50 p-6 rounded-xl border border-indigo-100 shadow-sm">
                     <h2 className="text-lg font-bold text-indigo-900 mb-3 flex items-center gap-2">
                         <FileText className="w-5 h-5" />
-                        p2workflowy 概要
+                        p2workflowy
                     </h2>
                     <p className="text-sm text-indigo-800 leading-relaxed mb-4">
                         p2workflowyは、長い英語の論文や書籍をGemini AIで解析し、意味のある構造に整理（構造化）した上で、日本語に翻訳して<strong>Workflowy形式</strong>で出力するツールです。

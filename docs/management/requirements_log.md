@@ -53,3 +53,9 @@ Port existing Python desktop tool `p2workflowy` to a Web application.
 - **UI Bug Fixes**:
   - Fixed typo "Genesis" -> "Gemini" in API settings.
   - Corrected hardcoded progress messages to reflect the actual model being used.
+- **書籍モードの更なる改善 (2026-02-13)**:
+  - **構成の変更**: 本のタイトルの直下に「全体の要約（Book Summary）」を配置し、各章ごとに「その章の要約（Chapter Summary）」と「翻訳本文」が並ぶ形式に再構築。
+  - **不要な挨拶の削除**: AIによる「要約を作成しました」等のメタコメントをプロンプトレベルで禁止。
+  - **部の階層調整**: 「部（Part）」の見出しのみのセクションは、要約や翻訳をスキップして見出しのみを出力し、Workflowy上で章と同じ階層に配置。
+  - **参考文献の除外**: `References` や `Bibliography` などのセクションを自動的にスキップ。
+  - **常体での翻訳**: 論文および書籍の翻訳プロンプトに「常体（だ・である調）で翻訳する」制約を追加。

@@ -15,6 +15,7 @@ load_dotenv()
 
 from .skills import PaperProcessorSkills
 from .utils import Utils
+from .constants import EXCLUDE_SECTION_KEYWORDS
 
 
 def print_progress(message: str, percentage: int | None = None) -> None:
@@ -119,7 +120,7 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
     overall_summary = toc_match[0].replace("# Overall Summary", "").strip()
 
     print_progress("Phase 2 (書籍): 章ごとに分割し、個別要約を作成中...", 30)
-    # 本文を見出しベースで分割（書籍の場合は章立ての見出しがあるはず）
+    # 本文を見出しベースで分割
     chapters = skills._split_markdown_by_headers(raw_text)
     
     clean_chapters_eng = []
@@ -130,6 +131,29 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
         idx = i + 1
         print_progress(f"Chapter {idx}/{len(chapters)} 処理中...", 30 + int(60 * idx / len(chapters)))
         
+        # タイトルの仮抽出
+        lines_temp = chapter_text.strip().splitlines()
+        first_line = lines_temp[0].strip() if lines_temp else ""
+        title_for_check = first_line.lower().replace('#', '').strip()
+        
+        # 1. 参考文献等の除外
+        if any(kw in title_for_check for kw in EXCLUDE_SECTION_KEYWORDS):
+            print_progress(f"  ... '{first_line}' を除外キーワードに基づきスキップします。")
+            continue
+
+        # 2. 部 (Part) の判定
+        # 「部」または「Part」を含み、「章」や「Chapter」を含まない見出し
+        is_part = any(kw in first_line for kw in ["部", "Part", "PART"]) and not any(kw in first_line for kw in ["章", "Chapter"])
+        # 本文が極端に短い（見出し＋数行程度）場合は「部」の見出しのみと判断
+        has_body = len(lines_temp) > 3
+
+        if is_part and not has_body:
+            # 部のみ（要約・翻訳スキップ）
+            all_chapter_summaries.append("") # 空の要約
+            clean_chapters_eng.append(first_line)
+            translated_chapters_jp.append(first_line) # そのまま
+            continue
+        
         chapter_summary = await skills.summarize_chapter(overall_summary, chapter_text)
         all_chapter_summaries.append(chapter_summary)
         
@@ -139,36 +163,59 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
         translated_chapter = await skills.translate_chapter(overall_summary, chapter_summary, clean_chapter, glossary_text)
         translated_chapters_jp.append(translated_chapter)
 
+    # 各章の構造を構築
+    chapter_combined_list = []
+    for i, (summary, translation) in enumerate(zip(all_chapter_summaries, translated_chapters_jp)):
+        # 章タイトルの抽出
+        lines = translation.splitlines()
+        chapter_title = f"Chapter {i+1}"
+        content_body = translation
+        
+        if lines and lines[0].strip().startswith('#'):
+            chapter_title = lines[0].strip().replace('#', '').strip()
+            content_body = "\n".join(lines[1:]).strip()
+        
+        # 章の構成
+        if not summary.strip():
+            # 要約がない場合（部レベルの見出しのみ等）
+            chapter_md = f"# {chapter_title}"
+        else:
+            chapter_md = f"# {chapter_title}\n\n## Chapter Summary\n{summary}\n\n## Chapter Body\n{content_body}"
+        chapter_combined_list.append(chapter_md)
+
     structured_md = "\n\n".join(clean_chapters_eng)
     Utils.write_text_file(output_structured, structured_md)
     
-    translated_text = "\n\n".join(translated_chapters_jp)
+    # 章ごとの要約と翻訳を統合した Markdown
+    translated_text = "\n\n".join(chapter_combined_list)
     
-    combined_summary = "# Book Summary\n" + overall_summary + "\n\n# Chapters Summary\n" + "\n\n".join(all_chapter_summaries)
+    # Book Summary (全体要約)
+    book_summary_md = "# Book Summary\n" + overall_summary
 
     print_progress("Phase 4: 成果物を統合中...", 95)
-    await _assemble_workflowy(input_file, combined_summary, translated_text, structured_md, output_final, output_summary, output_structured)
+    await _assemble_workflowy(input_file, book_summary_md, translated_text, structured_md, output_final, output_summary, output_structured)
 
 async def _assemble_workflowy(input_file, summary_text, translated_text, structured_md, output_final, output_summary, output_structured):
-    # 1. 要約の処理
+    # 1. 要約の処理 (全体要約や章の要約が含まれる Markdown を変換)
     summary_workflowy = Utils.markdown_to_workflowy(summary_text)
-    summary_section = "    - 要約 (Summary)\n" + "\n".join(["        " + line for line in summary_workflowy.splitlines()])
-
+    
     # 2. 翻訳・タイトルの処理
     eng_lines = structured_md.splitlines()
     title = input_file.stem
     if eng_lines and eng_lines[0].strip().startswith('# '):
         title = eng_lines[0].strip().replace('# ', '').strip()
 
-    lines = translated_text.splitlines()
-    if lines and lines[0].strip().startswith('# '):
-        lines = lines[1:]
-    
-    body_text_no_title = "\n".join(lines).strip()
-    translation_workflowy = Utils.markdown_to_workflowy(body_text_no_title)
-    translation_section = "\n".join(["    " + line for line in translation_workflowy.splitlines()])
+    translation_workflowy = Utils.markdown_to_workflowy(translated_text)
     
     # 3. 結合
+    # - 本のタイトル
+    #   - summary_workflowy (Book Summary)
+    #   - translation_workflowy (Chapters -> Chapter Summary & Body)
+    
+    # インデント調整
+    summary_section = "\n".join(["    " + line for line in summary_workflowy.splitlines()])
+    translation_section = "\n".join(["    " + line for line in translation_workflowy.splitlines()])
+    
     final_content = f"- {title}\n{summary_section}\n{translation_section}"
     Utils.write_text_file(output_final, final_content)
     

@@ -76,3 +76,22 @@ Port existing Python desktop tool `p2workflowy` to a Web application.
   - **Book Summary**: Now extracted explicitly via JSON prompt and placed at the top of the output.
   - **Duplicate Prevention**: Chapter processing now strictly links split chunks to their TOC titles, preventing duplication.
   - **Exclusion**: Added `contributors`, `about the authors` to exclusion list.
+
+## v1.5 Pipeline Refactoring & Summary Structure Fix (2026-02-14)
+- **サマリー出力のフラット化**:
+  - `SUMMARY_PROMPT` / `BOOK_SUMMARY_PROMPT` の `<example>` と `<rules>` を修正。
+  - 旧: 「論文タイトル」がラッパー親項目 → 配下にリサーチ・クエスチョン等がネスト（余分な階層）。
+  - 新: **リサーチ・クエスチョン / 核心的主張 / 各セクションが並列**（フラット構造）。
+  - ルールに「**構造の重要ルール**: 同じ階層（並列）に配置すること」を明示的に追加。
+- **パイプラインの分離**:
+  - `BOOK_STRUCTURE_PROMPT`: TOC抽出のみに限定（`book_summary` を削除）。
+  - `BOOK_SUMMARY_PROMPT`: 書籍全体の要約を独立フェーズ (Phase 1.5) で生成。
+  - `BOOK_CHAPTER_SUMMARY_PROMPT`: ユーザーが更新。`{text}` プレースホルダー方式に変更。
+  - `summarize_chapter()`: 引数を `(chapter_text)` のみに簡略化。
+  - `generate_book_summary()`: 新メソッド追加 (`skills.py`)。
+- **アンカーマッチングの改善** (`skills.py`):
+  - キー名不一致 (`start_text` vs `anchor`) を修正。
+  - 3段階フォールバック: 完全一致 → 空白正規化 → 先頭N語部分一致。
+  - デバッグ出力で照合結果を可視化。
+- **TOC保存**: Phase 1 完了後に `intermediate/toc.txt` として保存。
+- **Web版同期**: `web/src/lib/prompts.json` を `shared/prompts.json` と同期。

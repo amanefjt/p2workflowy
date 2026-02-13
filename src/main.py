@@ -108,8 +108,8 @@ async def _process_paper(skills, raw_text, glossary_text, input_file, output_sum
     await _assemble_workflowy(input_file, summary_text, translated_text, structured_md, output_final, output_summary, output_structured)
 
 async def _process_book(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final, inter_dir):
-    # Phase 1: Structure Analysis
-    print_progress("Phase 1 (書籍): 全文を読み込み、目次とアンカーを分析中 (Map作成)...", 10)
+    # Phase 1: TOC Analysis (構造のみ、要約は含まない)
+    print_progress("Phase 1 (書籍): 全文を読み込み、目次とアンカーを分析中 (TOC抽出)...", 10)
     
     try:
         structure_data = await skills.analyze_book_structure(
@@ -120,14 +120,26 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
         print_progress(f"Error: 目次分析に失敗しました: {e}")
         return
 
-    # データ取り出し
-    overall_summary = structure_data.get("book_summary", "Summary not available.")
     chapters_toc = structure_data.get("chapters", [])
+    print(f"\n  => {len(chapters_toc)} 個の章を検出しました。")
 
-    # 目次情報の保存（デバッグ用・確認用）
+    # TOC を toc.txt として保存
+    inter_dir.mkdir(exist_ok=True, parents=True)
+    toc_lines = [f"{i+1}. {item.get('title', 'Unknown')}" for i, item in enumerate(chapters_toc)]
+    toc_save_path = inter_dir / "toc.txt"
+    Utils.write_text_file(toc_save_path, "\n".join(toc_lines))
+    print(f"  => TOC を保存しました: {toc_save_path}")
+
+    # Phase 1.5: Book-Level Summary (BOOK_SUMMARY_PROMPT で独立生成)
+    print_progress("Phase 1.5 (書籍): 書籍全体の要約を生成中...", 15)
+    overall_summary = await skills.generate_book_summary(
+        raw_text,
+        progress_callback=lambda msg: print_progress(f"Phase 1.5: {msg}")
+    )
+
+    # 目次情報 + 全体要約の保存
     toc_text = "\n".join([f"- {item.get('title')}" for item in chapters_toc])
     Utils.write_text_file(output_summary, f"# Book Summary\n{overall_summary}\n\n# Generated TOC\n{toc_text}")
-    print(f"\n  => {len(chapters_toc)} 個の章を検出しました。")
 
     # Phase 2: Deterministic Splitting
     print_progress("Phase 2 (書籍): アンカー検索による分割を実行中 (Cut)...", 20)
@@ -171,9 +183,8 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
              print(f"  Skipping short section: {chapter_title} ({len(chapter_text)} chars)")
              return None
         
-        # 並列数が多すぎるとエラーになるので、必要ならSemaphoreなどで制御
-        
-        chapter_summary = await skills.summarize_chapter(overall_summary, chapter_text)
+        # 章要約 (BOOK_CHAPTER_SUMMARY_PROMPT, {text} placeholder)
+        chapter_summary = await skills.summarize_chapter(chapter_text)
         clean_chapter = await skills.structure_chapter(overall_summary, chapter_text)
         translated_chapter = await skills.translate_chapter(overall_summary, chapter_summary, clean_chapter, glossary_text)
         

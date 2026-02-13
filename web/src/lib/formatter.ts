@@ -3,6 +3,12 @@
  * Ported from src/utils.py
  */
 
+export interface ChapterData {
+    id: number;
+    title: string;
+    raw_text: string;
+}
+
 export const normalizeMarkdownHeadings = (markdownText: string): string => {
     const lines = markdownText.split('\n');
     const normalizedLines: string[] = [];
@@ -156,4 +162,120 @@ const splitTextByLength = (text: string, maxLength: number): string[] => {
     }
 
     return chunks;
+};
+
+// --- Book Mode Utilities ---
+
+/**
+ * Phase 1: テキストをH1見出し（# Chapter ...）で章ごとに分割する。
+ * 見出しが見つからない場合はテキスト全体を1つの章として返す。
+ */
+export const splitByChapterHeaders = (text: string): ChapterData[] => {
+    const lines = text.split('\n');
+    const chapters: ChapterData[] = [];
+    let currentTitle = '';
+    let currentLines: string[] = [];
+    let chapterId = 0;
+
+    for (const line of lines) {
+        // H1見出し（# で始まり ## でない）で章を区切る
+        const h1Match = line.match(/^#\s+(.+)/);
+        const isH2OrDeeper = line.match(/^#{2,}\s/);
+
+        if (h1Match && !isH2OrDeeper) {
+            // 前の章を保存
+            if (currentLines.length > 0 || currentTitle) {
+                chapterId++;
+                chapters.push({
+                    id: chapterId,
+                    title: currentTitle || `Section ${chapterId}`,
+                    raw_text: currentLines.join('\n').trim(),
+                });
+            }
+            currentTitle = h1Match[1].trim();
+            currentLines = [line];
+        } else {
+            currentLines.push(line);
+        }
+    }
+
+    // 最後の章を保存
+    if (currentLines.length > 0) {
+        chapterId++;
+        chapters.push({
+            id: chapterId,
+            title: currentTitle || `Section ${chapterId}`,
+            raw_text: currentLines.join('\n').trim(),
+        });
+    }
+
+    // 章が見つからなかった場合、全体を1つの章として扱う
+    if (chapters.length === 0) {
+        chapters.push({
+            id: 1,
+            title: 'Full Text',
+            raw_text: text.trim(),
+        });
+    }
+
+    return chapters;
+};
+
+/**
+ * Phase 6: 全中間データをWorkFlowy形式の最終出力に組み立てる。
+ *
+ * 出力フォーマット:
+ * - Book Summary
+ *     - [book_summary content]
+ * - Chapter 1: Title
+ *     - Summary
+ *         - [chapter_summary content]
+ *     - Translation / Body
+ *         - [chapter_translation content]
+ * - Chapter 2: Title
+ *     ...
+ */
+export const assembleBookWorkflowy = (
+    bookSummary: string,
+    chapters: ChapterData[],
+    chapterSummaries: string[],
+    chapterTranslations: string[]
+): string => {
+    const parts: string[] = [];
+
+    // Book Summary (Root level)
+    const summaryWorkflowy = bookSummary
+        .split('\n')
+        .filter(line => line.trim())
+        .map(line => `    ${line}`)
+        .join('\n');
+    parts.push(`- Book Summary\n${summaryWorkflowy}`);
+
+    // Each Chapter
+    for (let i = 0; i < chapters.length; i++) {
+        const chapter = chapters[i];
+        const summary = chapterSummaries[i] || '(要約なし)';
+        const translation = chapterTranslations[i] || '(翻訳なし)';
+
+        // Convert translation markdown to workflowy format
+        const translationWorkflowy = markdownToWorkflowy(translation)
+            .split('\n')
+            .map(line => `        ${line}`)
+            .join('\n');
+
+        // Summary lines (already in workflowy "-" format from SUMMARY_PROMPT)
+        const summaryLines = summary
+            .split('\n')
+            .filter(line => line.trim())
+            .map(line => `        ${line}`)
+            .join('\n');
+
+        parts.push(
+            `- ${chapter.title}\n` +
+            `    - Summary\n${summaryLines}\n` +
+            `    - Translation / Body\n${translationWorkflowy}`
+        );
+    }
+
+    return parts.join('\n');
 };

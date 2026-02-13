@@ -4,7 +4,7 @@ import re
 from .constants import (
     STRUCTURING_WITH_HINT_PROMPT, SUMMARY_PROMPT, TRANSLATION_PROMPT, 
     MAX_TRANSLATION_CHUNK_SIZE,
-    BOOK_STRUCTURE_PROMPT, BOOK_CHAPTER_SUMMARY_PROMPT, 
+    BOOK_STRUCTURE_PROMPT, BOOK_SUMMARY_PROMPT, BOOK_CHAPTER_SUMMARY_PROMPT, 
     BOOK_STRUCTURING_PROMPT, BOOK_TRANSLATION_PROMPT
 )
 from .llm_processor import LLMProcessor
@@ -17,9 +17,9 @@ class PaperProcessorSkills:
 
     async def analyze_book_structure(self, full_text: str, progress_callback=None) -> dict:
         """
-        書籍全体を分析し、要約と正確な目次(TOC)をJSON形式で抽出する
+        書籍全体を分析し、目次(TOC)をJSON形式で抽出する（要約は含まない）
         Returns:
-            dict: {"book_summary": str, "chapters": list[dict]}
+            dict: {"chapters": list[dict]}
         """
         # プロンプト内にJSONの例（波括弧）が含まれているため、format()ではなくreplace()を使用する
         prompt = BOOK_STRUCTURE_PROMPT.replace("{text}", full_text)
@@ -37,7 +37,7 @@ class PaperProcessorSkills:
             data = json.loads(json_str)
             # 古いフォーマット（リストのみ）が返ってきた場合の互換性対応
             if isinstance(data, list):
-                return {"book_summary": "Summary not generated.", "chapters": data}
+                return {"chapters": data}
             return data
             
         except json.JSONDecodeError as e:
@@ -45,11 +45,83 @@ class PaperProcessorSkills:
             print(f"Raw Response: {response_text}")
             raise ValueError(f"Failed to parse TOC JSON: {e}")
 
+    async def generate_book_summary(self, full_text: str, progress_callback=None) -> str:
+        """
+        BOOK_SUMMARY_PROMPT を使って書籍全体の要約を生成する
+        """
+        prompt = BOOK_SUMMARY_PROMPT.replace("{text}", full_text)
+        return await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
+
+    @staticmethod
+    def _normalize_whitespace(text: str) -> str:
+        """改行・タブ・複数スペースを単一スペースに正規化する"""
+        return re.sub(r'\s+', ' ', text).strip()
+
+    def _find_anchor_position(self, full_text: str, anchor: str, search_from: int, title: str) -> int:
+        """
+        アンカーテキストの位置を多段階で検索する。
+        1. 完全一致
+        2. 空白正規化後の一致
+        3. 先頭N語での部分一致（フォールバック）
+        """
+        # Strategy 1: 完全一致
+        pos = full_text.find(anchor, search_from)
+        if pos != -1:
+            print(f"  ✓ '{title}' — 完全一致 (pos={pos})")
+            return pos
+        
+        # Strategy 2: 空白を正規化して検索
+        normalized_text = self._normalize_whitespace(full_text[search_from:])
+        normalized_anchor = self._normalize_whitespace(anchor)
+        norm_pos = normalized_text.find(normalized_anchor)
+        if norm_pos != -1:
+            # 正規化テキスト内の位置を、元テキストの位置に変換する
+            # 正規化前テキストで近似位置を特定
+            approx_pos = self._map_normalized_pos_to_original(full_text, search_from, normalized_anchor)
+            if approx_pos != -1:
+                print(f"  ✓ '{title}' — 空白正規化で一致 (pos={approx_pos})")
+                return approx_pos
+        
+        # Strategy 3: 先頭の数語（5〜15語）で部分一致
+        words = normalized_anchor.split()
+        for word_count in [15, 10, 7, 5]:
+            if len(words) >= word_count:
+                partial = ' '.join(words[:word_count])
+                # 元テキストでも正規化テキストでも試す
+                partial_pos = self._normalize_whitespace(full_text[search_from:]).find(partial)
+                if partial_pos != -1:
+                    approx_pos = self._map_normalized_pos_to_original(full_text, search_from, partial)
+                    if approx_pos != -1:
+                        print(f"  ✓ '{title}' — 先頭{word_count}語で一致 (pos={approx_pos})")
+                        return approx_pos
+        
+        # 全戦略失敗
+        print(f"  ✗ '{title}' — 一致なし")
+        print(f"    検索アンカー: '{anchor[:80]}...'")
+        return -1
+
+    def _map_normalized_pos_to_original(self, full_text: str, search_from: int, normalized_fragment: str) -> int:
+        """
+        正規化されたフラグメントの位置を、元テキスト内の位置にマッピングする。
+        元テキストを1文字ずつスキャンし、正規化フラグメントの先頭語群が始まる位置を見つける。
+        """
+        # 先頭の数語を取得して元テキストから検索
+        first_words = normalized_fragment.split()[:3]
+        if not first_words:
+            return -1
+        
+        # 元テキスト内で先頭語を正規表現で検索（間の空白を柔軟に）
+        pattern = r'\s+'.join(re.escape(w) for w in first_words)
+        match = re.search(pattern, full_text[search_from:])
+        if match:
+            return search_from + match.start()
+        return -1
+
     def split_by_anchors(self, full_text: str, structure_data: dict) -> list[dict]:
         """
-        アンカーテキストに基づいて全文を章ごとに分割する
+        アンカーテキストに基づいて全文を章ごとに分割する（ロバスト版）
         Returns:
-            list[dict]: [{"title": str, "text": str, "summary": str}, ...]
+            list[dict]: [{"title": str, "text": str}, ...]
         """
         chapters_toc = structure_data.get("chapters", [])
         if not chapters_toc:
@@ -61,24 +133,27 @@ class PaperProcessorSkills:
         # 検索開始位置
         current_search_pos = 0
         
+        print(f"\n  --- アンカー照合開始 (全{len(chapters_toc)}章) ---")
+        print(f"  入力テキスト長: {len(full_text)} 文字")
+        
         for chapter in chapters_toc:
-            anchor = chapter.get("start_text", "").strip()
+            anchor = (chapter.get("anchor") or chapter.get("start_text", "")).strip()
             title = chapter.get("title", "Unknown Chapter")
             
             if not anchor:
-                print(f"Warning: No anchor text for '{title}'")
+                print(f"  ✗ '{title}' — アンカーテキストなし")
                 continue
             
-            # アンカーを検索
-            pos = full_text.find(anchor, current_search_pos)
+            pos = self._find_anchor_position(full_text, anchor, current_search_pos, title)
             
             if pos == -1:
-                print(f"Warning: Anchor not found for '{title}': '{anchor}'")
                 continue
                 
             indices.append(pos)
             valid_chapters.append(chapter)
             current_search_pos = pos + 1
+        
+        print(f"  --- 照合結果: {len(valid_chapters)}/{len(chapters_toc)} 章が一致 ---\n")
             
         chunks_info = []
         for i in range(len(indices)):
@@ -99,14 +174,11 @@ class PaperProcessorSkills:
             
         return chunks_info
 
-    async def summarize_chapter(self, overall_summary: str, chapter_text: str, progress_callback=None) -> str:
+    async def summarize_chapter(self, chapter_text: str, progress_callback=None) -> str:
         """
-        特定の章を、全体文脈を踏まえて要約する
+        BOOK_CHAPTER_SUMMARY_PROMPT を使って章ごとの要約を生成する
         """
-        prompt = BOOK_CHAPTER_SUMMARY_PROMPT.format(
-            overall_summary=overall_summary,
-            chapter_text=chapter_text
-        )
+        prompt = BOOK_CHAPTER_SUMMARY_PROMPT.replace("{text}", chapter_text)
         return await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
 
     async def structure_chapter(self, overall_summary: str, chapter_text: str, progress_callback=None) -> str:
@@ -156,7 +228,10 @@ class PaperProcessorSkills:
             if isinstance(res, Exception):
                 final_results.append(f"[Chapter翻訳エラー: {str(res)}]")
             else:
-                final_results.append(res)
+                # H1タグが含まれているとWorkFlowyで章が分割されてしまうため、強制的にH2に置換する
+                # (例: "# 導入" -> "## 導入")
+                sanitized_res = re.sub(r'^# ', '## ', res, flags=re.MULTILINE)
+                final_results.append(sanitized_res)
         return "\n\n".join(final_results)
 
     # --- Paper Mode Skills (Existing) ---

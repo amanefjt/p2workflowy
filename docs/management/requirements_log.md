@@ -62,3 +62,17 @@ Port existing Python desktop tool `p2workflowy` to a Web application.
 - **処理速度の高速化 (2026-02-13)**:
   - **章ごとの並列化**: 書籍モードにて、各章の処理（要約→構造化→翻訳）を `asyncio.gather` で並列実行するように改善。章の内部順序は維持しつつ、全体の待ち時間を大幅に短縮。
   - **チャンクサイズの拡大**: `MAX_TRANSLATION_CHUNK_SIZE` を 40,000 文字に拡大。リクエスト回数を減らし、処理効率を向上。
+
+## v1.3 Refactoring (2026-02-13)
+- **Book Mode Architecture Revamp**:
+  - **TOC-Driven Anchor Splitting**: (New Concept)
+    - **Phase 1 (Map)**: Analyze first 15,000 chars to extract TOC and "Anchor Text" (start of each chapter).
+    - **Phase 2 (Cut)**: Deterministically split full text by searching for these anchors using Python code.
+    - **Phase 3 (Process)**: Process each split chunk in parallel.
+  - **Goal**: Prevent AI from hallucinating chapter boundaries or missing chapters in large texts.
+
+## v1.4 Output Refinement (2026-02-13)
+- **Structure Improvements**:
+  - **Book Summary**: Now extracted explicitly via JSON prompt and placed at the top of the output.
+  - **Duplicate Prevention**: Chapter processing now strictly links split chunks to their TOC titles, preventing duplication.
+  - **Exclusion**: Added `contributors`, `about the authors` to exclusion list.

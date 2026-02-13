@@ -1,4 +1,6 @@
 import asyncio
+import json
+import re
 from .constants import (
     STRUCTURING_WITH_HINT_PROMPT, SUMMARY_PROMPT, TRANSLATION_PROMPT, 
     MAX_TRANSLATION_CHUNK_SIZE,
@@ -13,12 +15,89 @@ class PaperProcessorSkills:
 
     # --- Book Mode Skills ---
 
-    async def analyze_book_structure(self, full_text: str, progress_callback=None) -> str:
+    async def analyze_book_structure(self, full_text: str, progress_callback=None) -> dict:
         """
-        書籍全体の目次と要約を生成する
+        書籍全体を分析し、要約と正確な目次(TOC)をJSON形式で抽出する
+        Returns:
+            dict: {"book_summary": str, "chapters": list[dict]}
         """
-        prompt = BOOK_STRUCTURE_PROMPT.format(text=full_text)
-        return await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
+        # プロンプト内にJSONの例（波括弧）が含まれているため、format()ではなくreplace()を使用する
+        prompt = BOOK_STRUCTURE_PROMPT.replace("{text}", full_text)
+        response_text = await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
+        
+        # JSON抽出のロバスト化
+        try:
+            # Markdownのコードブロックが含まれている場合への対応
+            json_match = re.search(r'```json\s*(.*?)```', response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                json_str = response_text
+            
+            data = json.loads(json_str)
+            # 古いフォーマット（リストのみ）が返ってきた場合の互換性対応
+            if isinstance(data, list):
+                return {"book_summary": "Summary not generated.", "chapters": data}
+            return data
+            
+        except json.JSONDecodeError as e:
+            print(f"Error parsing JSON from LLM: {e}")
+            print(f"Raw Response: {response_text}")
+            raise ValueError(f"Failed to parse TOC JSON: {e}")
+
+    def split_by_anchors(self, full_text: str, structure_data: dict) -> list[dict]:
+        """
+        アンカーテキストに基づいて全文を章ごとに分割する
+        Returns:
+            list[dict]: [{"title": str, "text": str, "summary": str}, ...]
+        """
+        chapters_toc = structure_data.get("chapters", [])
+        if not chapters_toc:
+            return [{"title": "Full Text", "text": full_text}]
+
+        indices = []
+        valid_chapters = []
+
+        # 検索開始位置
+        current_search_pos = 0
+        
+        for chapter in chapters_toc:
+            anchor = chapter.get("start_text", "").strip()
+            title = chapter.get("title", "Unknown Chapter")
+            
+            if not anchor:
+                print(f"Warning: No anchor text for '{title}'")
+                continue
+            
+            # アンカーを検索
+            pos = full_text.find(anchor, current_search_pos)
+            
+            if pos == -1:
+                print(f"Warning: Anchor not found for '{title}': '{anchor}'")
+                continue
+                
+            indices.append(pos)
+            valid_chapters.append(chapter)
+            current_search_pos = pos + 1
+            
+        chunks_info = []
+        for i in range(len(indices)):
+            start = indices[i]
+            # 次の章の開始直前まで、または最後まで
+            end = indices[i+1] if i + 1 < len(indices) else len(full_text)
+            
+            # スライス
+            chunk_text = full_text[start:end]
+            
+            # 対応するTOC情報
+            toc_item = valid_chapters[i]
+            
+            chunks_info.append({
+                "title": toc_item.get("title"),
+                "text": chunk_text
+            })
+            
+        return chunks_info
 
     async def summarize_chapter(self, overall_summary: str, chapter_text: str, progress_callback=None) -> str:
         """
@@ -33,12 +112,27 @@ class PaperProcessorSkills:
     async def structure_chapter(self, overall_summary: str, chapter_text: str, progress_callback=None) -> str:
         """
         特定の章の英語構造を整理する
+        長文の場合は分割して処理する
         """
-        prompt = BOOK_STRUCTURING_PROMPT.format(
-            overall_summary=overall_summary,
-            chapter_text=chapter_text
-        )
-        return await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
+        chunks = self._split_text_by_length(chapter_text)
+        tasks = []
+        
+        for chunk in chunks:
+            prompt = BOOK_STRUCTURING_PROMPT.format(
+                overall_summary=overall_summary,
+                chapter_text=chunk
+            )
+            tasks.append(asyncio.to_thread(self.llm.call_api, prompt, None))
+            
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        final_results = []
+        for res in results:
+            if isinstance(res, Exception):
+                final_results.append(str(res))
+            else:
+                final_results.append(res)
+                
+        return "\n\n".join(final_results)
 
     async def translate_chapter(self, overall_summary: str, chapter_summary: str, chapter_text: str, glossary_text: str = "", progress_callback=None) -> str:
         """

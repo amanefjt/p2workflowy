@@ -78,7 +78,7 @@ async def main():
     if mode == "paper":
         await _process_paper(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final)
     else:
-        await _process_book(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final)
+        await _process_book(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final, inter_dir)
 
 async def _process_paper(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final):
     print_progress("Phase 1 (論文): 原文から意味的な構造を把握中...", 10)
@@ -107,84 +107,115 @@ async def _process_paper(skills, raw_text, glossary_text, input_file, output_sum
     print_progress("Phase 4: 成果物を統合中...", 90)
     await _assemble_workflowy(input_file, summary_text, translated_text, structured_md, output_final, output_summary, output_structured)
 
-async def _process_book(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final):
-    print_progress("Phase 1 (書籍): 全体の構成と要約を分析中...", 10)
-    structure_info = await skills.analyze_book_structure(
-        raw_text,
-        progress_callback=lambda msg: print_progress(f"Phase 1: {msg}")
-    )
-    Utils.write_text_file(output_summary, structure_info)
+async def _process_book(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final, inter_dir):
+    # Phase 1: Structure Analysis
+    print_progress("Phase 1 (書籍): 全文を読み込み、目次とアンカーを分析中 (Map作成)...", 10)
     
-    overall_summary = ""
-    toc_match = re.split(r'# Table of Contents', structure_info, flags=re.IGNORECASE)
-    overall_summary = toc_match[0].replace("# Overall Summary", "").strip()
+    try:
+        structure_data = await skills.analyze_book_structure(
+            raw_text,
+            progress_callback=lambda msg: print_progress(f"Phase 1: {msg}")
+        )
+    except Exception as e:
+        print_progress(f"Error: 目次分析に失敗しました: {e}")
+        return
 
-    print_progress("Phase 2 (書籍): 章ごとに分割し、並列処理を開始...", 30)
-    # 本文を見出しベースで分割
-    chapters = skills._split_markdown_by_headers(raw_text)
+    # データ取り出し
+    overall_summary = structure_data.get("book_summary", "Summary not available.")
+    chapters_toc = structure_data.get("chapters", [])
+
+    # 目次情報の保存（デバッグ用・確認用）
+    toc_text = "\n".join([f"- {item.get('title')}" for item in chapters_toc])
+    Utils.write_text_file(output_summary, f"# Book Summary\n{overall_summary}\n\n# Generated TOC\n{toc_text}")
+    print(f"\n  => {len(chapters_toc)} 個の章を検出しました。")
+
+    # Phase 2: Deterministic Splitting
+    print_progress("Phase 2 (書籍): アンカー検索による分割を実行中 (Cut)...", 20)
     
-    async def process_single_chapter(i, chapter_text):
-        idx = i + 1
-        # タイトルの仮抽出
-        lines_temp = chapter_text.strip().splitlines()
-        first_line = lines_temp[0].strip() if lines_temp else ""
-        title_for_check = first_line.lower().replace('#', '').strip()
+    # split_by_anchors は [{"title":..., "text":...}, ...] のリストを返す
+    processed_chapters = skills.split_by_anchors(raw_text, structure_data)
+    
+    if not processed_chapters:
+        print("Error: テキストの分割に失敗しました（アンカーが見つかりませんでした）。")
+        return
+
+    print(f"  => {len(processed_chapters)} 個のチャンクに分割されました。")
+    
+    # 中間ファイルの保存 (User Request)
+    chapters_dir = inter_dir / "chapters"
+    chapters_dir.mkdir(exist_ok=True, parents=True)
+    print(f"  => 中間ファイルを保存中: {chapters_dir}")
+    
+    for i, chapter in enumerate(processed_chapters):
+        # ファイル名に使えない文字を除去
+        safe_title = re.sub(r'[\\/*?:"<>|]', "", chapter.get("title", "unknown"))
+        safe_title = safe_title.replace(" ", "_").strip()
+        filename = f"chap{i+1:03d}_{safe_title}.txt"
+        Utils.write_text_file(chapters_dir / filename, chapter.get("text", ""))
+
+    # Phase 3: Per-Chapter Processing
+    print_progress("Phase 3 (書籍): 各章の並列処理を開始...", 30)
+    
+    async def process_single_chapter(chapter_info):
+        chapter_title = chapter_info.get("title", "Unknown Chapter")
+        chapter_text = chapter_info.get("text", "")
         
-        # 1. 参考文献等の除外
-        if any(kw in title_for_check for kw in EXCLUDE_SECTION_KEYWORDS):
+        # 1. 除外キーワードチェック (Contributorsなど)
+        title_lower = chapter_title.lower()
+        if any(kw in title_lower for kw in EXCLUDE_SECTION_KEYWORDS):
+            print(f"  Skipping excluded section: {chapter_title}")
             return None
 
-        # 2. 部 (Part) の判定
-        is_part = any(kw in first_line for kw in ["部", "Part", "PART"]) and not any(kw in first_line for kw in ["章", "Chapter"])
-        has_body = len(lines_temp) > 3
-
-        if is_part and not has_body:
-            return {
-                "summary": "",
-                "clean_eng": first_line,
-                "translated_jp": first_line
-            }
+        # 2. 文量チェック (極端に短いものはスキップ)
+        if len(chapter_text) < 50:
+             print(f"  Skipping short section: {chapter_title} ({len(chapter_text)} chars)")
+             return None
         
-        # ユーザー指定の順序: 要旨 -> 構造 -> 翻訳 (直列 awaited)
+        # 並列数が多すぎるとエラーになるので、必要ならSemaphoreなどで制御
+        
         chapter_summary = await skills.summarize_chapter(overall_summary, chapter_text)
         clean_chapter = await skills.structure_chapter(overall_summary, chapter_text)
         translated_chapter = await skills.translate_chapter(overall_summary, chapter_summary, clean_chapter, glossary_text)
         
         return {
+            "title": chapter_title, # TOC由来の正しいタイトルを維持
             "summary": chapter_summary,
             "clean_eng": clean_chapter,
             "translated_jp": translated_chapter
         }
 
     # 全章を並列で実行
-    tasks = [process_single_chapter(i, text) for i, text in enumerate(chapters)]
+    tasks = [process_single_chapter(c) for c in processed_chapters]
     results = await asyncio.gather(*tasks)
 
     # 結果を整理
     valid_results = [r for r in results if r is not None]
-    all_chapter_summaries = [r["summary"] for r in valid_results]
-    clean_chapters_eng = [r["clean_eng"] for r in valid_results]
-    translated_chapters_jp = [r["translated_jp"] for r in valid_results]
 
     # 各章の構造を構築
     chapter_combined_list = []
-    for i, (summary, translation) in enumerate(zip(all_chapter_summaries, translated_chapters_jp)):
-        # 章タイトルの抽出
+    clean_chapters_eng = []
+    
+    for res in valid_results:
+        summary = res["summary"]
+        translation = res["translated_jp"]
+        # TOC由来のタイトルを使用 (翻訳結果のタイトルよりも信頼できる)
+        final_title = res["title"]
+        
+        # 翻訳テキストからMarkdownのH1タグ(# )を除去して本文のみにする処理が必要か？
+        # 現状のプロンプトではMarkdown構造を維持させるので、H1が含まれる可能性がある。
+        # ただし、階層構造を整えるために、H1を強制的に final_title に置き換えるのが安全。
+        
         lines = translation.splitlines()
-        chapter_title = f"Chapter {i+1}"
         content_body = translation
         
-        if lines and lines[0].strip().startswith('#'):
-            chapter_title = lines[0].strip().replace('#', '').strip()
-            content_body = "\n".join(lines[1:]).strip()
+        # 翻訳の冒頭がH1の場合、それを削除して本文だけにする（タイトルはTOC由来のものを使うため）
+        if lines and lines[0].strip().startswith('# '):
+             content_body = "\n".join(lines[1:]).strip()
         
         # 章の構成
-        if not summary.strip():
-            # 要約がない場合（部レベルの見出しのみ等）
-            chapter_md = f"# {chapter_title}"
-        else:
-            chapter_md = f"# {chapter_title}\n\n## Chapter Summary\n{summary}\n\n{content_body}"
+        chapter_md = f"# {final_title}\n\n## Chapter Summary\n{summary}\n\n{content_body}"
         chapter_combined_list.append(chapter_md)
+        clean_chapters_eng.append(res["clean_eng"])
 
     structured_md = "\n\n".join(clean_chapters_eng)
     Utils.write_text_file(output_structured, structured_md)

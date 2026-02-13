@@ -1,47 +1,29 @@
-# モデル最適化とトークン設定ガイド
+# Model Optimization Guide: Gemini 3 Flash
 
-本プロジェクトは、Google Gemini 3 Flash (Preview) の広大なコンテキストウィンドウ（1M入力 / 64k出力）を最大限に活用するように最適化されています。
+Based on the [official documentation](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-flash?hl=ja) (Preview), here are the specifications and optimization strategies for `gemini-3-flash`.
 
-## 現在の設定 (Gemini 3 Flash Preview 向け)
+## Model Specifications
+- **Model Name**: `gemini-3-flash-preview`
+- **Max Input Tokens**: **1,048,576** (1M)
+- **Max Output Tokens**: **65,536** (65k)
 
-`shared/prompts.json` で定義されている現在の設定値は以下の通りです：
+## Chunk Size Optimization
+For tasks like **Full Text Structuring** and **Translation**, the limiting factor is the **Output Token Limit**.
+Since we require the model to output the full content (rewriting/translating 1:1), the Input size must be smaller than the Max Output Tokens to avoid truncation.
 
-- **DEFAULT_MODEL**: `gemini-3-flash-preview`
-- **MAX_TRANSLATION_CHUNK_SIZE**: `40000` (文字)
+### Calculation
+- **Max Output**: 65,536 tokens.
+- **Conversion**: Roughly 1 token ≈ 4 English characters (conservative) or 2-3 Japanese characters.
+- **Safe Output Character Limit**: 
+    - 65,536 tokens * ~2.5 chars/token ≈ 163,840 characters.
+- **Safety Margin**: To prevent the model from "rushing" or summarizing due to length pressure, and to allow for markup overhead, we set a safe input chunk size.
 
-### 公式ドキュメント
-[Gemini 3 Flash (Preview) の詳細](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-flash?hl=ja)
+### Recommended Setting
+- **Old Setting**: 12,000 characters (Very conservative, tailored for 8k/16k output limits).
+- **New Optimized Setting**: **40,000 characters**.
+    - 40,000 chars ≈ 10,000 - 15,000 tokens.
+    - This corresponds to ~23% of the max output capacity (65k).
+    - This provides a massive safety buffer while significantly reducing the number of API calls and improving context continuity compared to smaller chunks.
 
-### なぜ 40,000 文字なのか？
-Gemini 3 Flash Preview は最大 65,536 トークンの出力をサポートしていますが、以下の理由から 40,000 文字（日本語に翻訳すると約 1.5倍〜2倍の文字数/トークン数になる可能性がある）を一つの単位としています。
-
-1. **出力上限の安全性**: 日本語翻訳後のトークン数が 64k を超えないようにするため。
-2. **処理の安定性**: 一度に極端に長い文章を渡すと、モデルの注意が散漫になり、特定の段落を飛ばしたり誤訳が発生したりするリスクを防ぐため。
-3. **並列処理の効率**: 長い論文（例：10万文字）でも 3〜4 つのセクションに分割して並列実行することで、全体の処理時間を短縮できます。
-
-## モデル変更時の調整方法
-
-将来的に別のモデル（例：Gemini Pro 2.0 など）に変更する場合、以下の値を調整することで最適化が可能です。
-
-### 1. `shared/prompts.json` の編集
-このファイルにある値を変更すると、Python版とWeb版の両方に反映されます（Web版はビルド時に読み込みます）。
-
-```json
-{
-    "DEFAULT_MODEL": "新しいモデル名",
-    "MAX_TRANSLATION_CHUNK_SIZE": 10000 
-}
-```
-
-### 2. 調整の目安
-モデルの性能に合わせて、`MAX_TRANSLATION_CHUNK_SIZE` を以下のように調整してください。
-
-| モデル名 | 推奨 Chunk Size (文字) | 理由 |
-| :--- | :--- | :--- |
-| **Gemini 3 Flash Preview** | **40,000** | 64k出力対応のため大きく設定可能 |
-| **Gemini 1.5 Flash** | **8,192** | 出力トークン制限 (8k) に合わせる |
-| **Gemini 1.5 Pro** | **15,000 - 20,000** | 性能は高いが、出力の安定性を考慮 |
-
-## 注意事項
-- **入力トークン**: Gemini 1.5 以降は 1M 以上の入力をサポートしているため、入力サイズについては通常気にする必要はありません。
-- **出力トークン**: 翻訳タスクにおいて最も重要です。翻訳後の文章がモデルの出力最大トークン数を超えると、文章が途切れます。その場合は `MAX_TRANSLATION_CHUNK_SIZE` を小さくしてください。
+## Configuration
+Set `MAX_TRANSLATION_CHUNK_SIZE` in `shared/prompts.json` to `40000`.

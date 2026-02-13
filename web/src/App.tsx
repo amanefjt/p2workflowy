@@ -327,6 +327,11 @@ function App() {
                                     書籍モード
                                 </button>
                             </div>
+                            {docType === 'book' && (
+                                <p className="text-[10px] text-amber-600 font-medium animate-pulse">
+                                    ※書籍モードは現在やや不安定です
+                                </p>
+                            )}
                         </div>
                     </div>
 

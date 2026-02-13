@@ -214,28 +214,44 @@ class PaperProcessorSkills:
         # これにより、文脈の分断や重複（AIによる勝手な見出し補完）を防ぐ
         chunks = self._split_markdown_by_headers(chapter_text)
         
-        tasks = []
-        for chunk in chunks:
-            if not chunk.strip():
-                continue
+        # 並列数を制限するためのセマフォ (章ごとの翻訳リクエストが爆発しないように)
+        sem = asyncio.Semaphore(5)
 
-            prompt = BOOK_TRANSLATION_PROMPT.replace("{overall_summary}", overall_summary) \
-                                          .replace("{chapter_summary}", chapter_summary) \
-                                          .replace("{glossary_content}", glossary_text) \
-                                          .replace("{chunk_text}", chunk)
+        async def _translate_chunk(chunk):
+            if not chunk.strip():
+                return ""
             
-            tasks.append(asyncio.to_thread(self.llm.call_api, prompt, None))
+            async with sem:
+                # replaceチェーンではなく、明示的にキーを指定して置換する
+                # (formatメソッドだと中括弧のエスケープが必要になるため、replaceの方が安全な場合もあるが、
+                # ここではtranslate_academicに合わせて明示的なキー置換を行う)
+                prompt = BOOK_TRANSLATION_PROMPT.replace("{overall_summary}", overall_summary) \
+                                              .replace("{chapter_summary}", chapter_summary) \
+                                              .replace("{glossary_content}", glossary_text) \
+                                              .replace("{chunk_text}", chunk)
+                
+                try:
+                    return await asyncio.to_thread(self.llm.call_api, prompt, None)
+                except Exception as e:
+                    print(f"Error in translating chunk: {e}")
+                    raise e
+
+        tasks = [_translate_chunk(chunk) for chunk in chunks]
         
+        # エラーが起きても止まらないように return_exceptions=True にする
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        
         final_results = []
         for res in results:
             if isinstance(res, Exception):
                 final_results.append(f"[Chapter翻訳エラー: {str(res)}]")
             else:
+                if not res: continue
                 # H1タグが含まれているとWorkFlowyで章が分割されてしまうため、強制的にH2に置換する
                 # (例: "# 導入" -> "## 導入")
                 sanitized_res = re.sub(r'^# ', '## ', res, flags=re.MULTILINE)
                 final_results.append(sanitized_res)
+                
         return "\n\n".join(final_results)
 
     # --- Paper Mode Skills (Existing) ---

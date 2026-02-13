@@ -210,16 +210,20 @@ class PaperProcessorSkills:
         """
         特定の章を、全体文脈と章の要約を踏まえて翻訳する
         """
-        # 章の翻訳もさらにチャンク分割が必要な場合がある（30,000文字超え等）
-        chunks = self._split_text_by_length(chapter_text)
+        # 単純な文字数分割ではなく、構造化されたMarkdownを見出しごとに分割して翻訳する
+        # これにより、文脈の分断や重複（AIによる勝手な見出し補完）を防ぐ
+        chunks = self._split_markdown_by_headers(chapter_text)
+        
         tasks = []
         for chunk in chunks:
-            prompt = BOOK_TRANSLATION_PROMPT.format(
-                overall_summary=overall_summary,
-                chapter_summary=chapter_summary,
-                glossary_content=glossary_text,
-                chunk_text=chunk
-            )
+            if not chunk.strip():
+                continue
+
+            prompt = BOOK_TRANSLATION_PROMPT.replace("{overall_summary}", overall_summary) \
+                                          .replace("{chapter_summary}", chapter_summary) \
+                                          .replace("{glossary_content}", glossary_text) \
+                                          .replace("{chunk_text}", chunk)
+            
             tasks.append(asyncio.to_thread(self.llm.call_api, prompt, None))
         
         results = await asyncio.gather(*tasks, return_exceptions=True)

@@ -183,7 +183,7 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
             # 要約がない場合（部レベルの見出しのみ等）
             chapter_md = f"# {chapter_title}"
         else:
-            chapter_md = f"# {chapter_title}\n\n## Chapter Summary\n{summary}\n\n## Chapter Body\n{content_body}"
+            chapter_md = f"# {chapter_title}\n\n## Chapter Summary\n{summary}\n\n{content_body}"
         chapter_combined_list.append(chapter_md)
 
     structured_md = "\n\n".join(clean_chapters_eng)

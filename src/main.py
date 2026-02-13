@@ -55,9 +55,9 @@ async def main():
     # 出力ファイルの設定
     output_final = input_file.parent / f"{input_file.stem}_output.txt"
     output_summary = input_file.parent / f"{input_file.stem}_summary.txt"
-    structured_md_file = inter_dir / "structured.md"
+    output_structured = input_file.parent / f"{input_file.stem}_structured_eng.md"
     
-    # ディレクトリ作成
+    # ディレクトリ作成（中間ファイル用は維持）
     inter_dir.mkdir(exist_ok=True)
     output_dir.mkdir(exist_ok=True)
     
@@ -95,7 +95,7 @@ async def main():
             summary_text,
             progress_callback=lambda msg: print_progress(f"Phase 2: {msg}")
         )
-        Utils.write_text_file(structured_md_file, structured_md)
+        Utils.write_text_file(output_structured, structured_md)
         print_progress("Phase 2: 構造化完了", 50)
     except Exception as e:
         print(f"\nエラー: 構造化に失敗しました: {e}")
@@ -155,6 +155,7 @@ async def main():
     print(f"成果物が生成されました:")
     print(f"  - 最終出力 (Workflowy形式): {output_final}")
     print(f"  - 要約のみ: {output_summary}")
+    print(f"  - 構造化された英語: {output_structured}")
     print("=" * 60)
 
 

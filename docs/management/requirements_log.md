@@ -44,6 +44,7 @@ Port existing Python desktop tool `p2workflowy` to a Web application.
 - **Default AI Model**: Changed default model to `gemini-3-flash-preview` for both Python and Web versions.
 - **Model Selection (Web)**: Added UI buttons to switch between models (Gemini 3 Flash, 1.5 Flash, 1.5 Pro, 2.0 Flash Exp).
 - **Environment Support (Python)**: Added `GEMINI_MODEL` environment variable support to customize model in CLI.
+- **Output Management (Python)**: Structured English Markdown is now saved in the same directory as the input file (filename: `*_structured_eng.md`) for easier access.
 - **UI Bug Fixes**:
   - Fixed typo "Genesis" -> "Gemini" in API settings.
   - Corrected hardcoded progress messages to reflect the actual model being used.

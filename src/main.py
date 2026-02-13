@@ -2,6 +2,7 @@
 """
 p2workflowy - 英語論文処理プログラム (Agentic Skills版)
 """
+import os
 import sys
 import time
 import re
@@ -66,7 +67,7 @@ async def main():
     
     # スキルとユーティリティの初期化
     try:
-        # main.py (CLI) では引数なしで初期化することで、.envのGOOGLE_API_KEYを使用
+        # constants.py で定義された DEFAULT_MODEL (gemini-3-flash-preview) を使用
         skills = PaperProcessorSkills()
     except ValueError as e:
         print(f"\nエラー: {e}")

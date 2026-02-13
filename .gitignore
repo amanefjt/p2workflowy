@@ -16,3 +16,5 @@ web/dist/
 .DS_Store
 glossary.csv
 input.txt
+PRIVATE_LINKS.md
+GLOSSARY_SHORTCUT.md

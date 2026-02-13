@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useAppSettings } from './hooks/useAppSettings';
 import { GeminiService } from './lib/gemini';
+import { DEFAULT_MODEL, MAX_TRANSLATION_CHUNK_SIZE } from './lib/constants';
 import { markdownToWorkflowy, splitMarkdownByHeaders } from './lib/formatter';
 import { Book, FileText, Settings, Upload, Check, Copy, Loader2, AlertCircle, Trash2, X } from 'lucide-react';
 
@@ -35,12 +36,12 @@ function App() {
             const text = await file.text();
 
             // 1. Structuring (Raw Text -> Structured Markdown)
-            setProgress('AIが文書構造を解析中... (Gemini 1.5 Flash)');
+            setProgress(`AIが文書構造を解析中... (${DEFAULT_MODEL})`);
             const rawMarkdown = await gemini.structureText(text);
 
             // 2. Translation & Polish
             let finalMarkdown = rawMarkdown;
-            const sections = splitMarkdownByHeaders(rawMarkdown);
+            const sections = splitMarkdownByHeaders(rawMarkdown, MAX_TRANSLATION_CHUNK_SIZE);
             const glossaryContent = dictionaries.map(d => d.content).join('\n');
 
             setProgress(`${sections.length}セクションを翻訳・整形中...`);
@@ -124,17 +125,20 @@ function App() {
                         <Settings className="w-4 h-4" />
                         API設定
                     </h2>
-                    <div className="flex flex-col gap-2">
-                        <input
-                            type="password"
-                            placeholder="AIza... から始まるGoogle Genesis APIキーを入力"
-                            className="w-full border border-gray-300 rounded-md px-4 py-2 focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
-                            value={apiKey}
-                            onChange={(e) => setApiKey(e.target.value)}
-                        />
-                        <p className="text-xs text-gray-400">
-                            キーはブラウザに保存され、サーバーには送信されません。
-                        </p>
+                    <div className="flex flex-col gap-4">
+                        <div className="flex flex-col gap-2">
+                            <label className="text-xs font-medium text-gray-500">APIキー</label>
+                            <input
+                                type="password"
+                                placeholder="AIza... から始まるGoogle Gemini APIキーを入力"
+                                className="w-full border border-gray-300 rounded-md px-4 py-2 focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
+                                value={apiKey}
+                                onChange={(e) => setApiKey(e.target.value)}
+                            />
+                            <p className="text-xs text-gray-400">
+                                キーはブラウザに保存され、サーバーには送信されません。
+                            </p>
+                        </div>
                     </div>
                 </section>
 

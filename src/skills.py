@@ -62,7 +62,7 @@ class PaperProcessorSkills:
         final_results = []
         for res in results:
             if isinstance(res, Exception):
-                final_results.append(f"[翻訳処理中にエラーが発生しました: {res}]")
+                final_results.append(f"[翻訳処理中にエラーが発生しました: {str(res)}]")
             else:
                 final_results.append(res)
         

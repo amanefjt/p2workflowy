@@ -126,27 +126,31 @@ async def main():
     # インデントを追加 (ルートの下にぶら下げるため)
     summary_section = "    - 要約 (Summary)\n" + "\n".join(["        " + line for line in summary_workflowy.splitlines()])
 
-    # 2. 翻訳の処理
+    # 2. 翻訳・タイトルの処理
+    # 構造化された英語（Phase 2の結果）からタイトルを抽出する
+    eng_lines = structured_md.splitlines()
+    title = input_file.stem  # デフォルト
+    if eng_lines and eng_lines[0].strip().startswith('# '):
+        title = eng_lines[0].strip().replace('# ', '').strip()
+
+    # 翻訳結果の処理
     lines = translated_text.splitlines()
-    title = input_file.stem  # デフォルト（タイトルの抽出に失敗した場合のフォールバック）
     
-    # 最初の行がH1 (# タイトル) であれば、それをルートノードの名前として使用する
+    # 翻訳結果の最初の行がH1 (# タイトル) であれば、本文からは削除する
+    # (ルートには英語タイトルを使うため)
     if lines and lines[0].strip().startswith('# '):
-        title = lines[0].strip().replace('# ', '').strip()
-        # 本文中からはタイトル行を削除し、Abstractなどが H1 レベルに昇格するようにする
         lines = lines[1:]
     
     body_text_no_title = "\n".join(lines).strip()
     
-    # 見出しレベルの正規化（## Abstract -> # Abstract -> - Abstract）
-    # H1を抜いたので、H2が最上位見出しとなり、Workflowy変換時にレベル0（ルート直下）になる
+    # 見出しレベルの正規化
     translation_workflowy = Utils.markdown_to_workflowy(body_text_no_title)
     
     # インデントを追加（ルートノードの下にぶら下げるため、4スペース分下げる）
     translation_section = "\n".join(["    " + line for line in translation_workflowy.splitlines()])
     
     # 3. 結合
-    # ルートノードを論文タイトルにし、その下に要約と翻訳本文を配置する
+    # ルートノードを英語の論文タイトルにし、その下に要約と翻訳本文を配置する
     final_content = f"- {title}\n{summary_section}\n{translation_section}"
     
     Utils.write_text_file(output_final, final_content)

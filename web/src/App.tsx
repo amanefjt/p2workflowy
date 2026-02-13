@@ -78,21 +78,24 @@ function App() {
             // 3. Formatting (Markdown -> Workflowy)
             setProgress('Workflowy形式に変換中...');
 
-            // Extract title for root node
+            // Extract title for root node from original structured English (rawMarkdown)
             let title = currentFileName;
+            const engLines = rawMarkdown.split('\n');
+            if (engLines.length > 0 && engLines[0].startsWith('# ')) {
+                title = engLines[0].replace('# ', '').trim();
+            }
+
+            // Process body from translated text
             const lines = finalMarkdown.split('\n');
             let bodyText = finalMarkdown;
-
             if (lines.length > 0 && lines[0].startsWith('# ')) {
-                title = lines[0].replace('# ', '').trim();
                 bodyText = lines.slice(1).join('\n').trim();
             }
 
-            // Convert body to workflowy (this will have siblings at level 0)
+            // Convert body to workflowy
             const workflowyBody = markdownToWorkflowy(bodyText);
 
             // Nest everything under the title root node
-            // Indent body by 4 spaces
             const nestedBody = workflowyBody.split('\n')
                 .map(line => '    ' + line)
                 .join('\n');

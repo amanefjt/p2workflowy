@@ -15,6 +15,7 @@ function App() {
     const [fileName, setFileName] = useState<string>('');
     const [inputMode, setInputMode] = useState<'file' | 'text'>('file');
     const [directText, setDirectText] = useState<string>('');
+    const [docType, setDocType] = useState<'paper' | 'book'>('paper');
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -22,85 +23,115 @@ function App() {
         const file = e.target.files?.[0];
         if (!file) return;
 
+        const text = await file.text();
+        startProcessing(text, file.name);
+    };
+
+    const handleProcess = () => {
+        if (!directText.trim()) {
+            setError('テキストを入力してください。');
+            return;
+        }
+        startProcessing(directText, 'Direct Input');
+    };
+
+    const startProcessing = async (text: string, currentFileName: string) => {
+        if (!apiKey) {
+            setError('Gemini APIキーを設定してください。');
+            return;
+        }
+
+        setFileName(currentFileName);
+        setProcessing(true);
+        setError('');
+        setResult('');
+        setProgress('初期化中...');
+
         try {
             const gemini = new GeminiService(apiKey);
-
-            // Get text either from file or direct input
-            let text = '';
-            let currentFileName = '';
-
-            if (inputMode === 'file') {
-                const file = fileInputRef.current?.files?.[0];
-                if (!file) {
-                    setError('ファイルを選択してください。');
-                    return;
-                }
-                text = await file.text();
-                currentFileName = file.name;
-            } else {
-                if (!directText.trim()) {
-                    setError('テキストを入力してください。');
-                    return;
-                }
-                text = directText;
-                currentFileName = 'Direct Input';
-            }
-
-            setFileName(currentFileName);
-            setProcessing(true);
-            setError('');
-            setResult('');
-            setProgress('初期化中...');
-
-            // 1. Structuring (Raw Text -> Structured Markdown)
-            setProgress(`AIが文書構造を解析中... (${DEFAULT_MODEL})`);
-            const rawMarkdown = await gemini.structureText(text);
-
-            // 2. Translation & Polish
-            let finalMarkdown = rawMarkdown;
-            const sections = splitMarkdownByHeaders(rawMarkdown, MAX_TRANSLATION_CHUNK_SIZE);
             const glossaryContent = dictionaries.map(d => d.content).join('\n');
 
-            setProgress(`${sections.length}セクションを翻訳・整形中...`);
+            let finalMarkdown = '';
+            let rawMarkdown = '';
+            let summaryContext = '';
 
-            const translationPromises = sections.map(async (section, idx) => {
-                try {
-                    return await gemini.translateSection(section, "", glossaryContent);
-                } catch (err) {
-                    console.error(`Error translating section ${idx}:`, err);
-                    return section + "\n\n(翻訳エラー)";
+            if (docType === 'paper') {
+                // --- Paper Mode ---
+                setProgress(`AIが文書構造を解析中... (${DEFAULT_MODEL})`);
+                rawMarkdown = await gemini.structureText(text);
+
+                setProgress('全体要約を作成中...');
+                summaryContext = await gemini.generateSummary(rawMarkdown);
+
+                const sections = splitMarkdownByHeaders(rawMarkdown, MAX_TRANSLATION_CHUNK_SIZE);
+                setProgress(`${sections.length}セクションを並列翻訳・整形中...`);
+
+                const translationPromises = sections.map(async (section, idx) => {
+                    try {
+                        return await gemini.translateSection(section, summaryContext, glossaryContent);
+                    } catch (err) {
+                        console.error(`Error translating section ${idx}:`, err);
+                        return section + "\n\n(翻訳エラー)";
+                    }
+                });
+
+                const translatedResults = await Promise.all(translationPromises);
+                finalMarkdown = translatedResults.join('\n\n');
+            } else {
+                // --- Book Mode ---
+                setProgress('Phase 1 (書籍): 全体の構成と要約を分析中...');
+                const structureInfo = await gemini.analyzeBookStructure(text);
+                summaryContext = structureInfo;
+
+                // Split text by headers (Book usually has clear chapter headers)
+                const chapters = splitMarkdownByHeaders(text, MAX_TRANSLATION_CHUNK_SIZE);
+
+                const translatedChapters = [];
+                const cleanChaptersEng = [];
+                const chapterSummaries = [];
+
+                for (let i = 0; i < chapters.length; i++) {
+                    const idx = i + 1;
+                    setProgress(`Phase 2 (書籍): 章 ${idx}/${chapters.length} 処理中 (要約・構造化)...`);
+                    const chSummary = await gemini.summarizeChapter(structureInfo, chapters[i]);
+                    const cleanCh = await gemini.structureChapter(structureInfo, chapters[i]);
+
+                    setProgress(`Phase 3 (書籍): 章 ${idx}/${chapters.length} 翻訳中...`);
+                    const transCh = await gemini.translateChapter(structureInfo, chSummary, cleanCh, glossaryContent);
+
+                    cleanChaptersEng.push(cleanCh);
+                    translatedChapters.push(transCh);
+                    chapterSummaries.push(chSummary);
                 }
-            });
 
-            const translatedResults = await Promise.all(translationPromises);
-            finalMarkdown = translatedResults.join('\n\n');
+                rawMarkdown = cleanChaptersEng.join('\n\n');
+                finalMarkdown = translatedChapters.join('\n\n');
+                summaryContext = `# Book Summary\n${structureInfo}\n\n# Chapters Summary\n${chapterSummaries.join('\n\n')}`;
+            }
 
-            // 3. Formatting (Markdown -> Workflowy)
+            // --- Formatting ---
             setProgress('Workflowy形式に変換中...');
 
-            // Extract title for root node from original structured English (rawMarkdown)
             let title = currentFileName;
             const engLines = rawMarkdown.split('\n');
             if (engLines.length > 0 && engLines[0].startsWith('# ')) {
                 title = engLines[0].replace('# ', '').trim();
             }
 
-            // Process body from translated text
             const lines = finalMarkdown.split('\n');
             let bodyText = finalMarkdown;
             if (lines.length > 0 && lines[0].startsWith('# ')) {
                 bodyText = lines.slice(1).join('\n').trim();
             }
 
-            // Convert body to workflowy
             const workflowyBody = markdownToWorkflowy(bodyText);
+            const nestedBody = workflowyBody.split('\n').map(line => '    ' + line).join('\n');
 
-            // Nest everything under the title root node
-            const nestedBody = workflowyBody.split('\n')
-                .map(line => '    ' + line)
-                .join('\n');
+            const summaryWorkflowy = markdownToWorkflowy(summaryContext);
+            const nestedSummary = summaryWorkflowy.split('\n').map(line => '        ' + line).join('\n');
+            const summarySection = `    - 要約 (Summary)\n${nestedSummary}`;
 
-            const finalResult = `- ${title}\n${nestedBody}`;
+            const finalResult = `- ${title}\n${summarySection}\n${nestedBody}`;
 
             setResult(finalResult);
             setProgress('');
@@ -110,20 +141,6 @@ function App() {
             setProcessing(false);
             if (fileInputRef.current) fileInputRef.current.value = '';
         }
-    };
-
-    const handleProcess = () => {
-        if (!apiKey) {
-            setError('Gemini APIキーを設定してください。');
-            return;
-        }
-        processContent();
-    };
-
-    const processContent = async () => {
-        // Reuse logic from handleFileUpload but unified
-        // We'll rename the original logic to startProcess for clarity
-        handleFileUpload({} as any);
     };
 
     const copyToClipboard = () => {
@@ -173,6 +190,42 @@ function App() {
             </header>
 
             <main className="max-w-4xl mx-auto py-8 px-4 sm:px-6 space-y-8">
+                {/* Introduction Section */}
+                <section className="bg-indigo-50/50 p-6 rounded-xl border border-indigo-100 shadow-sm">
+                    <h2 className="text-lg font-bold text-indigo-900 mb-3 flex items-center gap-2">
+                        <FileText className="w-5 h-5" />
+                        p2workflowy 概要
+                    </h2>
+                    <p className="text-sm text-indigo-800 leading-relaxed mb-4">
+                        p2workflowyは、長い英語の論文や書籍をGemini AIで解析し、意味のある構造に整理（構造化）した上で、日本語に翻訳して<strong>Workflowy形式</strong>で出力するツールです。
+                        そのままWorkflowyに貼り付けるだけで、階層構造を保ったまま論文を読み進めることができます。
+                    </p>
+
+                    <div className="space-y-3 bg-white/60 p-4 rounded-lg border border-indigo-100">
+                        <div className="flex gap-2">
+                            <span className="text-lg">🔑</span>
+                            <div className="text-sm">
+                                <p className="font-bold text-gray-800 mb-1">Gemini APIキーについて</p>
+                                <p className="text-gray-600">
+                                    このツールは <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" className="text-indigo-600 underline">Google AI Studio</a> で取得できる APIキーを使用して動作します。
+                                    無料枠で利用可能ですが、Google側の仕様により、支払い手段（クレジットカード等）の登録が必要な場合があります。
+                                    入力したキーはブラウザのローカルストレージにのみ保存され、開発者を含む外部に送信されることはありません。
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex gap-2 border-t border-indigo-50 pt-3">
+                            <span className="text-lg">⚠️</span>
+                            <div className="text-sm">
+                                <p className="font-bold text-gray-800 mb-1">モデル改善への利用について</p>
+                                <p className="text-gray-600">
+                                    無料枠の APIキーを使用する場合、入力したデータや翻訳結果は Google のモデル改善のために学習に利用される可能性があります。
+                                    機密性の高い文書や未発表の研究資料などを扱う際は、十分にご注意ください。
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
                 {/* API Settings */}
                 <section className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
                     <h2 className="text-base font-bold mb-4 flex items-center gap-2 text-gray-700">
@@ -234,25 +287,46 @@ function App() {
 
                 {/* Main Processor */}
                 <section className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                    <div className="flex items-center justify-between mb-4">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
                         <h2 className="text-base font-bold flex items-center gap-2 text-gray-700">
                             <FileText className="w-4 h-4" />
                             テキスト処理
                         </h2>
 
-                        <div className="flex bg-gray-100 p-1 rounded-lg">
-                            <button
-                                onClick={() => { setInputMode('file'); setError(''); }}
-                                className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${inputMode === 'file' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                            >
-                                ファイルアップロード
-                            </button>
-                            <button
-                                onClick={() => { setInputMode('text'); setError(''); }}
-                                className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${inputMode === 'text' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                            >
-                                テキスト直接入力
-                            </button>
+                        <div className="flex flex-wrap gap-2">
+                            {/* Input Mode Toggle */}
+                            <div className="flex bg-gray-100 p-1 rounded-lg">
+                                <button
+                                    onClick={() => { setInputMode('file'); setError(''); }}
+                                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${inputMode === 'file' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                                >
+                                    ファイル
+                                </button>
+                                <button
+                                    onClick={() => { setInputMode('text'); setError(''); }}
+                                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${inputMode === 'text' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                                >
+                                    直接入力
+                                </button>
+                            </div>
+
+                            {/* Processing Mode Selection */}
+                            <div className="flex bg-indigo-50 p-1 rounded-lg border border-indigo-100">
+                                <button
+                                    onClick={() => setDocType('paper')}
+                                    className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all ${docType === 'paper' ? 'bg-white text-indigo-600 shadow-sm' : 'text-indigo-400 hover:text-indigo-600'}`}
+                                >
+                                    <FileText className="w-3 h-3" />
+                                    論文モード
+                                </button>
+                                <button
+                                    onClick={() => setDocType('book')}
+                                    className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all ${docType === 'book' ? 'bg-white text-indigo-600 shadow-sm' : 'text-indigo-400 hover:text-indigo-600'}`}
+                                >
+                                    <Book className="w-3 h-3" />
+                                    書籍モード
+                                </button>
+                            </div>
                         </div>
                     </div>
 

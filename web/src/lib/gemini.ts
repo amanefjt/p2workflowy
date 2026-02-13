@@ -3,7 +3,11 @@ import {
     DEFAULT_MODEL,
     STRUCTURING_PROMPT,
     SUMMARY_PROMPT,
-    TRANSLATION_PROMPT
+    TRANSLATION_PROMPT,
+    BOOK_STRUCTURE_PROMPT,
+    BOOK_CHAPTER_SUMMARY_PROMPT,
+    BOOK_STRUCTURING_PROMPT,
+    BOOK_TRANSLATION_PROMPT
 } from './constants';
 
 export class GeminiService {
@@ -39,6 +43,45 @@ export class GeminiService {
             .replace('{summary_content}', summaryContext)
             .replace('{glossary_content}', glossary);
 
+        const result = await this.model.generateContent(prompt);
+        const response = await result.response;
+        return response.text();
+    }
+
+    // --- Book Mode Methods ---
+
+    async analyzeBookStructure(text: string): Promise<string> {
+        const prompt = BOOK_STRUCTURE_PROMPT.replace('{text}', text);
+        const result = await this.model.generateContent(prompt);
+        const response = await result.response;
+        return response.text();
+    }
+
+    async summarizeChapter(overallSummary: string, chapterText: string): Promise<string> {
+        const prompt = BOOK_CHAPTER_SUMMARY_PROMPT
+            .replace('{overall_summary}', overallSummary)
+            .replace('{chapter_text}', chapterText);
+        const result = await this.model.generateContent(prompt);
+        const response = await result.response;
+        return response.text();
+    }
+
+    async structureChapter(overallSummary: string, chapterText: string): Promise<string> {
+        const prompt = BOOK_STRUCTURING_PROMPT
+            .replace('{overall_summary}', overallSummary)
+            .replace('{chapter_text}', chapterText);
+        const result = await this.model.generateContent(prompt);
+        const response = await result.response;
+        return response.text();
+    }
+
+    async translateChapter(overallSummary: string, chapterSummary: string, chapterText: string, glossary: string): Promise<string> {
+        // Simple implementation: for web, we might need further chunking if chapters > 30k
+        const prompt = BOOK_TRANSLATION_PROMPT
+            .replace('{overall_summary}', overallSummary)
+            .replace('{chapter_summary}', chapterSummary)
+            .replace('{glossary_content}', glossary)
+            .replace('{chunk_text}', chapterText);
         const result = await this.model.generateContent(prompt);
         const response = await result.response;
         return response.text();

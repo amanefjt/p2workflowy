@@ -1,10 +1,71 @@
 import asyncio
-from .constants import STRUCTURING_WITH_HINT_PROMPT, SUMMARY_PROMPT, TRANSLATION_PROMPT, MAX_TRANSLATION_CHUNK_SIZE
+from .constants import (
+    STRUCTURING_WITH_HINT_PROMPT, SUMMARY_PROMPT, TRANSLATION_PROMPT, 
+    MAX_TRANSLATION_CHUNK_SIZE,
+    BOOK_STRUCTURE_PROMPT, BOOK_CHAPTER_SUMMARY_PROMPT, 
+    BOOK_STRUCTURING_PROMPT, BOOK_TRANSLATION_PROMPT
+)
 from .llm_processor import LLMProcessor
 
 class PaperProcessorSkills:
     def __init__(self):
         self.llm = LLMProcessor()
+
+    # --- Book Mode Skills ---
+
+    async def analyze_book_structure(self, full_text: str, progress_callback=None) -> str:
+        """
+        書籍全体の目次と要約を生成する
+        """
+        prompt = BOOK_STRUCTURE_PROMPT.format(text=full_text)
+        return await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
+
+    async def summarize_chapter(self, overall_summary: str, chapter_text: str, progress_callback=None) -> str:
+        """
+        特定の章を、全体文脈を踏まえて要約する
+        """
+        prompt = BOOK_CHAPTER_SUMMARY_PROMPT.format(
+            overall_summary=overall_summary,
+            chapter_text=chapter_text
+        )
+        return await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
+
+    async def structure_chapter(self, overall_summary: str, chapter_text: str, progress_callback=None) -> str:
+        """
+        特定の章の英語構造を整理する
+        """
+        prompt = BOOK_STRUCTURING_PROMPT.format(
+            overall_summary=overall_summary,
+            chapter_text=chapter_text
+        )
+        return await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
+
+    async def translate_chapter(self, overall_summary: str, chapter_summary: str, chapter_text: str, glossary_text: str = "", progress_callback=None) -> str:
+        """
+        特定の章を、全体文脈と章の要約を踏まえて翻訳する
+        """
+        # 章の翻訳もさらにチャンク分割が必要な場合がある（30,000文字超え等）
+        chunks = self._split_text_by_length(chapter_text)
+        tasks = []
+        for chunk in chunks:
+            prompt = BOOK_TRANSLATION_PROMPT.format(
+                overall_summary=overall_summary,
+                chapter_summary=chapter_summary,
+                glossary_content=glossary_text,
+                chunk_text=chunk
+            )
+            tasks.append(asyncio.to_thread(self.llm.call_api, prompt, None))
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        final_results = []
+        for res in results:
+            if isinstance(res, Exception):
+                final_results.append(f"[Chapter翻訳エラー: {str(res)}]")
+            else:
+                final_results.append(res)
+        return "\n\n".join(final_results)
+
+    # --- Paper Mode Skills (Existing) ---
 
     async def summarize_raw_text(self, raw_text: str, progress_callback=None) -> str:
         """

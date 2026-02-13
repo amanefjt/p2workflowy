@@ -1,120 +1,64 @@
-## p2workflowy (Python & Web)
+# p2workflowy (Paper to Workflowy)
 
-A tool to convert academic papers/images into [WorkFlowy](https://workflowy.com/) compatible text format.
+**長い英語の論文や書籍をAIで解析・要約・翻訳し、Workflowyに直接貼り付け可能な形式に変換するツール**
 
-### Versions
-- **Desktop (Python)**: CLI tool for PDF processing. See `src/`.
-- **Web (React/Vite)**: Browser-based tool for Image processing. See `web/`.
+学術論文やレポート、書籍などの長いテキストを、Gemini AIを使って意味のある階層構造に整理（構造化）し、専門用語辞書を活用した正確な日本語翻訳を行います。出力は [WorkFlowy](https://workflowy.com/) にそのままペーストできる形式（階層付きテキスト）で行われるため、構造化された情報を効率的に管理・閲覧できます。
 
-## Web Version Quick Start
-```bash
-cd web
-npm install
-npm run dev
-```
+---
 
-**PDFから抽出したテキストを、AIで構造化・要約・翻訳し、Workflowyへ直接貼り付け可能な形式に変換するツール**
+## 🚀 はじめに
 
-学術論文やレポートのPDFを、意味のある階層構造を持つMarkdown形式に変換し、専門用語辞書を活用した正確な翻訳を行います。
+このツールは **Google Gemini API** の無料枠を活用して動作します。
+
+### 🔑 Gemini APIキーについて
+本ツールを利用するには、ご自身で [Google AI Studio](https://aistudio.google.com/) から APIキーを取得する必要があります。
+
+- **取得方法**: Google AI Studio にログインし、「Get API key」から発行できます。
+- **支払い登録**: Google側の仕様により、無料枠の利用であっても、プロジェクトの作成や APIキーの取得にクレジットカード等の支払い手段の登録が求められる場合があります。
+- **プライバシー**: 入力した APIキーは、あなたの環境（ブラウザやローカルファイル）にのみ保存されます。ツールの開発者や外部に送信されることはありません。
+
+### ⚠️ 学習への利用に関する注意
+**Gemini API の「無料枠」を使用する場合、入力したデータや出力結果は、Googleのモデル改善のための学習に利用される可能性があります。**
+機密性の高い文書、未発表の研究資料、個人情報を含むドキュメントなどを扱う際は、十分にご注意ください。学習を回避するには、Google Cloud の有料プラン（Vertex AI等）の検討が必要ですが、本ツールは現在 AI Studio の API に最適化されています。
 
 ---
 
 ## 🎯 主な機能
 
-### 1. **構造復元 (Cognitive Structuring)**
-バラバラになったPDFのテキストを、意味のあるMarkdown構造に修復します。
-- タイトル、著者、アブストラクト、章、セクションを自動認識
-- 段落の論理的な繋がりを復元
+### 1. **論文モード (Paper Mode)**
+数十ページ程度の学術論文に最適化されたモードです。
+- 全体の要約を先に作成し、それをガイドにして本文を並列で高速に翻訳します。
+- 論文の構造（Introduction, Methods, Results等）を自動認識してWorkflowy形式に変換します。
 
-### 2. **Workflowy要約**
-各セクションの論理展開（Chain of Thought）を階層構造で抽出します。
-- 論文の骨格を把握しやすい形式で出力
-- Workflowyへ直接コピー＆ペースト可能
+### 2. **書籍モード (Book Mode)**
+100ページを超えるような本格的な書籍の処理に対応した新機能です。
+- 全体の構成と目次を分析した後、章（Chapter）ごとに文脈を維持しながら、要約と翻訳を段階的に行います。
+- Gemini 3 Flash Preview の 1M コンテキストウィンドウを最大限に活用し、一貫性のある処理を実現します。
 
-### 3. **アカデミック翻訳**
-専門用語辞書（`glossary.csv`）を適用しながら、正確な学術翻訳を行います。
-- 分野固有の用語を一貫して翻訳
-- 文脈を考慮した自然な日本語表現
+### 3. **アカデミック翻訳 & 専門用語辞書**
+専門用語辞書（`glossary.csv`）を読み込ませることで、特定の分野に特有の用語を常に一定の訳語で翻訳できます。
 
-### 4. **ノイズ除去**
-参考文献やページ番号などの不要な情報を自動的に取り除きます。
+### 4. **構造復元 (Cognitive Structuring)**
+PDFからコピー＆ペーストした際などに発生するテキストの崩れ（段落の断片化など）をAIが自動修復し、論理的な Markdown 構造に復元します。
 
 ---
 
-## 📦 セットアップ手順
+## 📦 インストールと実行
 
-### 前提条件
-- Python 3.10以上がインストールされていること
-- Google Gemini APIキーを取得していること（[Google AI Studio](https://aistudio.google.com/)で無料取得可能）
+### サービス提供形態
+- **Web版**: ブラウザで手軽に利用できます（`web/` ディレクトリ配下）。
+- **Python版**: 大量・一括処理や、PDFからの直接テキスト抽出が必要なユーザー向け（`src/` ディレクトリ配下）。
 
-### 1. リポジトリのクローン
+### Web版のクイックスタート
+1. `web` フォルダに移動
+2. `npm install` (依存パッケージのインストール)
+3. `npm run dev` (開発サーバーの起動)
+4. ブラウザで `localhost:5173` を開く
 
-```bash
-git clone https://github.com/yourusername/p2workflowy.git
-cd p2workflowy
-```
-
-### 2. 仮想環境の作成と有効化
-
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Windowsの場合: .venv\Scripts\activate
-```
-
-### 3. 依存パッケージのインストール
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. 環境変数の設定
-
-プロジェクトのルートディレクトリに `.env` ファイルを作成し、以下の内容を記述してください:
-
-```bash
-# .env ファイルの内容
-GEMINI_API_KEY=あなたのAPIキーをここに貼り付け
-```
-
-**📝 `.env` ファイルの作成方法:**
-1. `.env.example` をコピーして `.env` にリネーム
-2. `your_api_key_here` の部分を、[Google AI Studio](https://aistudio.google.com/)で取得したAPIキーに置き換える
-
-> ⚠️ **重要**: `.env` ファイルは `.gitignore` に含まれているため、GitHubにアップロードされません。APIキーは絶対に公開しないでください。
-
----
-
-## 🚀 使い方
-
-### 基本的な実行方法
-
-```bash
-python -m src.main
-```
-
-実行すると、以下のように処理したいファイルのパスを聞かれます:
-
-```
-処理したいファイルのパスを入力してください: 
-```
-
-ファイルをターミナルにドラッグ＆ドロップするか、パスを直接入力してEnterを押してください。
-
-### 出力ファイル
-
-処理が完了すると、**入力ファイルと同じディレクトリ**に以下のファイルが生成されます:
-
-- `(元のファイル名)_output.txt` - 最終的な翻訳済みMarkdown
-- `intermediate/` ディレクトリ内に中間ファイル（英語版Markdown、要約など）
-
-### 実行例
-
-```bash
-# 例: デスクトップにあるPDFを処理する場合
-python -m src.main
-# プロンプトが表示されたら:
-/Users/yourname/Desktop/research_paper.pdf
-```
+### Python版のクイックスタート
+1. 依存関係のインストール: `pip install -r requirements.txt`
+2. `.env` ファイルを作成し `GEMINI_API_KEY=あなたのキー` を設定
+3. 実行: `python -m src.main`
 
 ---
 
@@ -122,76 +66,14 @@ python -m src.main
 
 ```
 p2workflowy/
-├── src/                    # ソースコード
-│   ├── main.py            # メインエントリーポイント
-│   ├── llm_processor.py   # Gemini API連携
-│   ├── skills.py          # 各処理ステップの実装
-│   ├── utils.py           # ユーティリティ関数
-│   └── constants.py       # プロンプト定義
-├── glossary.csv           # 専門用語辞書（カスタマイズ可能）
-├── .env                   # APIキー設定（要作成）
-├── .env.example           # .envのサンプル
-├── requirements.txt       # 依存パッケージ
-└── README.md              # このファイル
+├── src/                    # Python版ソースコード（CLI/PDF処理）
+├── web/                    # Web版ソースコード（React/Vite）
+├── shared/                 # Python/Web共通のプロンプト定義
+├── intermediate/           # 中間ファイル保存用
+├── output/                 # 最終成果物の出力先
+├── glossary.csv           # 専門用語辞書（自分で編集可能）
+└── requirements.txt       # Python依存パッケージ
 ```
-
----
-
-## 📝 設定ファイルのフォーマット
-
-### `glossary.csv` - 専門用語辞書
-
-専門用語の翻訳を統一するための辞書ファイルです。CSVフォーマットで記述します。
-
-**フォーマット:**
-```csv
-原語,訳語,備考
-ethnography,エスノグラフィー,民族誌学
-abduction,アブダクション,仮説形成的推論
-semantic break,意味の切断,
-field note,フィールドノート,
-```
-
-**カスタマイズ方法:**
-1. `glossary.csv` をテキストエディタで開く
-2. 自分の研究分野の専門用語を追加
-3. 保存して実行
-
-> 💡 **ヒント**: 備考欄は空欄でもOKです。翻訳時の参考情報として使えます。
-
-### `.env` - 環境変数設定
-
-APIキーを安全に管理するためのファイルです。
-
-**フォーマット:**
-```bash
-# Google Gemini API Key
-# Get your API key from: https://aistudio.google.com/
-GEMINI_API_KEY=your_api_key_here
-```
-
-**設定手順:**
-1. [Google AI Studio](https://aistudio.google.com/) にアクセス
-2. 「Get API Key」をクリックしてAPIキーを生成
-3. `.env.example` をコピーして `.env` にリネーム
-4. `your_api_key_here` を実際のAPIキーに置き換える
-
----
-
-## 🛠️ 技術スタック
-
-- **Python 3.10+**
-- **Google Gemini API** (`gemini-3-flash-preview`)
-- **主要ライブラリ:**
-  - `python-docx` - Word文書の読み込み
-  - `google-genai` - Gemini API連携
-  - `python-dotenv` - 環境変数管理
-
----
-
-## 🤝 コントリビューション
-
-バグ報告や機能提案は、GitHubのIssuesでお願いします。プルリクエストも歓迎します！
 
 ---
 
@@ -199,23 +81,5 @@ GEMINI_API_KEY=your_api_key_here
 
 MIT License
 
----
-
-## 💡 トラブルシューティング
-
-### Q: `ModuleNotFoundError` が出る
-**A:** 仮想環境が有効化されているか確認し、`pip install -r requirements.txt` を再実行してください。
-
-### Q: APIキーエラーが出る
-**A:** `.env` ファイルが正しく作成されているか、APIキーが正しく設定されているか確認してください。
-
-### Q: 翻訳の精度を上げたい
-**A:** `glossary.csv` に専門用語を追加することで、翻訳の一貫性と精度が向上します。
-
-### Q: 処理が途中で止まる
-**A:** Gemini APIの利用制限に達している可能性があります。しばらく待ってから再実行してください。
-
----
-
-**開発者**: [あなたの名前]  
-**リポジトリ**: https://github.com/yourusername/p2workflowy
+**開発者**: [あなたの名前/チーム名]
+**リポジトリ**: [リポジトリURL]

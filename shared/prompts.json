@@ -15,5 +15,9 @@
         "author contributions",
         "orcid",
         "affiliations"
-    ]
+    ],
+    "BOOK_STRUCTURE_PROMPT": "あなたは書籍編集のスペシャリストです。\n入力された英語書籍のテキストを分析し、以下の情報を出力してください。\n\n1. **全体要約**: 書籍全体の主張、目的、構成を1000文字程度の日本語で要約してください。\n2. **章立ての抽出 (TOC)**: 書籍に含まれる章（Chapter）や主要な節のタイトルを、出現順にリスト形式で抽出してください。各項目には、その章が扱う範囲のキーワードも含めてください。\n\n<rules>\n- 出力形式は Markdown とし、全体要約は `# Overall Summary`、目次は `# Table of Contents` としてください。\n- 本文が非常に長いため、Geminiの1Mコンテキスト制限内での分析となります。\n</rules>\n\n<input>\n{text}\n</input>\n",
+    "BOOK_CHAPTER_SUMMARY_PROMPT": "あなたは書籍の内容を深く理解するシニア・リサーチャーです。\n[全体要約] と [章のテキスト] を読み、この章が書籍全体の中でどのような役割を果たし、どのような論理展開を行っているかを詳細な日本語のWorkflowy形式で要約してください。\n\n<rules>\n- インデント（スペース4つ）のみで階層を表現する。\n- 全ての行を「- 」で始める。\n- この章特有の重要な議論、データ、具体例を漏らさず記述する。\n</rules>\n\n[Overall Summary]\n{overall_summary}\n\n[Chapter Text]\n{chapter_text}\n",
+    "BOOK_STRUCTURING_PROMPT": "あなたは書籍の校閲者です。\n[書籍の全体像] と [特定の章のテキスト] を受け取り、この章のMarkdown構造（見出しレベル等）を最適化してください。\n\n<rules>\n- 文中の不自然な改行を修正する。\n- ページ番号等のノイズを削除する。\n- 書籍全体の構造と一貫性のある見出しレベル (#, ##, ###) を付与する。\n- 本文は英語のまま維持してください。\n</rules>\n\n[Book Context]\n{overall_summary}\n\n[Chapter Text]\n{chapter_text}\n",
+    "BOOK_TRANSLATION_PROMPT": "あなたは書籍の専門翻訳家です。\n[書籍の全体像]、[この章の要約]、そして [対象テキスト] を受け取り、文脈を考慮した正確な日本語に翻訳してください。\n\n# 制限事項\n- 完全翻訳であり、原文を一切省略しないでください。\n- 本人（I/We）の視点を維持してください。\n- Markdownの構造を維持してください。\n- 段落構成を維持してください。\n\n[Book Context]\n{overall_summary}\n\n[Chapter Summary]\n{chapter_summary}\n\n[Glossary Instructions]\n{glossary_content}\n\n[Target Text]\n{chunk_text}\n"
 }

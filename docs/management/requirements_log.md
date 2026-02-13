@@ -45,8 +45,11 @@ Port existing Python desktop tool `p2workflowy` to a Web application.
 - **Model Selection (Web)**: Added UI buttons to switch between models (Gemini 3 Flash, 1.5 Flash, 1.5 Pro, 2.0 Flash Exp).
 - **Environment Support (Python)**: Added `GEMINI_MODEL` environment variable support to customize model in CLI.
 - **Output Management (Python & Web)**:
-  - The root node of the Workflowy output is now the **English Paper Title** extracted from the original structured text (# Title).
+  - The root node of the Workflowy output is now the **English Paper Title** extracted from the original structured text (# Title). (2026-02-13)
   - Sub-sections are properly nested under this English title.
+- **Processing Modes (Paper vs Book)**: (2026-02-13)
+  - **論文モード (Paper Mode)**: 数十ページ程度の文書向け。全体要約 + 並列翻訳。
+  - **書籍モード (Book Mode)**: 100ページ超の書籍向け。全体構造分析 -> 章ごとの要約 -> 章ごとの翻訳 という階層的フローを実現。
 - **UI Bug Fixes**:
   - Fixed typo "Genesis" -> "Gemini" in API settings.
   - Corrected hardcoded progress messages to reflect the actual model being used.

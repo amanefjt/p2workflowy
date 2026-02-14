@@ -199,16 +199,13 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
         cache_path = cache_dir / cache_filename
         
         clean_chapter = ""
-        if cache_path.exists() and cache_path.stat().st_size > 0:
-            print(f"  [Cache Hit] Loading structured text for: {chapter_title}")
-            clean_chapter = cache_path.read_text(encoding="utf-8")
-        else:
-            # キャッシュがない場合は生成して保存
-            clean_chapter = await skills.structure_chapter(overall_summary, chapter_text)
-            try:
-                Utils.write_text_file(cache_path, clean_chapter)
-            except Exception as e:
-                print(f"  [Warning] Failed to save structure cache: {e}")
+        # ユーザー要望により、既存ファイルがあっても再利用せず、常に新規生成して上書き保存する
+        print(f"  Structuring {chapter_title}...")
+        clean_chapter = await skills.structure_chapter(overall_summary, chapter_text)
+        try:
+            Utils.write_text_file(cache_path, clean_chapter)
+        except Exception as e:
+            print(f"  [Warning] Failed to save structure cache: {e}")
 
         translated_chapter = await skills.translate_chapter(overall_summary, chapter_summary, clean_chapter, glossary_text)
         

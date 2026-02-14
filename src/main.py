@@ -168,7 +168,7 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
     # Phase 3: Per-Chapter Processing
     print_progress("Phase 3 (書籍): 各章の並列処理を開始...", 30)
     
-    async def process_single_chapter(chapter_info):
+    async def process_single_chapter(chapter_idx, chapter_info):
         chapter_title = chapter_info.get("title", "Unknown Chapter")
         chapter_text = chapter_info.get("text", "")
         
@@ -185,7 +185,31 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
         
         # 章要約 (BOOK_CHAPTER_SUMMARY_PROMPT, {text} placeholder)
         chapter_summary = await skills.summarize_chapter(chapter_text)
-        clean_chapter = await skills.structure_chapter(overall_summary, chapter_text)
+
+        # 構造化テキストのキャッシュ処理 (高速化・再開用)
+        # ファイル名生成 (main loopとロジックを共有するか、ここで再生成するか)
+        # ここで生成する方が安全
+        safe_title = re.sub(r'[\\/*?:"<>|]', "", chapter_title)
+        safe_title = safe_title.replace(" ", "_").strip()
+        # 既存の chapters_dir はスコープ外なので取得が必要
+        # ただし chapters_dir はローカル変数。
+        # 簡易的に inter_dir から再構築
+        cache_dir = inter_dir / "chapters"
+        cache_filename = f"chap{chapter_idx+1:03d}_{safe_title}_structured.md"
+        cache_path = cache_dir / cache_filename
+        
+        clean_chapter = ""
+        if cache_path.exists() and cache_path.stat().st_size > 0:
+            print(f"  [Cache Hit] Loading structured text for: {chapter_title}")
+            clean_chapter = cache_path.read_text(encoding="utf-8")
+        else:
+            # キャッシュがない場合は生成して保存
+            clean_chapter = await skills.structure_chapter(overall_summary, chapter_text)
+            try:
+                Utils.write_text_file(cache_path, clean_chapter)
+            except Exception as e:
+                print(f"  [Warning] Failed to save structure cache: {e}")
+
         translated_chapter = await skills.translate_chapter(overall_summary, chapter_summary, clean_chapter, glossary_text)
         
         return {
@@ -196,7 +220,7 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
         }
 
     # 全章を並列で実行
-    tasks = [process_single_chapter(c) for c in processed_chapters]
+    tasks = [process_single_chapter(i, c) for i, c in enumerate(processed_chapters)]
     results = await asyncio.gather(*tasks)
 
     # 結果を整理

@@ -184,6 +184,7 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
              return None
         
         # 章要約 (BOOK_CHAPTER_SUMMARY_PROMPT, {text} placeholder)
+        print(f"  Summarizing {chapter_title}...")
         chapter_summary = await skills.summarize_chapter(chapter_text)
 
         # 構造化テキストのキャッシュ処理 (高速化・再開用)
@@ -207,8 +208,10 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
         except Exception as e:
             print(f"  [Warning] Failed to save structure cache: {e}")
 
+        print(f"  Translating {chapter_title}...")
         translated_chapter = await skills.translate_chapter(overall_summary, chapter_summary, clean_chapter, glossary_text)
         
+        print(f"  ✓ Completed {chapter_title}")
         return {
             "title": chapter_title, # TOC由来の正しいタイトルを維持
             "summary": chapter_summary,
@@ -219,6 +222,7 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
     # 全章を並列で実行
     tasks = [process_single_chapter(i, c) for i, c in enumerate(processed_chapters)]
     results = await asyncio.gather(*tasks)
+    print("\n✓ Phase 3: 全ての並列処理が完了しました。")
 
     # 結果を整理
     valid_results = [r for r in results if r is not None]

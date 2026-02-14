@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { useAppSettings } from './hooks/useAppSettings';
 import { GeminiService, batchProcess } from './lib/gemini';
 import { DEFAULT_MODEL, MAX_TRANSLATION_CHUNK_SIZE } from './lib/constants';
-import { markdownToWorkflowy, splitMarkdownByHeaders, splitByAnchors, assembleBookWorkflowy, ChapterData } from './lib/formatter';
+import { markdownToWorkflowy, splitMarkdownByHeaders, splitByAnchors, assembleBookWorkflowy, ChapterData, removeRedundantHeaders } from './lib/formatter';
 import { Book, FileText, Settings, Upload, Check, Copy, Loader2, AlertCircle, Trash2, X } from 'lucide-react';
 
 /** バッチ並列の同時実行数 */
@@ -78,7 +78,7 @@ function App() {
                     BATCH_CONCURRENCY
                 );
 
-                const finalMarkdown = translatedResults.join('\n\n');
+                const finalMarkdown = removeRedundantHeaders(translatedResults.join('\n\n'));
 
                 // Formatting
                 setProgress('Workflowy形式に変換中...');
@@ -183,7 +183,8 @@ function App() {
                             );
                             completedP5++;
                             setProgress(`Phase 5/6: 翻訳中 (${completedP5}/${chapters.length})...`);
-                            return result;
+                            // Apply hallucination prevention to each chapter translation
+                            return removeRedundantHeaders(result);
                         } catch (err) {
                             console.error(`[Phase 5] Error translating chapter:`, err);
                             completedP5++;

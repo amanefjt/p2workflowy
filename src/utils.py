@@ -4,10 +4,198 @@ utils.py: 汎用ユーティリティ（ファイルIO、辞書読み込み、Wo
 """
 import re
 import csv
+import difflib
 from pathlib import Path
 
 class Utils:
     """ユーティリティクラス"""
+
+    @staticmethod
+    def clean_header_noise(raw_text: str, chapter_title: str) -> str:
+        """
+        OCR由来のヘッダーノイズ（章タイトルが繰り返し出現するもの）を除去する。
+        
+        Logic:
+        1. 行ごとに分割。
+        2. 各行について、 chapter_title との類似性を判定。
+        3. 以下のいずれかに合致すれば削除（空行に置換）:
+           - 完全一致（大文字小文字無視）。
+           - Levenshtein距離が近い（類似度 0.9 以上）。
+           - タイトルを含み、かつその行の 80% 以上をタイトルが占めている。
+        """
+        if not raw_text or not chapter_title:
+            return raw_text
+
+        lines = raw_text.splitlines()
+        cleaned_lines = []
+        title_lower = chapter_title.lower().strip()
+        
+        for line in lines:
+            stripped_line = line.strip()
+            line_lower = stripped_line.lower()
+            
+            if not stripped_line:
+                cleaned_lines.append(line)
+                continue
+
+            # 1. 完全一致
+            if line_lower == title_lower:
+                cleaned_lines.append("")
+                continue
+
+            # 2. Levenshtein距離（difflib.SequenceMatcher）による類似度判定
+            similarity = difflib.SequenceMatcher(None, line_lower, title_lower).ratio()
+            if similarity >= 0.9:
+                cleaned_lines.append("")
+                continue
+
+            # 3. タイトルを含み、かつその行の一定割合（70%）以上を占めているか
+            # 例: "Page 45 Introduction" (Introduction がタイトル)
+            if title_lower in line_lower:
+                # スペースを除去して純粋な文字数で比較
+                clean_title_len = len(title_lower.replace(" ", ""))
+                clean_line_len = len(line_lower.replace(" ", ""))
+                if clean_line_len > 0 and (clean_title_len / clean_line_len) >= 0.7:
+                    cleaned_lines.append("")
+                    continue
+
+            cleaned_lines.append(line)
+
+        return "\n".join(cleaned_lines)
+
+    @staticmethod
+    def sanitize_structured_output(markdown_text: str) -> str:
+        """
+        AIが生成した構造化Markdownテキストをサニタイズする（安全装置）。
+        
+        Logic:
+        1. 2回目以降の H1 (# Title) を削除。
+        2. 文中（30行目以降）に出現する不自然な ## Introduction を削除。
+        3. 連続する同一または酷似した H2 見出しを削除（チャンク分割の境界での重複対策）。
+        4. 構造化フェーズ（英語出力）において混入した日本語（AIのメタ発言など）を含む行を削除。
+        """
+        if not markdown_text:
+            return markdown_text
+
+        lines = markdown_text.split('\n')
+        is_first_header_found = False
+        last_h2_content = ""
+        cleaned_lines = []
+
+        # 日本語が含まれているか判定する正規表現
+        jp_pattern = re.compile(r'[一-龠ぁ-ゔァ-ヴー]')
+
+        for i, line in enumerate(lines):
+            stripped_line = line.strip()
+            if not stripped_line:
+                cleaned_lines.append(line)
+                continue
+
+            # 4. 日本語混入の排除（構造化フェーズは英語のみ期待されるため）
+            if jp_pattern.search(stripped_line):
+                print(f"  [Post-process] Removed line containing Japanese: {stripped_line}")
+                continue
+
+            # 5. 英語のメタ発言（「Final check」「Corrected:」等）を排除
+            # 行の先頭が特定のキーワードで始まる場合、かつ Markdown の構造を持たない場合に削除
+            meta_keywords = [
+                "final check", "corrected:", "removed:", "fixed:", "note:", 
+                "here is the structured text", "based on the outline",
+                "i have cleaned up", "added headings", "de-hyphenated"
+            ]
+            is_meta = False
+            for kw in meta_keywords:
+                if stripped_line.lower().startswith(kw):
+                    # Markdownの見出しやリスト記号で始まる場合は本文の可能性があるため除外
+                    if not re.match(r'^(#|[-*+]|\d+\.)', stripped_line):
+                        is_meta = True
+                        break
+            
+            if is_meta:
+                print(f"  [Post-process] Removed English meta-commentary: {stripped_line}")
+                continue
+
+            # 1. H1 (# Title) の処理
+            if stripped_line.startswith('# '):
+                if not is_first_header_found:
+                    is_first_header_found = True
+                    cleaned_lines.append(line)
+                else:
+                    print(f"  [Post-process] Removed redundant H1 header: {stripped_line}")
+                    continue
+            
+            # 3. H2 重複の処理
+            elif stripped_line.startswith('## '):
+                h2_content = stripped_line.lstrip('#').strip().lower()
+                # 直前のH2と同一、または不自然な Introduction の処理
+                if h2_content == last_h2_content:
+                    print(f"  [Post-process] Removed duplicate H2 header: {stripped_line}")
+                    continue
+                
+                # 2. 文中の不自然な ## Introduction の処理
+                if h2_content == 'introduction' and i > 30:
+                    print(f"  [Post-process] Removed suspicious mid-text Introduction: {stripped_line}")
+                    continue
+                
+                last_h2_content = h2_content
+                cleaned_lines.append(line)
+            
+            else:
+                cleaned_lines.append(line)
+
+        return "\n".join(cleaned_lines)
+
+    @staticmethod
+    def sanitize_translated_output(text: str) -> str:
+        """
+        翻訳結果からAIのメタ発言やひとりごと、解説などを除去する。
+        """
+        if not text:
+            return text
+        
+        # 1. AIが良く使う「ひとりごと」の開始・終了パターンを削除
+        patterns = [
+            r'^[は承]い[、。]?(?:翻訳しました|承知いたしました)。?$',
+            r'^(?:以[下上]が)?翻訳結果です[。]?(?:どうぞ。?)?$',
+            r'^どうぞ[。]?$',
+            r'^ご提示いただいた.*?について、.*?$',
+            r'^\[Context\]や\[Glossary\]を確認しましたが、.*?$',
+            r'^原文の内容に集中して翻訳を行いました。?$',
+            r'^翻訳にあたり、.*?$',
+            r'^このセクションには.*?が含まれています。?$',
+            r'^申し訳ありませんが、.*?$',
+            r'^おっしゃる通り、.*?$',
+            r'^承知いたしました。?$',
+            r'^ここから翻訳結果です[:：]?',
+            r'^---+$', # 区切り線
+        ]
+        
+        lines = text.splitlines()
+        cleaned_lines = []
+        
+        for line in lines:
+            stripped = line.strip()
+            # パターンにマッチするかチェック
+            is_meta = False
+            for p in patterns:
+                if re.match(p, stripped):
+                    is_meta = True
+                    break
+            
+            if is_meta:
+                print(f"  [Post-process] Removed meta-line: {stripped}")
+                continue
+            
+            cleaned_lines.append(line)
+            
+        result = "\n".join(cleaned_lines).strip()
+        
+        # 2. 非常に長い「自問自答」の痕跡（特定のキーワードが密集している場合など）は、
+        #    Markdown構造が壊れている可能性が高いが、ここでは行単位の削除に留める。
+        #    もし全体が会話調（例：最初から最後まで「私は〜」で解説している等）の場合は
+        #    検知が難しいが、プロンプトの強化で対応する。
+        
+        return result
 
     @staticmethod
     def process_uploaded_file(uploaded_file) -> str:

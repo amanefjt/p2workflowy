@@ -1,122 +1,30 @@
-# User Requirements Log
+# Requirements Log
 
-## Project Goal
-Port existing Python desktop tool `p2workflowy` to a Web application.
-- **Source Logic**: `https://github.com/amanefjt/p2workflowy` (Text processing logic)
-- **Target Platform**: Cloudflare Pages
-- **Tech Stack**: React + Vite + TypeScript + Tailwind CSS
-- **AI Model**: Google Gemini API
+## 2026-02-14: Paper Mode Refactor
+**Goal**: Simplify and improve "Paper Mode" performance and stability.
+**Trigger**: User request ("Too slow, accuracy not improving").
+**Changes**:
+- **Paper Mode Pipelineの刷新 (2026-02-14)**:
+    - 従来の複雑な「概要からのセクション抽出＋分割処理」を廃止し、Gemini 1.5 のロングコンテキストを活かした「全文一括構造化」を採用。
+    - 処理速度の向上と構造化精度の安定化を実現。
+- **翻訳時のAIハルシネーション（自問自答）対策 (2026-02-14)**:
+    - 翻訳対象とコンテキスト/用語集の矛盾に対するGeminiのメタ発言（「ひとりごと」）を抑制するため、プロンプトを強化。
+    - `Utils.sanitize_translated_output` による事後検知・削除処理を実装。
+- **Removal of Complexity**: Eliminate the "Split by Summary Headers" logic in Phase 2 for Paper Mode. This logic was fragile and slow.
+- **Book Mode Refactor (Phase 5)**:
+    - Extracted robust chunking logic (`_structure_text_chunked`) to be shared between Paper and Book modes.
+    - Updated `BOOK_STRUCTURING_PROMPT` to strictly forbid meta-commentary, aligning with Paper Mode standards.
+    - Restored full pipeline functionality including `translate_chapter`.
+- **Improved Chunking Logic (2026-02-14)**:
+    - Upgraded `_split_text_by_length` to respect paragraph boundaries (`\n\n`) and sentence boundaries where possible, rather than strict length-based cutting. This improves context preservation for both Paper and Book modes.
+- **Documentation Consolidation (Manual v2.0)**:
+    - Updated `.agent/skills/p2workflowy_pipeline.md` to reflect V2.0 changes.
+    - Created `docs/manual.md` as a comprehensive system guide, aggregating architecture, rules, and troubleshooting tips.
 
-## Core Features
-1. **Authentication**:
-   - No login required.
-   - User inputs Gemini API Key.
-   - Save API Key in `localStorage` (encrypted or plain).
-
-2. **Dictionary (Custom Vocabulary)**:
-   - File upload (CSV/JSON/TXT).
-   - Sample download button.
-   - **Persistence**: Save in `IndexedDB`. Persist across reloads.
-
-3. **Workflowy Transformation**:
-   - Port Python logic (Markdown to Workflowy indentation).
-   - Sync Prompt/Settings with Python version (Shared JSON/YAML).
-
-4. **UI/UX Flow**:
-   - API Key Input.
-   - Image Drag & Drop.
-   - Dictionary Check.
-   - Process with Gemini.
-   - Display Result.
-   - Copy to Clipboard.
-
-## Implementation Details
-- **OCR Logic**: Since Python source inputs text files, the Web version must implement pure Gemini Vision OCR (Image -> Text -> Structured Text).
-- **Shared Config**: Use `shared/prompts.json` for prompts to ensure consistency between Python and Web versions.
-
-## v1.0 Alpha (Web Port) - Text Mode
-- **Input**: Changed from Image to `.txt` files only (as per user request).
-- **Localization**: UI fully localized to Japanese.
-- **Processing**: Removed Vision-based OCR. Now focuses on structuring and translating raw text.
-- **Service-like UI**: Polished interface for general use.
-
-## v1.2 (Model & UI Polish)
-- **Default AI Model**: Changed default model to `gemini-3-flash-preview` ([公式ドキュメント](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-flash?hl=ja)) for both Python and Web versions.
-- **Model Selection (Web)**: Added UI buttons to switch between models (Gemini 3 Flash, 1.5 Flash, 1.5 Pro, 2.0 Flash Exp).
-- **Environment Support (Python)**: Added `GEMINI_MODEL` environment variable support to customize model in CLI.
-- **Output Management (Python & Web)**:
-  - The root node of the Workflowy output is now the **English Paper Title** extracted from the original structured text (# Title). (2026-02-13)
-  - Sub-sections are properly nested under this English title.
-- **Processing Modes (Paper vs Book)**: (2026-02-13)
-  - **論文モード (Paper Mode)**: 数十ページ程度の文書向け。全体要約 + 並列翻訳。
-  - **書籍モード (Book Mode)**: 100ページ超の書籍向け。全体構造分析 -> 章ごとの要約 -> 章ごとの翻訳 という階層的フローを実現。
-- **UI Bug Fixes**:
-  - Fixed typo "Genesis" -> "Gemini" in API settings.
-  - Corrected hardcoded progress messages to reflect the actual model being used.
-- **書籍モードの更なる改善 (2026-02-13)**:
-  - **構成の変更**: 本のタイトルの直下に「全体の要約（Book Summary）」を配置し、各章ごとに「その章の要約（Chapter Summary）」と「翻訳本文」が並ぶ形式に再構築。
-  - **不要な挨拶の削除**: AIによる「要約を作成しました」等のメタコメントをプロンプトレベルで禁止。
-  - **部の階層調整**: 「部（Part）」の見出しのみのセクションは、要約や翻訳をスキップして見出しのみを出力し、Workflowy上で章と同じ階層に配置。
-  - **参考文献の除外**: `References` や `Bibliography` などのセクションを自動的にスキップ。
-  - **常体での翻訳**: 論文および書籍の翻訳プロンプトに「常体（だ・である調）で翻訳する」制約を追加。
-- **処理速度の高速化 (2026-02-13)**:
-  - **章ごとの並列化**: 書籍モードにて、各章の処理（要約→構造化→翻訳）を `asyncio.gather` で並列実行するように改善。章の内部順序は維持しつつ、全体の待ち時間を大幅に短縮。
-  - **チャンクサイズの拡大**: `MAX_TRANSLATION_CHUNK_SIZE` を 40,000 文字に拡大。リクエスト回数を減らし、処理効率を向上。
-
-## v1.3 Refactoring (2026-02-13)
-- **Book Mode Architecture Revamp**:
-  - **TOC-Driven Anchor Splitting**: (New Concept)
-    - **Phase 1 (Map)**: Analyze first 15,000 chars to extract TOC and "Anchor Text" (start of each chapter).
-    - **Phase 2 (Cut)**: Deterministically split full text by searching for these anchors using Python code.
-    - **Phase 3 (Process)**: Process each split chunk in parallel.
-  - **Goal**: Prevent AI from hallucinating chapter boundaries or missing chapters in large texts.
-
-## v1.4 Output Refinement (2026-02-13)
-- **Structure Improvements**:
-  - **Book Summary**: Now extracted explicitly via JSON prompt and placed at the top of the output.
-  - **Duplicate Prevention**: Chapter processing now strictly links split chunks to their TOC titles, preventing duplication.
-  - **Exclusion**: Added `contributors`, `about the authors` to exclusion list.
-
-## v1.5 Pipeline Refactoring & Summary Structure Fix (2026-02-14)
-- **サマリー出力のフラット化**:
-  - `SUMMARY_PROMPT` / `BOOK_SUMMARY_PROMPT` の `<example>` と `<rules>` を修正。
-  - 旧: 「論文タイトル」がラッパー親項目 → 配下にリサーチ・クエスチョン等がネスト（余分な階層）。
-  - 新: **リサーチ・クエスチョン / 核心的主張 / 各セクションが並列**（フラット構造）。
-  - ルールに「**構造の重要ルール**: 同じ階層（並列）に配置すること」を明示的に追加。
-- **パイプラインの分離**:
-  - `BOOK_STRUCTURE_PROMPT`: TOC抽出のみに限定（`book_summary` を削除）。
-  - `BOOK_SUMMARY_PROMPT`: 書籍全体の要約を独立フェーズ (Phase 1.5) で生成。
-  - `BOOK_CHAPTER_SUMMARY_PROMPT`: ユーザーが更新。`{text}` プレースホルダー方式に変更。
-  - `summarize_chapter()`: 引数を `(chapter_text)` のみに簡略化。
-  - `generate_book_summary()`: 新メソッド追加 (`skills.py`)。
-- **アンカーマッチングの改善** (`skills.py`):
-  - キー名不一致 (`start_text` vs `anchor`) を修正。
-  - 3段階フォールバック: 完全一致 → 空白正規化 → 先頭N語部分一致。
-  - デバッグ出力で照合結果を可視化。
-- **TOC保存**: Phase 1 完了後に `intermediate/toc.txt` として保存。
-- **Web版同期**: `web/src/lib/prompts.json` を `shared/prompts.json` と同期。
-
-## v1.6 Title-Based Filename Generation (2026-02-14)
-- **ファイル名生成ロジックの改善**:
-  - 出力ファイル名を入力ファイル名（stem）ではなく、解析された「文章のタイトル」に基づいたものに変更（例: `talisman of thoughts_output.txt`）。
-  - 対象ファイル: 最終出力（`_output.txt`）、要約（`_summary.txt`）、構造化英文（`_structured_eng.md`）。
-- **サニタイズ処理の追加**:
-  - ファイル名に使用できない記号（`\/ : * ? " < > |`）を自動的に除去する `Utils.sanitize_filename` を実装。
-- **リネーム機能**:
-  - パイプラインの途中で生成される中間ファイルも、最終フェーズ（Phase 4）でタイトルが確定した際に自動的にリネームされる仕組みを構築。
-
-## v1.7 Book Mode Semantic Detection & Performance (2026-02-14)
-- **非番号章の検出改善**:
-  - `BOOK_STRUCTURE_PROMPT` を強化し、"Preface", "Introduction", "Foreword" 等の番号のないセクションを独立した章として必ず抽出するよう指示を追加。
-  - 出力JSONに `is_numbered` と `section_type` フィールドを追加し、章の性質に応じた構造化を可能に。
-- **AI駆動型分割ロジック (Web版)**:
-  - Python版を参考に `splitByAnchors` (Anchor Text Method) をWeb版に移植。
-  - AIによる目次解析 (Phase 1) と、アンカーテキスト照合による確実な章分割 (Phase 2) を実現。
-- **高速化と最適化**:
-  - `BATCH_CONCURRENCY` を 3から5 に引き上げ、Gemini Flashの並列性能をより活用。
-  - `GeminiService` に `analyzeBookStructure` メソッドを追加し、堅牢なJSONパースを実装。
-
-## v1.8 Documentation & Pipeline Clarity (2026-02-14)
-- **処理パイプラインの可視化**:
-  - `README.md` に Mermaid を使用した処理パイプラインの構成図を追加。
-  - 論文モードと書籍モードの各フェーズ（要約、構造化、翻訳の分離）を明確化。
+## 2026-02-14: Workspace Cleanup
+**Goal**: Remove unnecessary test files, redundant prompts, and archive old intermediate data to improve development environment clarity.
+**Changes**:
+- **Test File Organization**: Moved all `test_*.py` files from root to `tests/`.
+- **Archive Intermediate Data**: Moved all processing artifacts from `intermediate/` (summaries, chapters, TOCs) to `intermediate/archive/2026-02-14_cleanup/`.
+- **Prompt Cleanup**: Removed `STRUCTURING_PROMPT` from `shared/prompts.json` as it was deprecated by the more stable `STRUCTURING_WITH_HINT_PROMPT`.
+- **General Housekeeping**: Removed temporary test files from `web/` directory and consolidated output files in the root.

@@ -8,6 +8,7 @@ from .constants import (
     BOOK_STRUCTURING_PROMPT, BOOK_TRANSLATION_PROMPT
 )
 from .llm_processor import LLMProcessor
+from .utils import Utils
 
 class PaperProcessorSkills:
     def __init__(self):
@@ -299,30 +300,72 @@ class PaperProcessorSkills:
         prompt = BOOK_CHAPTER_SUMMARY_PROMPT.replace("{text}", chapter_text)
         return await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
 
-    async def structure_chapter(self, overall_summary: str, chapter_text: str, progress_callback=None) -> str:
+    async def _structure_text_chunked(self, raw_text: str, prompt_creator, chunk_size: int = 20000, progress_callback=None) -> str:
         """
-        特定の章の英語構造を整理する
-        長文の場合は分割して処理する
+        共通のチャンク分割・並列構造化ロジック
         """
-        chunks = self._split_text_by_length(chapter_text)
-        tasks = []
+        chunks = self._split_text_by_length(raw_text, chunk_size)
+        total_chunks = len(chunks)
+
+        if progress_callback:
+            progress_callback(f"テキストを {total_chunks} チャンクに分割して並列構造化中...")
+
+        async def process_chunk(index, chunk):
+            prompt = prompt_creator(chunk, index)
+            try:
+                # LLM呼び出し
+                response = await asyncio.to_thread(self.llm.call_api, prompt, None)
+                # 個別のチャンクもサニタイズしておく
+                return Utils.sanitize_structured_output(response)
+            except Exception as e:
+                return f"\n[構造化エラー (Chunk {index+1}): {str(e)}]\n"
+
+        # 並列実行
+        tasks = [process_chunk(i, chunk) for i, chunk in enumerate(chunks)]
+        results = await asyncio.gather(*tasks)
+
+        # 結果を結合
+        combined_text = "\n\n".join(results)
         
-        for chunk in chunks:
-            prompt = BOOK_STRUCTURING_PROMPT.format(
-                overall_summary=overall_summary,
-                chapter_text=chunk
+        # 全体に対しても再度サニタイズ（重複ヘッダーの除去など）
+        return Utils.sanitize_structured_output(combined_text)
+
+    async def structure_text_with_hint(self, raw_text: str, summary_text: str, title: str = "", progress_callback=None) -> str:
+        """
+        【Phase 2】要約をヒントにして、生テキストを構造化する (Paper Mode)
+        """
+        # OCRノイズ（Running Heads）をクリーンアップ
+        if title:
+            raw_text = Utils.clean_header_noise(raw_text, title)
+        
+        def create_prompt(chunk, index):
+            # Paper Mode Prompt
+            return STRUCTURING_WITH_HINT_PROMPT.format(
+                raw_text=chunk,
+                summary_hint=summary_text
             )
-            tasks.append(asyncio.to_thread(self.llm.call_api, prompt, None))
-            
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        final_results = []
-        for res in results:
-            if isinstance(res, Exception):
-                final_results.append(str(res))
-            else:
-                final_results.append(res)
-                
-        return "\n\n".join(final_results)
+
+        return await self._structure_text_chunked(raw_text, create_prompt, chunk_size=20000, progress_callback=progress_callback)
+
+    async def structure_chapter(self, overall_summary: str, chapter_text: str, chapter_summary: str = "", chapter_title: str = "", progress_callback=None) -> str:
+        """
+        【Phase 3】特定の章の英語構造を整理する (Book Mode)
+        要約から節タイトルを抽出する複雑なロジックを廃止し、Paper Modeと同じ堅牢なチャンク処理を採用。
+        """
+        # OCRノイズ（Running Heads）をクリーンアップ
+        if chapter_title:
+            chapter_text = Utils.clean_header_noise(chapter_text, chapter_title)
+
+        def create_prompt(chunk, index):
+            # Book Mode Prompt (Strict Rules)
+            # prompts.json の BOOK_STRUCTURING_PROMPT に合わせた引数を渡す
+            return BOOK_STRUCTURING_PROMPT.format(
+                chapter_summary=chapter_summary,
+                title=chapter_title,
+                raw_text=chunk
+            )
+        
+        return await self._structure_text_chunked(chapter_text, create_prompt, chunk_size=20000, progress_callback=progress_callback)
 
     async def translate_chapter(self, overall_summary: str, chapter_summary: str, chapter_text: str, glossary_text: str = "", progress_callback=None) -> str:
         """
@@ -349,7 +392,8 @@ class PaperProcessorSkills:
                                               .replace("{chunk_text}", chunk)
                 
                 try:
-                    return await asyncio.to_thread(self.llm.call_api, prompt, None)
+                    response = await asyncio.to_thread(self.llm.call_api, prompt, None)
+                    return Utils.sanitize_translated_output(response)
                 except Exception as e:
                     print(f"Error in translating chunk: {e}")
                     raise e
@@ -372,24 +416,95 @@ class PaperProcessorSkills:
                 
         return "\n\n".join(final_results)
 
-    # --- Paper Mode Skills (Existing) ---
+    def _extract_section_titles(self, summary_text: str) -> list[str]:
+        """
+        要約テキストから節タイトル（英語）を抽出する。
+        パターン: 「節の要約：...（English Title）」
+        """
+        titles = []
+        # 全角括弧、半角括弧、または単にコロン後の英語タイトルを抽出
+        # より柔軟なパターンに変更
+        patterns = [
+            r'節の要約[：:].*?[（\(](.+?)[）\)]', # 括弧あり
+            r'節の要約[：:]\s*([a-zA-Z0-9\s\'\-\:\&\.]+?)(?:\s|$)' # 括弧なし英語のみ
+        ]
+        
+        for p in patterns:
+            matches = re.findall(p, summary_text)
+            for title in matches:
+                title = title.strip()
+                # 短すぎるものや既に含まれているものを除外
+                if title and len(title) > 3 and title not in titles:
+                    titles.append(title)
+        
+        if titles:
+            print(f"  要約から {len(titles)} 個の節タイトルを抽出: {titles}")
+        else:
+            # フォールバック: インデントされた見出し（Workflowy形式）からの抽出を試みる
+            lines = summary_text.split('\n')
+            for line in lines:
+                # 「- TITLE」形式で日本語名が含まれない行を探す
+                match = re.match(r'^\s*-\s+([a-zA-Z0-9\s\'\-\:\&\.]{5,})$', line)
+                if match:
+                    titles.append(match.group(1).strip())
+            
+            if titles:
+                print(f"  要約の見出し構造から {len(titles)} 個の節タイトルを抽出: {titles}")
+            else:
+                print("  要約から節タイトルを抽出できませんでした（フォールバック使用）")
+        return titles
 
-    async def summarize_raw_text(self, raw_text: str, progress_callback=None) -> str:
+    def _split_text_by_sections(self, raw_text: str, section_titles: list[str]) -> list[str]:
         """
-        【Phase 1】崩れたテキストから直接要約を作成する
+        節タイトルの位置に基づいてテキストをセマンティックに分割する。
         """
-        prompt = SUMMARY_PROMPT.format(text=raw_text)
-        return await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
+        if not section_titles:
+            print("  節タイトルなし → 文字数ベース分割にフォールバック")
+            return self._split_text_by_length(raw_text)
+        
+        # 各タイトルの位置を検索（順序を維持し、ランニングヘッドによる誤検出を防ぐ）
+        positions = []
+        last_pos = 0
+        found_titles = []
 
-    async def structure_text_with_hint(self, raw_text: str, summary_text: str, progress_callback=None) -> str:
-        """
-        【Phase 2】要約をヒントにして、生テキストを構造化する
-        """
-        prompt = STRUCTURING_WITH_HINT_PROMPT.format(
-            raw_text=raw_text,
-            summary_hint=summary_text
-        )
-        return await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
+        for title in section_titles:
+            # 既に検索した位置より後を探す
+            search_area = raw_text[last_pos:]
+            
+            # 完全一致（大文字小文字無視を優先）
+            pos_in_area = search_area.lower().find(title.lower())
+            
+            if pos_in_area != -1:
+                abs_pos = last_pos + pos_in_area
+                positions.append(abs_pos)
+                found_titles.append(title)
+                print(f"  ✓ 節タイトル '{title}' を位置 {abs_pos} で発見")
+                # 次の検索開始位置を更新（最低でもタイトルの長さ分は進める）
+                last_pos = abs_pos + len(title)
+            else:
+                print(f"  ✗ 節タイトル '{title}' が元テキスト（未検索領域）に見つかりません")
+        
+        if not positions:
+            print("  節タイトルが一つも見つかりません → 文字数ベース分割にフォールバック")
+            return self._split_text_by_length(raw_text)
+        
+        # 分割
+        chunks = []
+        # 冒頭部分
+        if positions[0] > 0:
+            intro = raw_text[:positions[0]].strip()
+            if intro:
+                chunks.append(intro)
+        
+        for i in range(len(positions)):
+            start = positions[i]
+            end = positions[i + 1] if i + 1 < len(positions) else len(raw_text)
+            chunk = raw_text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+        
+        print(f"  → {len(chunks)} 個のチャンクに分割完了")
+        return chunks
 
     async def translate_academic(self, clean_markdown: str, glossary_text: str = "", summary_context: str = "", progress_callback=None) -> str:
         """
@@ -411,8 +526,13 @@ class PaperProcessorSkills:
                     chunk_text=chunk,                 # 翻訳対象のセクション
                     glossary_content=glossary_text    # 辞書
                 )
+                
+                async def _translate_single_chunk(p):
+                    res = await asyncio.to_thread(self.llm.call_api, p, None)
+                    return Utils.sanitize_translated_output(res)
+
                 # 並列実行時は progress_callback を渡すと表示が乱れるため None にする
-                tasks.append(asyncio.to_thread(self.llm.call_api, prompt, None))
+                tasks.append(_translate_single_chunk(prompt))
             except KeyError as e:
                 print(f"Error building prompt: Missing key {e}")
                 return f"[システムエラー: プロンプトの変数が一致しません: {e}]"
@@ -466,31 +586,65 @@ class PaperProcessorSkills:
                 
         return final_chunks
 
+    
+    
     def _split_text_by_length(self, text: str, max_length: int = MAX_TRANSLATION_CHUNK_SIZE) -> list[str]:
-        """長大なテキストを改行基準で分割する"""
+        """
+        テキストを指定された最大長で分割する。
+        可能な限り段落区切り（\n\n）や行区切り（\n）で分割し、文章の途中切断を防ぐ。
+        """
         if len(text) <= max_length:
             return [text]
             
         chunks = []
-        current_chunk = []
-        current_length = 0
+        current_block = ""
         
-        lines = text.split('\n')
-        for line in lines:
-            # 行単体で長すぎる場合はそのまま追加（やむを得ない）
-            line_len = len(line) + 1 # 改行分
-            
-            if current_length + line_len > max_length:
-                # 現在のチャンクを確定
-                if current_chunk:
-                    chunks.append("\n".join(current_chunk))
-                current_chunk = [line]
-                current_length = line_len
-            else:
-                current_chunk.append(line)
-                current_length += line_len
+        # 段落（\n\n）で分割
+        # split('\n\n') だと空文字が含まれる可能性があるので注意
+        paragraphs = text.split('\n\n')
+        
+        for para in paragraphs:
+            if not para:
+                continue
                 
-        if current_chunk:
-            chunks.append("\n".join(current_chunk))
+            # この段落を追加できるか？
+            # [現在のブロック] + [\n\n] + [この段落]
+            # current_block が空なら \n\n は不要
+            needed = len(current_block) + 2 + len(para) if current_block else len(para)
+            
+            if needed > max_length:
+                # 入らない場合
+                if current_block:
+                    # 先に現在のブロックを確定してチャンク化
+                    chunks.append(current_block)
+                    current_block = ""
+                
+                # 段落単体がデカすぎる場合 -> 行で分割して追加
+                if len(para) > max_length:
+                    lines = para.split('\n')
+                    for line in lines:
+                        needed_line = len(current_block) + 1 + len(line) if current_block else len(line)
+                        
+                        if needed_line > max_length:
+                            if current_block:
+                                chunks.append(current_block)
+                            current_block = line
+                        else:
+                            if current_block:
+                                current_block += "\n" + line
+                            else:
+                                current_block = line
+                else:
+                    # 段落が max_length に収まるなら、それを新しい current_block の先頭にする
+                    current_block = para
+            else:
+                # そのまま追加
+                if current_block:
+                    current_block += "\n\n" + para
+                else:
+                    current_block = para
+                    
+        if current_block:
+            chunks.append(current_block)
             
         return chunks

@@ -49,10 +49,15 @@ async def main():
         sys.exit(1)
 
     # モード選択
-    print("\nモードを選択してください:")
-    print("1. 論文モード (Paper Mode) - 数十ページ程度の論文に最適")
-    print("2. 書籍モード (Book Mode) - 100ページ超の書籍に最適")
-    mode_input = input("選択 (1/2): ").strip()
+    if len(sys.argv) > 2:
+        mode_input = sys.argv[2]
+        print(f"モード選択 (引数): {mode_input}")
+    else:
+        print("\nモードを選択してください:")
+        print("1. 論文モード (Paper Mode) - 数十ページ程度の論文に最適")
+        print("2. 書籍モード (Book Mode) - 100ページ超の書籍に最適")
+        mode_input = input("選択 (1/2): ").strip()
+    
     mode = "book" if mode_input == "2" else "paper"
     
     output_final = input_file.parent / f"{input_file.stem}_output.txt"
@@ -200,9 +205,9 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
         cache_path = cache_dir / cache_filename
         
         clean_chapter = ""
-        # ユーザー要望により、既存ファイルがあっても再利用せず、常に新規生成して上書き保存する
+        # ユーザー要望により、既存 fileがあっても再利用せず、常に新規生成して上書き保存する
         print(f"  Structuring {chapter_title}...")
-        clean_chapter = await skills.structure_chapter(overall_summary, chapter_text)
+        clean_chapter = await skills.structure_chapter(overall_summary, chapter_text, chapter_summary=chapter_summary, chapter_title=chapter_title)
         try:
             Utils.write_text_file(cache_path, clean_chapter)
         except Exception as e:

@@ -394,3 +394,44 @@ export const assembleBookWorkflowy = (
 
     return parts.join('\n');
 };
+
+/**
+ * AIによるハルシネーション（重複したH1見出しや、文中の不自然なIntroduction）を強制的に削除する。
+ */
+export function removeRedundantHeaders(markdownText: string): string {
+    const lines = markdownText.split('\n');
+    let firstH1Found = false;
+    const cleanedLines: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+
+        // 1. レベル1見出し (# Title) の重複排除
+        if (line.startsWith('# ')) {
+            if (!firstH1Found) {
+                // 最初のH1だけは許可
+                firstH1Found = true;
+                cleanedLines.push(lines[i]);
+            } else {
+                // 2回目以降のH1はAIの幻覚なので、行ごと削除
+                console.log('Detected and removed hallucinated H1:', line);
+                continue;
+            }
+        }
+        // 2. 文中の不自然な "## Introduction" の排除
+        // ルール: 冒頭(例えば最初の30行以内)以外で "## Introduction" が現れたら削除する
+        else if (line.toLowerCase().startsWith('## introduction')) {
+            if (i > 30) { // 30行目以降なら「文中のIntroduction」とみなして削除
+                console.log('Detected and removed hallucinated Introduction:', line);
+                continue;
+            } else {
+                cleanedLines.push(lines[i]);
+            }
+        }
+        else {
+            cleanedLines.push(lines[i]);
+        }
+    }
+
+    return cleanedLines.join('\n');
+}

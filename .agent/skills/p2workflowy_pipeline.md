@@ -1,41 +1,42 @@
 ---
 name: p2workflowy パイプライン
-description: 学術論文・書籍を Workflowy 形式に変換する高度なパイプライン（v1.6）
+description: 学術論文・書籍を Workflowy 形式に変換する高度なパイプライン（v2.0）
 ---
 
-# p2workflowy パイプライン
+# p2workflowy パイプライン (v2.0)
 
 ## 概要
-`p2workflowy` は、PDF 等から抽出されたテキストを、AI（Gemini）を使って構造化・要約・翻訳し、Workflowy へ直接貼り付け可能な形式に変換するツールです。
+`p2workflowy` は、PDF 等から抽出されたテキストを、AI（gemini-3-flash-preview）を使って構造化・要約・翻訳し、Workflowy へ直接貼り付け可能な形式に変換するツールです。
+v2.0では、**堅牢なチャンク処理**と**厳格なプロンプト制御**により、長文処理の安定性と精度が飛躍的に向上しました。
 
-## インターフェース
-- **CLI版**: `python3 -m src.main` で実行。
-- **Web版**: React + Vite で構築された静的 Web アプリ（`web/` ディレクトリ）。`shared/prompts.json` を共有。
+## バージョン履歴
+- **v2.0 (2026-02-14)**:
+    - **Chunked Structuring**: Paper/Book両モードで、段落を考慮したスマートなチャンク分割 (`_split_text_by_length`) と並列構造化を導入。
+    - **Strict Prompts**: Meta-commentary（AIのひとりごと）を徹底排除する厳格なプロンプト (`STRUCTURING_WITH_HINT_PROMPT`, `BOOK_STRUCTURING_PROMPT`) を採用。
+    - **Sanitization**: 出力後の重複ヘッダーやハルシネーション（Introductionの勝手な挿入）を自動除去する `Utils` メソッドを強化。
 
 ## 処理モード
 
 ### 1. 論文モード (Paper Mode)
-数十ページ程度の文書向け。全体要約 → 並列翻訳。
+数十ページ程度の文書向け。
+1. **Summarize**: 文書全体の要約を作成。
+2. **Structure (Chunked)**: 全文を20,000文字単位（段落考慮）で分割し、並列にMarkdown構造化。これにより後半の脱落（Attention Drift）を防ぐ。
+3. **Translate**: 構造化されたMarkdownをセクションごとに翻訳。
 
 ### 2. 書籍モード (Book Mode)
-100ページ超の書籍向け。以下の5段階フェーズで実行。
+100ページ超の書籍向け。
+1. **TOC Analysis**: 目次と章の境界（アンカー）を特定。
+2. **Deterministic Splitting**: アンカーテキストを用いて物理的に章分割。
+3. **Per-Chapter Processing**:
+    - **Summarize**: 章ごとの要約。
+    - **Structure (Chunked)**: 章の内容を分割並列処理で構造化（Paper Modeと同じロジック）。
+    - **Translate**: 構造化データを基に翻訳。
+4. **Assembly**: 全章を統合。
 
-- **Phase 1: TOC Extraction**: 冒頭部分から目次(TOC)と各章の開始アンカーを抽出。
-- **Phase 1.5: Overall Summary**: 本全体の要約を生成。
-- **Phase 2: Deterministic Splitting**: Python コードにより、アンカーテキストを用いて正確に章ごとに分割。
-- **Phase 3: Chapter Processing (Parallel)**: 各章ごとに「構造化」→「章要約生成」→「翻訳」を並列実行。
-- **Phase 4: Assembly**: 全ての成果物を統合し、Workflowy 形式で出力。
-
-## v1.6 の改善点
-- **タイトルベースの命名**: 出力ファイル名を入力ファイル名ではなく、抽出された「文書タイトル」に基づき生成 (`Utils.sanitize_filename`)。
-- **出力整理**: 要約ファイルなどの中間生成物は `intermediate/` ディレクトリに集約。
-- **並列制御**: API レートリミット回避のため、`asyncio.Semaphore(5)` により同時実行数を制限。
-
-## コアロジック
-- **Python版**: `src/main.py`, `src/skills.py`, `src/utils.py`
-- **Web版**: `web/src/lib/gemini.ts`, `web/src/lib/formatter.ts`
+## コアロジック (`src/skills.py`)
+- `_structure_text_chunked`: 共通化されたチャンク並列構造化ロジック。
+- `_split_text_by_length`: 改行・段落を考慮したスマート分割ロジック。
 
 ## 推奨設定
 - **Model**: `gemini-3-flash-preview`（高速・長文対応）
-- **Glossary**: `glossary.csv` による用語統一。
-- **文体**: 常体（だ・である調）。
+- **Prompt Rules**: "Original English ONLY", "No Meta-commentary"

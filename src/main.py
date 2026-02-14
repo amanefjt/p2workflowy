@@ -56,7 +56,7 @@ async def main():
     mode = "book" if mode_input == "2" else "paper"
     
     output_final = input_file.parent / f"{input_file.stem}_output.txt"
-    output_summary = input_file.parent / f"{input_file.stem}_summary.txt"
+    output_summary = inter_dir / f"{input_file.stem}_summary.txt"
     output_structured = input_file.parent / f"{input_file.stem}_structured_eng.md"
     
     inter_dir.mkdir(exist_ok=True)

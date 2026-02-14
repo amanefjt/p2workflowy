@@ -7,7 +7,122 @@ export interface ChapterData {
     id: number;
     title: string;
     raw_text: string;
+    is_numbered?: boolean;
+    section_type?: string;
+    start_snippet?: string;
 }
+
+/**
+ * AIの目次解析結果に基づいて、アンカーテキスト照合によりテキストを分割する (Anchor Text Method)
+ */
+export const splitByAnchors = (fullText: string, structureData: { chapters: any[] }): ChapterData[] => {
+    const chaptersToc = structureData.chapters || [];
+    if (chaptersToc.length === 0) {
+        return [{ id: 1, title: 'Full Text', raw_text: fullText.trim() }];
+    }
+
+    const indices: number[] = [];
+    const validChapters: any[] = [];
+    let currentSearchPos = 0;
+
+    for (const chapter of chaptersToc) {
+        const title = chapter.title || "Unknown Chapter";
+        const startSnippet = (chapter.start_snippet || "").trim();
+
+        if (!startSnippet && !title) continue;
+
+        const { pos, strategy } = findAnchorPosition(fullText, startSnippet, title, currentSearchPos);
+
+        if (pos !== -1) {
+            console.log(`[splitByAnchors] ✓ '${title}' — ${strategy} (pos=${pos})`);
+            indices.push(pos);
+            validChapters.push(chapter);
+            currentSearchPos = pos + 1;
+        } else {
+            console.log(`[splitByAnchors] ✗ '${title}' — 発見できず`);
+        }
+    }
+
+    const result: ChapterData[] = [];
+    for (let i = 0; i < indices.length; i++) {
+        const start = indices[i];
+        const end = i + 1 < indices.length ? indices[i + 1] : fullText.length;
+        const chunkText = fullText.slice(start, end).trim();
+        const tocItem = validChapters[i];
+
+        result.push({
+            id: i + 1,
+            title: tocItem.title,
+            raw_text: chunkText,
+            is_numbered: tocItem.is_numbered,
+            section_type: tocItem.section_type,
+            start_snippet: tocItem.start_snippet
+        });
+    }
+
+    return result.length > 0 ? result : [{ id: 1, title: 'Full Text', raw_text: fullText.trim() }];
+};
+
+/**
+ * アンカーテキストの位置を多段階で検索する
+ */
+const findAnchorPosition = (fullText: string, startSnippet: string, title: string, searchFrom: number): { pos: number, strategy: string } => {
+    const targetText = fullText.slice(searchFrom);
+    const normalizedSnippet = normalizeWhitespace(startSnippet);
+    const normalizedTitle = normalizeWhitespace(title);
+
+    // Plan A: Title + Snippet (Regex)
+    if (normalizedTitle && normalizedSnippet) {
+        const tWords = normalizedTitle.split(/\s+/).filter(w => w.length > 0);
+        const sWords = normalizedSnippet.split(/\s+/).filter(w => w.length > 0).slice(0, 5);
+
+        if (tWords.length > 0 && sWords.length > 0) {
+            const pT = tWords.map(w => escapeRegExp(w)).join('\\s+');
+            const pS = sWords.map(w => escapeRegExp(w)).join('\\s+');
+            const regex = new RegExp(`(${pT})[\\s\\S]{0,500}?${pS}`, 'i');
+            const match = targetText.match(regex);
+            if (match && match.index !== undefined) {
+                return { pos: searchFrom + match.index, strategy: "Plan A (Title + Snippet)" };
+            }
+        }
+    }
+
+    // Plan B: Snippet Only
+    if (normalizedSnippet) {
+        const sWords = normalizedSnippet.split(/\s+/).filter(w => w.length > 0).slice(0, 10);
+        if (sWords.length >= 5) {
+            const pS = sWords.map(w => escapeRegExp(w)).join('\\s+');
+            const regex = new RegExp(pS, 'i');
+            const match = targetText.match(regex);
+            if (match && match.index !== undefined) {
+                return { pos: searchFrom + match.index, strategy: "Plan B (Snippet Only)" };
+            }
+        }
+    }
+
+    // Plan C: Title Only
+    if (normalizedTitle) {
+        const tWords = normalizedTitle.split(/\s+/).filter(w => w.length > 0);
+        if (tWords.length > 0) {
+            const pT = tWords.map(w => escapeRegExp(w)).join('\\s+');
+            const regex = new RegExp(pT, 'i');
+            const match = targetText.match(regex);
+            if (match && match.index !== undefined) {
+                return { pos: searchFrom + match.index, strategy: "Plan C (Title Only)" };
+            }
+        }
+    }
+
+    return { pos: -1, strategy: "Failed" };
+};
+
+const normalizeWhitespace = (text: string): string => {
+    return text.replace(/\s+/g, ' ').trim();
+};
+
+const escapeRegExp = (string: string): string => {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
 
 export const normalizeMarkdownHeadings = (markdownText: string): string => {
     const lines = markdownText.split('\n');

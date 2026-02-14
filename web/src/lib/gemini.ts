@@ -7,7 +7,8 @@ import {
     TRANSLATION_PROMPT,
     BOOK_SUMMARY_PROMPT,
     BOOK_STRUCTURING_PROMPT,
-    BOOK_TRANSLATION_PROMPT
+    BOOK_TRANSLATION_PROMPT,
+    TOC_ANALYSIS_PROMPT
 } from './constants';
 
 export class GeminiService {
@@ -49,6 +50,25 @@ export class GeminiService {
     }
 
     // --- Book Mode Methods (Multi-Pass Pipeline) ---
+
+    /** Phase 1: TOC Analysis (Extract structure as JSON) */
+    async analyzeBookStructure(text: string): Promise<any> {
+        const prompt = TOC_ANALYSIS_PROMPT.replace('{text}', text);
+        const result = await this.model.generateContent(prompt);
+        const response = await result.response;
+        const responseText = response.text();
+
+        try {
+            // Robust JSON extraction (handle markdown blocks)
+            const jsonMatch = responseText.match(/```json\s*([\s\S]*?)```/) || responseText.match(/{[\s\S]*}/);
+            const jsonStr = jsonMatch ? jsonMatch[1] || jsonMatch[0] : responseText;
+            const data = JSON.parse(jsonStr);
+            return Array.isArray(data) ? { chapters: data } : data;
+        } catch (e) {
+            console.error('Failed to parse TOC JSON:', e, responseText);
+            throw new Error('目次データの解析に失敗しました。');
+        }
+    }
 
     /** Phase 2: Structure a chapter with hint (chapter title as outline) */
     async structureWithHint(rawText: string, summaryHint: string): Promise<string> {

@@ -44,6 +44,42 @@ PDFからコピー＆ペーストした際などに発生するテキストの�
 
 ---
 
+## 🛠 処理パイプライン (Processing Pipeline)
+
+本ツールは精緻な構造化と要約を実現するため、以下のステップで段階的に処理を行います。
+
+```mermaid
+graph TD
+    Input[入力テキスト (.txt)] --> Mode{モード選択}
+    
+    subgraph "論文モード (Paper Mode)"
+    Mode --> P1[Phase 1: 原文要約]
+    P1 --> P2[Phase 2: 構造復元<br/>要約をヒントに構造を再構築]
+    P2 --> P3[Phase 3: 並列翻訳<br/>セクション単位で高精度に翻訳]
+    P3 --> P4[Phase 4: 成果物統合]
+    end
+    
+    subgraph "書籍モード (Book Mode)"
+    Mode --> B1[Phase 1: 目次分析<br/>TOCと章の開始位置を特定]
+    B1 --> B15[Phase 1.5: 全体要約生成]
+    B15 --> B2[Phase 2: 章分割<br/>アンカー照合による確実な切り出し]
+    B2 --> B3[Phase 3: 各章の並列処理]
+    
+    subgraph "各章の内部ステップ"
+    B3 --> B3S[1. 章要約生成]
+    B3S --> B3C[2. 本文の構造化・クリーンアップ]
+    B3C --> B3T[3. 文脈を考慮した翻訳]
+    end
+    
+    B3T --> B4[Phase 4: 成果物統合]
+    end
+    
+    P4 --> OUT([Workflowy形式出力])
+    B4 --> OUT
+```
+
+---
+
 ## 📦 インストールと実行
 
 ### サービス提供形態

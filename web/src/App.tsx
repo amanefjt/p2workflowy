@@ -2,11 +2,11 @@ import React, { useState, useRef } from 'react';
 import { useAppSettings } from './hooks/useAppSettings';
 import { GeminiService, batchProcess } from './lib/gemini';
 import { DEFAULT_MODEL, MAX_TRANSLATION_CHUNK_SIZE } from './lib/constants';
-import { markdownToWorkflowy, splitMarkdownByHeaders, splitByChapterHeaders, assembleBookWorkflowy } from './lib/formatter';
+import { markdownToWorkflowy, splitMarkdownByHeaders, splitByAnchors, assembleBookWorkflowy, ChapterData } from './lib/formatter';
 import { Book, FileText, Settings, Upload, Check, Copy, Loader2, AlertCircle, Trash2, X } from 'lucide-react';
 
 /** バッチ並列の同時実行数 */
-const BATCH_CONCURRENCY = 3;
+const BATCH_CONCURRENCY = 5;
 
 function App() {
     const { apiKey, setApiKey, dictionaries, addDictionary, removeDictionary, loading: settingsLoading } = useAppSettings();
@@ -108,10 +108,11 @@ function App() {
                 // === Book Mode: 6-Phase Multi-Pass Pipeline ===
                 // ================================================
 
-                // --- Phase 1: TOC Analysis & Splitting ---
-                setProgress('Phase 1/6: 目次解析・章分割中...');
-                const chapters = splitByChapterHeaders(text);
-                console.log(`[Book Mode] Phase 1 完了: ${chapters.length} 章を検出`);
+                // --- Phase 1: TOC Analysis (AI driven) ---
+                setProgress('Phase 1/6: 書籍構造を解析中 (AI)...');
+                const structureData = await gemini.analyzeBookStructure(text);
+                const chapters = splitByAnchors(text, structureData);
+                console.log(`[Book Mode] Phase 1 完了: ${chapters.length} 章を検出`, chapters);
 
                 // --- Phase 2: Structuring (Parallel, Batch) ---
                 let completedP2 = 0;
@@ -119,10 +120,10 @@ function App() {
 
                 const structuredChapters: string[] = await batchProcess(
                     chapters,
-                    async (chapter, _idx) => {
+                    async (chapter: ChapterData, _idx) => {
                         try {
                             const result = await gemini.structureChapter(
-                                `Book chapter: ${chapter.title}`,
+                                `Current Chapter: ${chapter.title}\nSection Type: ${chapter.section_type || 'body'}`,
                                 chapter.raw_text
                             );
                             completedP2++;

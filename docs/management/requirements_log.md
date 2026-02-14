@@ -104,3 +104,19 @@ Port existing Python desktop tool `p2workflowy` to a Web application.
   - ファイル名に使用できない記号（`\/ : * ? " < > |`）を自動的に除去する `Utils.sanitize_filename` を実装。
 - **リネーム機能**:
   - パイプラインの途中で生成される中間ファイルも、最終フェーズ（Phase 4）でタイトルが確定した際に自動的にリネームされる仕組みを構築。
+
+## v1.7 Book Mode Semantic Detection & Performance (2026-02-14)
+- **非番号章の検出改善**:
+  - `BOOK_STRUCTURE_PROMPT` を強化し、"Preface", "Introduction", "Foreword" 等の番号のないセクションを独立した章として必ず抽出するよう指示を追加。
+  - 出力JSONに `is_numbered` と `section_type` フィールドを追加し、章の性質に応じた構造化を可能に。
+- **AI駆動型分割ロジック (Web版)**:
+  - Python版を参考に `splitByAnchors` (Anchor Text Method) をWeb版に移植。
+  - AIによる目次解析 (Phase 1) と、アンカーテキスト照合による確実な章分割 (Phase 2) を実現。
+- **高速化と最適化**:
+  - `BATCH_CONCURRENCY` を 3から5 に引き上げ、Gemini Flashの並列性能をより活用。
+  - `GeminiService` に `analyzeBookStructure` メソッドを追加し、堅牢なJSONパースを実装。
+
+## v1.8 Documentation & Pipeline Clarity (2026-02-14)
+- **処理パイプラインの可視化**:
+  - `README.md` に Mermaid を使用した処理パイプラインの構成図を追加。
+  - 論文モードと書籍モードの各フェーズ（要約、構造化、翻訳の分離）を明確化。

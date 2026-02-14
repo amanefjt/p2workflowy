@@ -56,49 +56,152 @@ class PaperProcessorSkills:
     def _normalize_whitespace(text: str) -> str:
         """改行・タブ・複数スペースを単一スペースに正規化する"""
         return re.sub(r'\s+', ' ', text).strip()
+    
+    def _clean_running_heads(self, text: str) -> str:
+        """
+        簡易的なヘッダー/フッター削除処理
+        数値のみの行や、短すぎる行を改行に置換して、検索の邪魔にならないようにする
+        （完全な削除は難しいが、検索性を高めるための前処理）
+        """
+        # 1. 数字のみの行（ページ番号）を削除
+        text = re.sub(r'^\s*\d+\s*$', '', text, flags=re.MULTILINE)
+        return text
 
-    def _find_anchor_position(self, full_text: str, anchor: str, search_from: int, title: str) -> int:
+    def _find_anchor_position(self, full_text: str, start_snippet: str, title: str, search_from: int) -> tuple[int, str]:
         """
-        アンカーテキストの位置を多段階で検索する。
-        1. 完全一致
-        2. 空白正規化後の一致
-        3. 先頭N語での部分一致（フォールバック）
+        アンカーテキストの位置を多段階で検索する（Anchor Text Method）。
+        
+        Returns:
+            tuple[int, str]: (found_position, strategy_name)
         """
-        # Strategy 1: 完全一致
-        pos = full_text.find(anchor, search_from)
-        if pos != -1:
-            print(f"  ✓ '{title}' — 完全一致 (pos={pos})")
-            return pos
+        # 前処理: 検索対象テキスト
+        target_text = full_text[search_from:]
+        normalized_target = self._normalize_whitespace(target_text)
         
-        # Strategy 2: 空白を正規化して検索
-        normalized_text = self._normalize_whitespace(full_text[search_from:])
-        normalized_anchor = self._normalize_whitespace(anchor)
-        norm_pos = normalized_text.find(normalized_anchor)
-        if norm_pos != -1:
-            # 正規化テキスト内の位置を、元テキストの位置に変換する
-            # 正規化前テキストで近似位置を特定
-            approx_pos = self._map_normalized_pos_to_original(full_text, search_from, normalized_anchor)
-            if approx_pos != -1:
-                print(f"  ✓ '{title}' — 空白正規化で一致 (pos={approx_pos})")
-                return approx_pos
+        # 前処理: キーワード
+        normalized_snippet = self._normalize_whitespace(start_snippet)
+        normalized_title = self._normalize_whitespace(title)
         
-        # Strategy 3: 先頭の数語（5〜15語）で部分一致
-        words = normalized_anchor.split()
-        for word_count in [15, 10, 7, 5]:
-            if len(words) >= word_count:
-                partial = ' '.join(words[:word_count])
-                # 元テキストでも正規化テキストでも試す
-                partial_pos = self._normalize_whitespace(full_text[search_from:]).find(partial)
-                if partial_pos != -1:
-                    approx_pos = self._map_normalized_pos_to_original(full_text, search_from, partial)
-                    if approx_pos != -1:
-                        print(f"  ✓ '{title}' — 先頭{word_count}語で一致 (pos={approx_pos})")
-                        return approx_pos
+        # --- Plan A: Title + Snippet (Most Robust) ---
+        # タイトルと書き出しが近接している場所を探す
+        # 正規化された空間で検索する
         
-        # 全戦略失敗
-        print(f"  ✗ '{title}' — 一致なし")
-        print(f"    検索アンカー: '{anchor[:80]}...'")
-        return -1
+        # タイトルとスニペットの間に、多少のゴミ（ページ番号やサブタイトル）が入ることを許容する正規表現
+        # しかし、正規化済みテキストでは改行がないため、単に "Title ... Snippet" のパターンを探す
+        
+        # タイトルを検索（ループして、書き出しが続くものを探す）
+        keyword_search_pos = 0
+        first_title_pos = -1 # Plan C用のバックアップ
+        
+        while True:
+            title_pos = normalized_target.find(normalized_title, keyword_search_pos)
+            if title_pos == -1:
+                break
+            
+            if first_title_pos == -1:
+                first_title_pos = title_pos
+                
+            # タイトルの後ろ 200文字以内 にスニペットがあるか？
+            search_window = 200
+            snippet_search_area = normalized_target[title_pos + len(normalized_title) : title_pos + len(normalized_title) + search_window]
+            
+            # スニペットの先頭15文字程度で照合してみる
+            snippet_head = " ".join(normalized_snippet.split()[:5]) 
+            if snippet_head in snippet_search_area:
+                # Plan A 成功: タイトルの位置を特定
+                
+                # 正規化テキスト上でマッチしたのだから、元テキスト上でも
+                # "Title" (fuzzy space) ... "SnippetStart" の並びがあるはず。
+                
+                # Regex pattern: Title + (any chars up to window) + SnippetStart
+                # Escape title and snippet words
+                title_words = normalized_title.split()
+                snippet_words = normalized_snippet.split()[:5]
+                
+                if not title_words or not snippet_words:
+                    break
+                    
+                p_title = r'\s*'.join(re.escape(w) for w in title_words)
+                p_snippet = r'\s*'.join(re.escape(w) for w in snippet_words)
+                
+                # タイトルとスニペットの間は、任意の文字（改行含む）が0〜500文字
+                pattern = f"({p_title}).{{0,500}}?({p_snippet})"
+                
+                # search_from以降で検索
+                match = re.search(pattern, full_text[search_from:], re.DOTALL | re.IGNORECASE)
+                if match:
+                    return search_from + match.start(), "Plan A (Title + Snippet)"
+                
+                break
+
+            # 次の候補へ
+            keyword_search_pos = title_pos + 1
+            
+        # Plan A Re-Revised: Regex Search Directly
+        # 正規化テキストでのループはマッピングが困難。
+        # 代わりに、元テキストに対して直接「タイトル...(200文字以内)...書き出し」を探す正規表現を試みる。
+        # ただし、タイトルが短すぎると誤爆する。
+        
+        # 正規化タイトルとスニペットから単語を抽出
+        t_words = normalized_title.split()
+        s_words = normalized_snippet.split()[:5]
+        
+        if t_words and s_words:
+            p_t = r'\s+'.join(re.escape(w) for w in t_words)
+            p_s = r'\s+'.join(re.escape(w) for w in s_words)
+            
+            # Context-aware Regex
+            # Title followed by Snippet within reasonable distance
+            regex_pattern = f"({p_t})(?:(?!{p_t}).){{0,500}}?{p_s}"
+            
+            match = re.search(regex_pattern, full_text[search_from:], re.DOTALL | re.IGNORECASE)
+            if match:
+                 return search_from + match.start(), "Plan A (Title + Snippet)"
+
+        # --- Plan B: Snippet Only (Anchor Text) ---
+        # タイトルが見つからない、またはタイトル周辺にスニペットがない場合
+        # 本文の書き出し（スニペット）だけで検索する。これがユニークであれば強力。
+        
+        # 完全一致検索
+        snippet_pos = normalized_target.find(normalized_snippet)
+        if snippet_pos != -1:
+             # スニペットが見つかった。
+             # ただし、これだと「章の途中」から始まってしまうので、
+             # その直前の「改行」や「タイトルらしきもの」まで遡りたいが、
+             # 安全策として「スニペットの開始位置」を章の開始とする（タイトルが欠落するが、混入よりマシ）
+             # 理想: スニペットの開始位置 - タイトル長 - α
+             
+             original_pos = self._map_normalized_pos_to_original(full_text, search_from, normalized_snippet)
+             if original_pos != -1:
+                 # 少しだけ前に戻ってみる（タイトルを拾えるかも）
+                 # visual adjustment
+                 return original_pos, "Plan B (Snippet Only)"
+        
+        # スニペットの部分一致（先頭10単語）
+        snippet_head_words = normalized_snippet.split()[:10]
+        if len(snippet_head_words) >= 5:
+            partial_snippet = " ".join(snippet_head_words)
+            partial_pos = normalized_target.find(partial_snippet)
+            if partial_pos != -1:
+                original_pos = self._map_normalized_pos_to_original(full_text, search_from, partial_snippet)
+                if original_pos != -1:
+                    return original_pos, "Plan B' (Partial Snippet)"
+
+        # --- Plan C: Title Only (Fallback) ---
+        # 最終手段。タイトルだけで探す。
+        if first_title_pos != -1:
+             # normalized空間での first_title_pos に対応する元テキスト位置を探す
+             # ここは簡易的に _map で再検索させてもいいが、正規化テキストのフラグメントとして渡す
+             
+             # normalized_title そのものを使ってマップする
+             # ただしこれは「最初の出現」を返してしまう。
+             # first_title_pos はまさに「最初の出現」なので問題ない。
+             
+             original_pos = self._map_normalized_pos_to_original(full_text, search_from, normalized_title)
+             if original_pos != -1:
+                 return original_pos, "Plan C (Title Only)"
+
+        return -1, "Failed"
 
     def _map_normalized_pos_to_original(self, full_text: str, search_from: int, normalized_fragment: str) -> int:
         """
@@ -111,6 +214,7 @@ class PaperProcessorSkills:
             return -1
         
         # 元テキスト内で先頭語を正規表現で検索（間の空白を柔軟に）
+        # 特殊文字をエスケープする
         pattern = r'\s+'.join(re.escape(w) for w in first_words)
         match = re.search(pattern, full_text[search_from:])
         if match:
@@ -119,7 +223,7 @@ class PaperProcessorSkills:
 
     def split_by_anchors(self, full_text: str, structure_data: dict) -> list[dict]:
         """
-        アンカーテキストに基づいて全文を章ごとに分割する（ロバスト版）
+        アンカーテキストに基づいて全文を章ごとに分割する（Anchor Text Method実装版）
         Returns:
             list[dict]: [{"title": str, "text": str}, ...]
         """
@@ -130,28 +234,38 @@ class PaperProcessorSkills:
         indices = []
         valid_chapters = []
 
-        # 検索開始位置
+        # ノイズ除去（検索精度向上のため）
+        # 元のテキストは保持し、検索用のテキストを作るアプローチもあるが、
+        # ここではインデックスズレを防ぐため、元のテキストは変更せず、
+        # 検索メソッド内で正規化を行う方針とする。
+        # _clean_running_heads はここでの適用は控える（インデックスが変わるため）。
+        
         current_search_pos = 0
         
         print(f"\n  --- アンカー照合開始 (全{len(chapters_toc)}章) ---")
         print(f"  入力テキスト長: {len(full_text)} 文字")
         
         for chapter in chapters_toc:
-            anchor = (chapter.get("anchor") or chapter.get("start_text", "")).strip()
             title = chapter.get("title", "Unknown Chapter")
+            start_snippet = (chapter.get("start_snippet") or chapter.get("anchor") or "").strip()
             
-            if not anchor:
-                print(f"  ✗ '{title}' — アンカーテキストなし")
+            # アンカー情報がまったくない場合
+            if not start_snippet and not title:
+                print(f"  ✗ '{title}' — 情報不足（スキップ）")
                 continue
             
-            pos = self._find_anchor_position(full_text, anchor, current_search_pos, title)
+            pos, strategy = self._find_anchor_position(full_text, start_snippet, title, current_search_pos)
             
-            if pos == -1:
-                continue
-                
-            indices.append(pos)
-            valid_chapters.append(chapter)
-            current_search_pos = pos + 1
+            if pos != -1:
+                print(f"  ✓ '{title}' — {strategy} (pos={pos})")
+                indices.append(pos)
+                valid_chapters.append(chapter)
+                # 次の検索は、見つかった場所の少し後から
+                current_search_pos = pos + 1
+            else:
+                 print(f"  ✗ '{title}' — 発見できず")
+                 # 見つからなくても、次の章を探し続ける（順番が前後している可能性や、この章だけOCR失敗の可能性）
+                 # current_search_pos は更新しない
         
         print(f"  --- 照合結果: {len(valid_chapters)}/{len(chapters_toc)} 章が一致 ---\n")
             
@@ -171,6 +285,10 @@ class PaperProcessorSkills:
                 "title": toc_item.get("title"),
                 "text": chunk_text
             })
+            
+        # もし最初の章が 0 以外の位置から始まっている場合、
+        # それ以前のテキスト（前書きや目次など）をどうするか？
+        # 現状は無視される（chunks_infoに含まれない）。これは意図通り（目次除去）。
             
         return chunks_info
 

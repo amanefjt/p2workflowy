@@ -254,3 +254,21 @@ class Utils:
                 start = newline_pos + 1
         
         return chunks
+
+    @staticmethod
+    def sanitize_filename(name: str) -> str:
+        """
+        文字列をファイル名として安全な形式に変換する。
+        記号を除去し、前後の空白を削除。
+        """
+        if not name:
+            return "output"
+        # ファイル名に使えない文字を除去
+        # \ / : * ? " < > |
+        sanitized = re.sub(r'[\\/*?:"<>|]', "", name)
+        # 前後の空白を削除
+        sanitized = sanitized.strip()
+        # 非常に長いタイトルへの対応 (OSの上限を考慮しつつ切り詰め)
+        if len(sanitized) > 200:
+            sanitized = sanitized[:200]
+        return sanitized

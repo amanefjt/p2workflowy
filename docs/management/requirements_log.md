@@ -95,3 +95,12 @@ Port existing Python desktop tool `p2workflowy` to a Web application.
   - デバッグ出力で照合結果を可視化。
 - **TOC保存**: Phase 1 完了後に `intermediate/toc.txt` として保存。
 - **Web版同期**: `web/src/lib/prompts.json` を `shared/prompts.json` と同期。
+
+## v1.6 Title-Based Filename Generation (2026-02-14)
+- **ファイル名生成ロジックの改善**:
+  - 出力ファイル名を入力ファイル名（stem）ではなく、解析された「文章のタイトル」に基づいたものに変更（例: `talisman of thoughts_output.txt`）。
+  - 対象ファイル: 最終出力（`_output.txt`）、要約（`_summary.txt`）、構造化英文（`_structured_eng.md`）。
+- **サニタイズ処理の追加**:
+  - ファイル名に使用できない記号（`\/ : * ? " < > |`）を自動的に除去する `Utils.sanitize_filename` を実装。
+- **リネーム機能**:
+  - パイプラインの途中で生成される中間ファイルも、最終フェーズ（Phase 4）でタイトルが確定した際に自動的にリネームされる仕組みを構築。

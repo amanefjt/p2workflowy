@@ -249,7 +249,7 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
              content_body = "\n".join(lines[1:]).strip()
         
         # 章の構成
-        chapter_md = f"# {final_title}\n\n## Chapter Summary\n{summary}\n\n{content_body}"
+        chapter_md = f"# {final_title}\n\n## 章レジュメ\n{summary}\n\n{content_body}"
         chapter_combined_list.append(chapter_md)
         clean_chapters_eng.append(res["clean_eng"])
 
@@ -260,41 +260,62 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
     translated_text = "\n\n".join(chapter_combined_list)
     
     # Book Summary (全体要約)
-    book_summary_md = "# Book Summary\n" + overall_summary
+    book_summary_md = "# 書籍レジュメ\n" + overall_summary
 
     print_progress("Phase 4: 成果物を統合中...", 95)
     await _assemble_workflowy(input_file, book_summary_md, translated_text, structured_md, output_final, output_summary, output_structured)
 
 async def _assemble_workflowy(input_file, summary_text, translated_text, structured_md, output_final, output_summary, output_structured):
     # 1. 要約の処理 (全体要約や章の要約が含まれる Markdown を変換)
+    # 論文モードの場合、summary_textには見出しがないため、ここで付与する
+    if not summary_text.strip().startswith("#"):
+        summary_text = "# レジュメ\n" + summary_text
+        
     summary_workflowy = Utils.markdown_to_workflowy(summary_text)
     
     # 2. 翻訳・タイトルの処理
     eng_lines = structured_md.splitlines()
-    title = input_file.stem
+    raw_title = input_file.stem
     if eng_lines and eng_lines[0].strip().startswith('# '):
-        title = eng_lines[0].strip().replace('# ', '').strip()
+        raw_title = eng_lines[0].strip().replace('# ', '').strip()
+
+    # タイトルのサニタイズ
+    safe_title = Utils.sanitize_filename(raw_title)
+    
+    # 新しいパスを作成
+    new_output_final = output_final.parent / f"{safe_title}_output.txt"
+    new_output_summary = output_summary.parent / f"{safe_title}_summary.txt"
+    new_output_structured = output_structured.parent / f"{safe_title}_structured_eng.md"
 
     translation_workflowy = Utils.markdown_to_workflowy(translated_text)
     
     # 3. 結合
-    # - 本のタイトル
-    #   - summary_workflowy (Book Summary)
-    #   - translation_workflowy (Chapters -> Chapter Summary & Body)
-    
     # インデント調整
     summary_section = "\n".join(["    " + line for line in summary_workflowy.splitlines()])
     translation_section = "\n".join(["    " + line for line in translation_workflowy.splitlines()])
     
-    final_content = f"- {title}\n{summary_section}\n{translation_section}"
-    Utils.write_text_file(output_final, final_content)
+    final_content = f"- {raw_title}\n{summary_section}\n{translation_section}"
+    Utils.write_text_file(new_output_final, final_content)
     
+    # すでに作成されているファイルをリネーム
+    try:
+        if output_summary.exists() and output_summary != new_output_summary:
+            if new_output_summary.exists():
+                new_output_summary.unlink()
+            output_summary.rename(new_output_summary)
+        if output_structured.exists() and output_structured != new_output_structured:
+            if new_output_structured.exists():
+                new_output_structured.unlink()
+            output_structured.rename(new_output_structured)
+    except Exception as e:
+        print(f"\n[Warning] ファイルのリネーム中にエラーが発生しました: {e}")
+
     print_progress("Phase 4: 処理完了!", 100)
     print("\n" + "=" * 60)
     print(f"成果物が生成されました:")
-    print(f"  - 最終出力 (Workflowy形式): {output_final}")
-    print(f"  - 要約ファイル: {output_summary}")
-    print(f"  - 英語構造化ファイル: {output_structured}")
+    print(f"  - 最終出力 (Workflowy形式): {new_output_final}")
+    print(f"  - 要約ファイル: {new_output_summary}")
+    print(f"  - 英語構造化ファイル: {new_output_structured}")
     print("=" * 60)
 
 

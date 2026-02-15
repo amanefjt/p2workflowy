@@ -1,18 +1,17 @@
-# 実装計画: GitHubリポジトリの更新
+# Implementation Plan - GitHub Repository Update
 
-現在の作業内容（チャンク分割精度の向上、書籍モードの改善、UIの日本語化、ドキュメント整備など）をGitHubに反映します。
+GitHubリポジトリの最新化（Commit & Push）を行います。
 
-## 完了の定義 (DoD)
-- [ ] 変更されたすべてのファイル（新規追加、削除を含む）がコミットされていること
-- [ ] リモートリポジトリ（origin/master）にプッシュされており、GitHub上で反映が確認できること
-- [ ] リビングドキュメント（`requirements_log.md`, `troubleshooting_log.md`）が最新の状態に更新されていること
+## 目的
+- 最近の変更（Paper Modeの修正、Book Modeの改善、プロンプトの調整など）をGitHubに反映する。
 
-## タスクリスト
-1. [ ] 変更内容の最終確認（`git status`, `git diff`）
-2. [ ] すべての変更をステージング（新規ファイル `docs/manual.md`, `tests/` も含む）
-3. [ ] 日本語で詳細なコミットメッセージを作成し、コミットを実行
-4. [ ] リモートへプッシュ
-5. [ ] `requirements_log.md` と `troubleshooting_log.md` の更新
+## タスク
+- [ ] 変更内容の確認 (`git status`, `git diff`)
+- [ ] リビングドキュメント (`requirements_log.md`, `troubleshooting_log.md`) の更新
+- [ ] 変更内容のステージング (`git add`)
+- [ ] コミットメッセージの作成と実行 (`git commit`)
+- [ ] リモートへのプッシュ (`git push`)
 
-## 影響範囲
-- プロジェクト全体のソースコード、設定、およびドキュメント
+## 完了定義 (DoD)
+- ローカルの変更がすべてGitHubの `master` ブランチに反映されていること。
+- `git status` でクリーンな状態であること。

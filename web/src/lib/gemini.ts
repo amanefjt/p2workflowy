@@ -6,8 +6,10 @@ import {
     SUMMARY_PROMPT,
     TRANSLATION_PROMPT,
     BOOK_SUMMARY_PROMPT,
+    BOOK_CHAPTER_SUMMARY_PROMPT,
     BOOK_STRUCTURING_PROMPT,
     BOOK_TRANSLATION_PROMPT,
+    BOOK_TRANSLATION_PROMPT_SIMPLE,
     TOC_ANALYSIS_PROMPT
 } from './constants';
 
@@ -98,6 +100,14 @@ export class GeminiService {
         return response.text();
     }
 
+    /** Phase 4: Generate chapter-level summary */
+    async generateChapterSummary(chapterText: string): Promise<string> {
+        const prompt = BOOK_CHAPTER_SUMMARY_PROMPT.replace('{text}', chapterText);
+        const result = await this.model.generateContent(prompt);
+        const response = await result.response;
+        return response.text();
+    }
+
     /** Phase 5: Translate a book chapter with full context */
     async translateBookChapter(
         bookSummary: string,
@@ -106,6 +116,23 @@ export class GeminiService {
         glossary: string
     ): Promise<string> {
         const prompt = BOOK_TRANSLATION_PROMPT
+            .replace('{overall_summary}', bookSummary)
+            .replace('{chapter_summary}', chapterSummary)
+            .replace('{glossary_content}', glossary)
+            .replace('{chunk_text}', chapterText);
+        const result = await this.model.generateContent(prompt);
+        const response = await result.response;
+        return response.text();
+    }
+
+    /** Phase 5 (Simple): Translate without structuring, using summary as context */
+    async translateBookChapterSimple(
+        bookSummary: string,
+        chapterSummary: string,
+        chapterText: string,
+        glossary: string
+    ): Promise<string> {
+        const prompt = BOOK_TRANSLATION_PROMPT_SIMPLE
             .replace('{overall_summary}', bookSummary)
             .replace('{chapter_summary}', chapterSummary)
             .replace('{glossary_content}', glossary)

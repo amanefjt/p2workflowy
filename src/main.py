@@ -58,7 +58,22 @@ async def main():
         print("2. 書籍モード (Book Mode) - 100ページ超の書籍に最適")
         mode_input = input("選択 (1/2): ").strip()
     
-    mode = "book" if mode_input == "2" else "paper"
+    is_simple = "--simple" in sys.argv or "--simple" in mode_input
+    mode = "book" if "2" in mode_input or "book" in mode_input else "paper"
+    
+    # プログラミングモード（通常 vs 簡易）の選択 (フラグがない場合)
+    if not is_simple:
+        print("\n処理モードを選択してください:")
+        print("1. 通常処理 (Normal) - 構造分析を行い、文脈を重視した翻訳（推奨）")
+        print("2. 簡易処理 (Simple) - 構造分析をスキップし、逐次翻訳（ハルシネーション対策）")
+        proc_input = input("選択 (1/2): ").strip()
+        if proc_input == "2":
+            is_simple = True
+    
+    if is_simple:
+        print("簡易処理モード (Simple Mode) で実行します。")
+    else:
+        print("通常処理モード (Normal Mode) で実行します。")
     
     output_final = input_file.parent / f"{input_file.stem}_output.txt"
     output_summary = inter_dir / f"{input_file.stem}_summary.txt"
@@ -81,24 +96,28 @@ async def main():
     glossary_text = Utils.load_glossary(glossary_file) if glossary_file.exists() else ""
 
     if mode == "paper":
-        await _process_paper(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final)
+        await _process_paper(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final, is_simple=is_simple)
     else:
-        await _process_book(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final, inter_dir)
+        await _process_book(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final, inter_dir, is_simple=is_simple)
 
-async def _process_paper(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final):
+async def _process_paper(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final, is_simple=False):
     print_progress("Phase 1 (論文): 原文から意味的な構造を把握中...", 10)
-    summary_text = await skills.summarize_raw_text(
+    summary_text = await skills.summarize_paper(
         raw_text,
         progress_callback=lambda msg: print_progress(f"Phase 1: {msg}")
     )
     Utils.write_text_file(output_summary, summary_text)
 
-    print_progress("Phase 2 (論文): 構造を復元中...", 30)
-    structured_md = await skills.structure_text_with_hint(
-        raw_text,
-        summary_text,
-        progress_callback=lambda msg: print_progress(f"Phase 2: {msg}")
-    )
+    if is_simple:
+        print_progress("Phase 2 (論文): 構造分析をスキップ中 (Simple Mode)...", 30)
+        structured_md = raw_text
+    else:
+        print_progress("Phase 2 (論文): 構造を復元中...", 30)
+        structured_md = await skills.structure_text_with_hint(
+            raw_text,
+            summary_text,
+            progress_callback=lambda msg: print_progress(f"Phase 2: {msg}")
+        )
     Utils.write_text_file(output_structured, structured_md)
 
     print_progress("Phase 3 (論文): 並列翻訳中...", 60)
@@ -106,13 +125,14 @@ async def _process_paper(skills, raw_text, glossary_text, input_file, output_sum
         structured_md,
         glossary_text,
         summary_context=summary_text,
+        is_simple=is_simple,
         progress_callback=lambda msg: print_progress(f"Phase 3: {msg}")
     )
 
     print_progress("Phase 4: 成果物を統合中...", 90)
     await _assemble_workflowy(input_file, summary_text, translated_text, structured_md, output_final, output_summary, output_structured)
 
-async def _process_book(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final, inter_dir):
+async def _process_book(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final, inter_dir, is_simple=False):
     # Phase 1: TOC Analysis (構造のみ、要約は含まない)
     print_progress("Phase 1 (書籍): 全文を読み込み、目次とアンカーを分析中 (TOC抽出)...", 10)
     
@@ -163,19 +183,37 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
     chapters_dir.mkdir(exist_ok=True, parents=True)
     print(f"  => 中間ファイルを保存中: {chapters_dir}")
     
+    chapter_metadata = []
     for i, chapter in enumerate(processed_chapters):
         # ファイル名に使えない文字を除去
         safe_title = re.sub(r'[\\/*?:"<>|]', "", chapter.get("title", "unknown"))
         safe_title = safe_title.replace(" ", "_").strip()
         filename = f"chap{i+1:03d}_{safe_title}.txt"
-        Utils.write_text_file(chapters_dir / filename, chapter.get("text", ""))
+        save_path = chapters_dir / filename
+        Utils.write_text_file(save_path, chapter.get("text", ""))
+        
+        # メモリ節約のため、テキストパスとタイトルだけの軽量なリストを作成
+        chapter_metadata.append({
+            "idx": i,
+            "title": chapter.get("title"),
+            "path": save_path
+        })
+
+    # メモリ解放
+    del processed_chapters
+    import gc
+    gc.collect()
 
     # Phase 3: Per-Chapter Processing
-    print_progress("Phase 3 (書籍): 各章の並列処理を開始...", 30)
+    print_progress("Phase 3 (書籍): 各章の並列処理を開始 (Disk-based)...", 30)
     
-    async def process_single_chapter(chapter_idx, chapter_info):
-        chapter_title = chapter_info.get("title", "Unknown Chapter")
-        chapter_text = chapter_info.get("text", "")
+    async def process_single_chapter(meta):
+        chapter_title = meta.get("title", "Unknown Chapter")
+        chapter_path = meta.get("path")
+        chapter_idx = meta.get("idx")
+        
+        # ディスクからテキストを読み込む
+        chapter_text = Utils.read_text_file(chapter_path)
         
         # 1. 除外キーワードチェック (Contributorsなど)
         title_lower = chapter_title.lower()
@@ -192,29 +230,38 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
         print(f"  Summarizing {chapter_title}...")
         chapter_summary = await skills.summarize_chapter(chapter_text)
 
+        # 要約をファイルに保存 (User Request)
+        summary_filename = f"chap{chapter_idx+1:03d}_summary.txt"
+        summary_path = inter_dir / "chapters" / summary_filename
+        try:
+            Utils.write_text_file(summary_path, chapter_summary)
+        except Exception as e:
+            print(f"  [Warning] Failed to save summary file: {e}")
+
         # 構造化テキストのキャッシュ処理 (高速化・再開用)
-        # ファイル名生成 (main loopとロジックを共有するか、ここで再生成するか)
-        # ここで生成する方が安全
         safe_title = re.sub(r'[\\/*?:"<>|]', "", chapter_title)
         safe_title = safe_title.replace(" ", "_").strip()
-        # 既存の chapters_dir はスコープ外なので取得が必要
-        # ただし chapters_dir はローカル変数。
-        # 簡易的に inter_dir から再構築
-        cache_dir = inter_dir / "chapters"
+        
+        cache_dir = inter_dir / "chapters" # 再定義 (async closure内)
         cache_filename = f"chap{chapter_idx+1:03d}_{safe_title}_structured.md"
         cache_path = cache_dir / cache_filename
         
         clean_chapter = ""
         # ユーザー要望により、既存 fileがあっても再利用せず、常に新規生成して上書き保存する
-        print(f"  Structuring {chapter_title}...")
-        clean_chapter = await skills.structure_chapter(overall_summary, chapter_text, chapter_summary=chapter_summary, chapter_title=chapter_title)
+        if is_simple:
+            print(f"  Skipping structuring for {chapter_title} (Simple Mode)...")
+            clean_chapter = chapter_text
+        else:
+            print(f"  Structuring {chapter_title}...")
+            clean_chapter = await skills.structure_chapter(overall_summary, chapter_text, chapter_summary=chapter_summary, chapter_title=chapter_title)
+        
         try:
             Utils.write_text_file(cache_path, clean_chapter)
         except Exception as e:
             print(f"  [Warning] Failed to save structure cache: {e}")
 
         print(f"  Translating {chapter_title}...")
-        translated_chapter = await skills.translate_chapter(overall_summary, chapter_summary, clean_chapter, glossary_text)
+        translated_chapter = await skills.translate_chapter(overall_summary, chapter_summary, clean_chapter, glossary_text, is_simple=is_simple)
         
         print(f"  ✓ Completed {chapter_title}")
         return {
@@ -225,7 +272,7 @@ async def _process_book(skills, raw_text, glossary_text, input_file, output_summ
         }
 
     # 全章を並列で実行
-    tasks = [process_single_chapter(i, c) for i, c in enumerate(processed_chapters)]
+    tasks = [process_single_chapter(m) for m in chapter_metadata]
     results = await asyncio.gather(*tasks)
     print("\n✓ Phase 3: 全ての並列処理が完了しました。")
 

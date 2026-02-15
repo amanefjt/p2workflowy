@@ -5,7 +5,8 @@ from .constants import (
     STRUCTURING_WITH_HINT_PROMPT, SUMMARY_PROMPT, TRANSLATION_PROMPT, 
     MAX_TRANSLATION_CHUNK_SIZE,
     BOOK_STRUCTURE_PROMPT, BOOK_SUMMARY_PROMPT, BOOK_CHAPTER_SUMMARY_PROMPT, 
-    BOOK_STRUCTURING_PROMPT, BOOK_TRANSLATION_PROMPT
+    BOOK_STRUCTURING_PROMPT, BOOK_TRANSLATION_PROMPT, BOOK_TRANSLATION_PROMPT_SIMPLE,
+    PAPER_TRANSLATION_PROMPT_SIMPLE
 )
 from .llm_processor import LLMProcessor
 from .utils import Utils
@@ -13,6 +14,13 @@ from .utils import Utils
 class PaperProcessorSkills:
     def __init__(self):
         self.llm = LLMProcessor()
+
+    async def summarize_paper(self, raw_text: str, progress_callback=None) -> str:
+        """
+        SUMMARY_PROMPT を使って論文の要約を生成する
+        """
+        prompt = SUMMARY_PROMPT.replace("{text}", raw_text)
+        return await asyncio.to_thread(self.llm.call_api, prompt, progress_callback)
 
     # --- Book Mode Skills ---
 
@@ -359,15 +367,15 @@ class PaperProcessorSkills:
         def create_prompt(chunk, index):
             # Book Mode Prompt (Strict Rules)
             # prompts.json の BOOK_STRUCTURING_PROMPT に合わせた引数を渡す
+            # chapter_summary は使用しない（ハルシネーション防止）
             return BOOK_STRUCTURING_PROMPT.format(
-                chapter_summary=chapter_summary,
                 title=chapter_title,
                 raw_text=chunk
             )
         
         return await self._structure_text_chunked(chapter_text, create_prompt, chunk_size=20000, progress_callback=progress_callback)
 
-    async def translate_chapter(self, overall_summary: str, chapter_summary: str, chapter_text: str, glossary_text: str = "", progress_callback=None) -> str:
+    async def translate_chapter(self, overall_summary: str, chapter_summary: str, chapter_text: str, glossary_text: str = "", is_simple: bool = False, progress_callback=None) -> str:
         """
         特定の章を、全体文脈と章の要約を踏まえて翻訳する
         """
@@ -386,7 +394,8 @@ class PaperProcessorSkills:
                 # replaceチェーンではなく、明示的にキーを指定して置換する
                 # (formatメソッドだと中括弧のエスケープが必要になるため、replaceの方が安全な場合もあるが、
                 # ここではtranslate_academicに合わせて明示的なキー置換を行う)
-                prompt = BOOK_TRANSLATION_PROMPT.replace("{overall_summary}", overall_summary) \
+                base_prompt = BOOK_TRANSLATION_PROMPT_SIMPLE if is_simple else BOOK_TRANSLATION_PROMPT
+                prompt = base_prompt.replace("{overall_summary}", overall_summary) \
                                               .replace("{chapter_summary}", chapter_summary) \
                                               .replace("{glossary_content}", glossary_text) \
                                               .replace("{chunk_text}", chunk)
@@ -506,7 +515,7 @@ class PaperProcessorSkills:
         print(f"  → {len(chunks)} 個のチャンクに分割完了")
         return chunks
 
-    async def translate_academic(self, clean_markdown: str, glossary_text: str = "", summary_context: str = "", progress_callback=None) -> str:
+    async def translate_academic(self, clean_markdown: str, glossary_text: str = "", summary_context: str = "", is_simple: bool = False, progress_callback=None) -> str:
         """
         【Phase 3】Markdownをセクションごとに分割し、並列翻訳する
         """
@@ -515,13 +524,17 @@ class PaperProcessorSkills:
         
         # 2. タスク作成
         tasks = []
+        # プロンプトの切り替え
+        base_prompt = PAPER_TRANSLATION_PROMPT_SIMPLE if is_simple else TRANSLATION_PROMPT
+
         for chunk in chunks:
             if not chunk.strip():
                 continue
             
             try:
                 # プロンプトの変数を埋め込む
-                prompt = TRANSLATION_PROMPT.format(
+                # formatメソッドを使用 (PAPER_TRANSLATION_PROMPT_SIMPLEもキーは同じに設計)
+                prompt = base_prompt.format(
                     summary_content=summary_context,  # 要約
                     chunk_text=chunk,                 # 翻訳対象のセクション
                     glossary_content=glossary_text    # 辞書

@@ -19,6 +19,7 @@ function App() {
     const [inputMode, setInputMode] = useState<'file' | 'text'>('file');
     const [directText, setDirectText] = useState<string>('');
     const [docType, setDocType] = useState<'paper' | 'book'>('paper');
+    const [bookSubMode, setBookSubMode] = useState<'normal' | 'simple'>('normal');
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -121,6 +122,11 @@ function App() {
                 const structuredChapters: string[] = await batchProcess(
                     chapters,
                     async (chapter: ChapterData, _idx) => {
+                        // Simple Modeの場合は構造化をスキップ
+                        if (bookSubMode === 'simple') {
+                            return chapter.raw_text;
+                        }
+
                         try {
                             const result = await gemini.structureChapter(
                                 `Current Chapter: ${chapter.title}\nSection Type: ${chapter.section_type || 'body'}`,
@@ -137,7 +143,7 @@ function App() {
                     },
                     BATCH_CONCURRENCY
                 );
-                console.log(`[Book Mode] Phase 2 完了: 全章の構造化完了`);
+                console.log(`[Book Mode] Phase 2 完了: 全章の構造化完了 (SimpleMode: ${bookSubMode === 'simple'})`);
 
                 // --- Phase 3: Book-Level Summarization ---
                 setProgress('Phase 3/6: 書籍全体の要約を作成中...');
@@ -153,7 +159,7 @@ function App() {
                     structuredChapters,
                     async (structuredChapter, _idx) => {
                         try {
-                            const result = await gemini.generateSummary(structuredChapter);
+                            const result = await gemini.generateChapterSummary(structuredChapter);
                             completedP4++;
                             setProgress(`Phase 4/6: 章ごとの要約中 (${completedP4}/${chapters.length})...`);
                             return result;
@@ -175,12 +181,24 @@ function App() {
                     structuredChapters,
                     async (structuredChapter, idx) => {
                         try {
-                            const result = await gemini.translateBookChapter(
-                                bookSummary,
-                                chapterSummaries[idx],
-                                structuredChapter,
-                                glossaryContent
-                            );
+                            // Phase 5: Translation
+                            let result: string;
+                            if (bookSubMode === 'simple') {
+                                result = await gemini.translateBookChapterSimple(
+                                    bookSummary,
+                                    chapterSummaries[idx],
+                                    structuredChapter,
+                                    glossaryContent
+                                );
+                            } else {
+                                result = await gemini.translateBookChapter(
+                                    bookSummary,
+                                    chapterSummaries[idx],
+                                    structuredChapter,
+                                    glossaryContent
+                                );
+                            }
+
                             completedP5++;
                             setProgress(`Phase 5/6: 翻訳中 (${completedP5}/${chapters.length})...`);
                             // Apply hallucination prevention to each chapter translation
@@ -401,6 +419,26 @@ function App() {
                                     書籍モード
                                 </button>
                             </div>
+
+                            {/* Book Sub-Mode Toggle */}
+                            {docType === 'book' && (
+                                <div className="flex bg-amber-50 p-1 rounded-lg border border-amber-100 animate-in fade-in slide-in-from-left-4 duration-300">
+                                    <button
+                                        onClick={() => setBookSubMode('normal')}
+                                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${bookSubMode === 'normal' ? 'bg-white text-amber-700 shadow-sm' : 'text-amber-600/70 hover:text-amber-800'}`}
+                                        title="既存のロジック: 構造化 + 要約 + 翻訳"
+                                    >
+                                        通常処理
+                                    </button>
+                                    <button
+                                        onClick={() => setBookSubMode('simple')}
+                                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${bookSubMode === 'simple' ? 'bg-white text-amber-700 shadow-sm' : 'text-amber-600/70 hover:text-amber-800'}`}
+                                        title="新規ロジック: 構造化なし + 要約 + ベタ打ち翻訳 (ハルシネーション低減)"
+                                    >
+                                        簡易処理
+                                    </button>
+                                </div>
+                            )}
                             {docType === 'book' && (
                                 <p className="text-[10px] text-amber-600 font-medium animate-pulse">
                                     ※書籍モードは現在やや不安定です

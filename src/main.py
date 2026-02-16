@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-p2workflowy - 英語論文・書籍処理プログラム
+p2workflowy - 英語論文処理プログラム (Agentic Skills版)
 """
-import os
 import sys
-import time
-import re
 import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
@@ -15,7 +12,6 @@ load_dotenv()
 
 from .skills import PaperProcessorSkills
 from .utils import Utils
-from .constants import EXCLUDE_SECTION_KEYWORDS
 
 
 def print_progress(message: str, percentage: int | None = None) -> None:
@@ -27,347 +23,140 @@ def print_progress(message: str, percentage: int | None = None) -> None:
 
 
 async def main():
-    """メイン処理パイプライン"""
+    """メイン処理パイプライン (Summary-First Approach)"""
+    # パス設定
     project_dir = Path(__file__).parent.parent
     glossary_file = project_dir / "glossary.csv"
     inter_dir = project_dir / "intermediate"
     output_dir = project_dir / "output"
     
+    # 引数またはユーザー入力から入力ファイルを取得
     if len(sys.argv) > 1:
         input_path_str = sys.argv[1]
     else:
         print("\n" + "=" * 60)
-        print("処理するテキストファイル（.txt）のパスを入力してください。")
+        print("処理する論文のテキストファイル（.txt）のパスを入力してください。")
+        print("例: /Users/username/Downloads/paper.txt")
         print("=" * 60)
         input_path_str = input("ファイルパス: ").strip()
     
+    # 引用符（ドラッグ&ドロップで付く場合がある）を削除
     input_path_str = input_path_str.strip("'\"")
     input_file = Path(input_path_str)
-
+    
+    # 入力ファイルの確認
     if not input_file.exists():
         print(f"エラー: 入力ファイルが見つかりません: {input_file}")
         sys.exit(1)
-
-    # モード選択
-    if len(sys.argv) > 2:
-        mode_input = sys.argv[2]
-        print(f"モード選択 (引数): {mode_input}")
-    else:
-        print("\nモードを選択してください:")
-        print("1. 論文モード (Paper Mode) - 数十ページ程度の論文に最適")
-        print("2. 書籍モード (Book Mode) - 100ページ超の書籍に最適")
-        mode_input = input("選択 (1/2): ").strip()
-    
-    is_simple = "--simple" in sys.argv or "--simple" in mode_input
-    mode = "book" if "2" in mode_input or "book" in mode_input else "paper"
-    
-    # プログラミングモード（通常 vs 簡易）の選択 (フラグがない場合)
-    if not is_simple:
-        print("\n処理モードを選択してください:")
-        print("1. 通常処理 (Normal) - 構造分析を行い、文脈を重視した翻訳（推奨）")
-        print("2. 簡易処理 (Simple) - 構造分析をスキップし、逐次翻訳（ハルシネーション対策）")
-        proc_input = input("選択 (1/2): ").strip()
-        if proc_input == "2":
-            is_simple = True
-    
-    if is_simple:
-        print("簡易処理モード (Simple Mode) で実行します。")
-    else:
-        print("通常処理モード (Normal Mode) で実行します。")
-    
+        
+    # 出力ファイルの設定
     output_final = input_file.parent / f"{input_file.stem}_output.txt"
-    output_summary = inter_dir / f"{input_file.stem}_summary.txt"
     output_structured = input_file.parent / f"{input_file.stem}_structured_eng.md"
     
+    # ディレクトリ作成（中間ファイル用は維持）
     inter_dir.mkdir(exist_ok=True)
     output_dir.mkdir(exist_ok=True)
     
     print("=" * 60)
-    print(f"p2workflowy - {'Book' if mode == 'book' else 'Paper'} Processing Mode")
+    print("p2workflowy - Summary-First Sequential Pipeline")
     print("=" * 60)
     
+    # スキルとユーティリティの初期化
     try:
+        # constants.py で定義された DEFAULT_MODEL (gemini-3-flash-preview) を使用
         skills = PaperProcessorSkills()
     except ValueError as e:
         print(f"\nエラー: {e}")
         sys.exit(1)
 
+    # Step 1: Load Input & Glossary
     raw_text = Utils.read_text_file(input_file)
     glossary_text = Utils.load_glossary(glossary_file) if glossary_file.exists() else ""
 
-    if mode == "paper":
-        await _process_paper(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final, is_simple=is_simple)
-    else:
-        await _process_book(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final, inter_dir, is_simple=is_simple)
-
-async def _process_paper(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final, is_simple=False):
-    print_progress("Phase 1 (論文): 原文から意味的な構造を把握中...", 10)
-    summary_text = await skills.summarize_paper(
+    # Phase 1: Semantic Mapping (レジュメ生成)
+    print_progress("Phase 1: 原文から意味的な構造（レジュメ）を把握中...", 10)
+    resume_text = await skills.generate_resume(
         raw_text,
         progress_callback=lambda msg: print_progress(f"Phase 1: {msg}")
     )
-    Utils.write_text_file(output_summary, summary_text)
+    # レジュメは内部用および最終成果物(Workflowy)への統合用として使用
+    print_progress("Phase 1: レジュメ生成完了", 30)
 
-    if is_simple:
-        print_progress("Phase 2 (論文): 構造分析をスキップ中 (Simple Mode)...", 30)
-        structured_md = raw_text
-    else:
-        print_progress("Phase 2 (論文): 構造を復元中...", 30)
+    # Phase 2: Anchored Structuring (構造化)
+    print_progress("Phase 2: レジュメをガイドにして原文の構造を復元中...", 30)
+    try:
+        # レジュメからセクション見出しのみを抽出してヒントにする（効率化）
+        structure_hint = Utils.extract_structure_from_resume(resume_text)
+        
         structured_md = await skills.structure_text_with_hint(
             raw_text,
-            summary_text,
+            structure_hint,
             progress_callback=lambda msg: print_progress(f"Phase 2: {msg}")
         )
-    Utils.write_text_file(output_structured, structured_md)
+        Utils.write_text_file(output_structured, structured_md)
+        print_progress("Phase 2: 構造化完了", 50)
+    except Exception as e:
+        print(f"\nエラー: 構造化に失敗しました: {e}")
+        sys.exit(1)
 
-    print_progress("Phase 3 (論文): 並列翻訳中...", 60)
-    translated_text = await skills.translate_academic(
-        structured_md,
-        glossary_text,
-        summary_context=summary_text,
-        is_simple=is_simple,
-        progress_callback=lambda msg: print_progress(f"Phase 3: {msg}")
-    )
-
-    print_progress("Phase 4: 成果物を統合中...", 90)
-    await _assemble_workflowy(input_file, summary_text, translated_text, structured_md, output_final, output_summary, output_structured)
-
-async def _process_book(skills, raw_text, glossary_text, input_file, output_summary, output_structured, output_final, inter_dir, is_simple=False):
-    # Phase 1: TOC Analysis (構造のみ、要約は含まない)
-    print_progress("Phase 1 (書籍): 全文を読み込み、目次とアンカーを分析中 (TOC抽出)...", 10)
-    
+    # Phase 3: Contextual Translation (並列翻訳)
+    print_progress("Phase 3: 文脈を考慮した並列翻訳を実施中...", 50)
     try:
-        structure_data = await skills.analyze_book_structure(
-            raw_text,
-            progress_callback=lambda msg: print_progress(f"Phase 1: {msg}")
+        translated_text = await skills.translate_academic(
+            structured_md,
+            glossary_text,
+            summary_context=resume_text,
+            progress_callback=lambda msg: print_progress(f"Phase 3: {msg}")
         )
+        print_progress("Phase 3: 翻訳完了", 90)
     except Exception as e:
-        print_progress(f"Error: 目次分析に失敗しました: {e}")
-        return
+        print(f"\nエラー: 翻訳に失敗しました: {e}")
+        sys.exit(1)
 
-    chapters_toc = structure_data.get("chapters", [])
-    print(f"\n  => {len(chapters_toc)} 個の章を検出しました。")
-
-    # TOC を toc.txt として保存
-    inter_dir.mkdir(exist_ok=True, parents=True)
-    toc_lines = [f"{i+1}. {item.get('title', 'Unknown')}" for i, item in enumerate(chapters_toc)]
-    toc_save_path = inter_dir / "toc.txt"
-    Utils.write_text_file(toc_save_path, "\n".join(toc_lines))
-    print(f"  => TOC を保存しました: {toc_save_path}")
-
-    # Phase 1.5: Book-Level Summary (BOOK_SUMMARY_PROMPT で独立生成)
-    print_progress("Phase 1.5 (書籍): 書籍全体の要約を生成中...", 15)
-    overall_summary = await skills.generate_book_summary(
-        raw_text,
-        progress_callback=lambda msg: print_progress(f"Phase 1.5: {msg}")
-    )
-
-    # 目次情報 + 全体要約の保存
-    toc_text = "\n".join([f"- {item.get('title')}" for item in chapters_toc])
-    Utils.write_text_file(output_summary, f"# Book Summary\n{overall_summary}\n\n# Generated TOC\n{toc_text}")
-
-    # Phase 2: Deterministic Splitting
-    print_progress("Phase 2 (書籍): アンカー検索による分割を実行中 (Cut)...", 20)
+    # Phase 4: Assembly (結合)
+    print_progress("Phase 4: 成果物を統合中...", 90)
     
-    # split_by_anchors は [{"title":..., "text":...}, ...] のリストを返す
-    processed_chapters = skills.split_by_anchors(raw_text, structure_data)
+    # Workflowy形式への変換と階層調整
     
-    if not processed_chapters:
-        print("Error: テキストの分割に失敗しました（アンカーが見つかりませんでした）。")
-        return
+    # レジュメの処理
+    # LLMが生成したMarkdown形式のレジュメをWorkflowy形式に変換
+    resume_workflowy = Utils.markdown_to_workflowy(resume_text)
+    # インデントを追加 (ルートの下にぶら下げるため、2スペースずつ下げる。内容は4スペースから開始)
+    resume_section = "  - レジュメ (Resume)\n" + "\n".join(["    " + line for line in resume_workflowy.splitlines()])
 
-    print(f"  => {len(processed_chapters)} 個のチャンクに分割されました。")
-    
-    # 中間ファイルの保存 (User Request)
-    chapters_dir = inter_dir / "chapters"
-    chapters_dir.mkdir(exist_ok=True, parents=True)
-    print(f"  => 中間ファイルを保存中: {chapters_dir}")
-    
-    chapter_metadata = []
-    for i, chapter in enumerate(processed_chapters):
-        # ファイル名に使えない文字を除去
-        safe_title = re.sub(r'[\\/*?:"<>|]', "", chapter.get("title", "unknown"))
-        safe_title = safe_title.replace(" ", "_").strip()
-        filename = f"chap{i+1:03d}_{safe_title}.txt"
-        save_path = chapters_dir / filename
-        Utils.write_text_file(save_path, chapter.get("text", ""))
-        
-        # メモリ節約のため、テキストパスとタイトルだけの軽量なリストを作成
-        chapter_metadata.append({
-            "idx": i,
-            "title": chapter.get("title"),
-            "path": save_path
-        })
-
-    # メモリ解放
-    del processed_chapters
-    import gc
-    gc.collect()
-
-    # Phase 3: Per-Chapter Processing
-    print_progress("Phase 3 (書籍): 各章の並列処理を開始 (Disk-based)...", 30)
-    
-    async def process_single_chapter(meta):
-        chapter_title = meta.get("title", "Unknown Chapter")
-        chapter_path = meta.get("path")
-        chapter_idx = meta.get("idx")
-        
-        # ディスクからテキストを読み込む
-        chapter_text = Utils.read_text_file(chapter_path)
-        
-        # 1. 除外キーワードチェック (Contributorsなど)
-        title_lower = chapter_title.lower()
-        if any(kw in title_lower for kw in EXCLUDE_SECTION_KEYWORDS):
-            print(f"  Skipping excluded section: {chapter_title}")
-            return None
-
-        # 2. 文量チェック (極端に短いものはスキップ)
-        if len(chapter_text) < 50:
-             print(f"  Skipping short section: {chapter_title} ({len(chapter_text)} chars)")
-             return None
-        
-        # 章要約 (BOOK_CHAPTER_SUMMARY_PROMPT, {text} placeholder)
-        print(f"  Summarizing {chapter_title}...")
-        chapter_summary = await skills.summarize_chapter(chapter_text)
-
-        # 要約をファイルに保存 (User Request)
-        summary_filename = f"chap{chapter_idx+1:03d}_summary.txt"
-        summary_path = inter_dir / "chapters" / summary_filename
-        try:
-            Utils.write_text_file(summary_path, chapter_summary)
-        except Exception as e:
-            print(f"  [Warning] Failed to save summary file: {e}")
-
-        # 構造化テキストのキャッシュ処理 (高速化・再開用)
-        safe_title = re.sub(r'[\\/*?:"<>|]', "", chapter_title)
-        safe_title = safe_title.replace(" ", "_").strip()
-        
-        cache_dir = inter_dir / "chapters" # 再定義 (async closure内)
-        cache_filename = f"chap{chapter_idx+1:03d}_{safe_title}_structured.md"
-        cache_path = cache_dir / cache_filename
-        
-        clean_chapter = ""
-        # ユーザー要望により、既存 fileがあっても再利用せず、常に新規生成して上書き保存する
-        if is_simple:
-            print(f"  Skipping structuring for {chapter_title} (Simple Mode)...")
-            clean_chapter = chapter_text
-        else:
-            print(f"  Structuring {chapter_title}...")
-            clean_chapter = await skills.structure_chapter(overall_summary, chapter_text, chapter_summary=chapter_summary, chapter_title=chapter_title)
-        
-        try:
-            Utils.write_text_file(cache_path, clean_chapter)
-        except Exception as e:
-            print(f"  [Warning] Failed to save structure cache: {e}")
-
-        print(f"  Translating {chapter_title}...")
-        translated_chapter = await skills.translate_chapter(overall_summary, chapter_summary, clean_chapter, glossary_text, is_simple=is_simple)
-        
-        print(f"  ✓ Completed {chapter_title}")
-        return {
-            "title": chapter_title, # TOC由来の正しいタイトルを維持
-            "summary": chapter_summary,
-            "clean_eng": clean_chapter,
-            "translated_jp": translated_chapter
-        }
-
-    # 全章を並列で実行
-    tasks = [process_single_chapter(m) for m in chapter_metadata]
-    results = await asyncio.gather(*tasks)
-    print("\n✓ Phase 3: 全ての並列処理が完了しました。")
-
-    # 結果を整理
-    valid_results = [r for r in results if r is not None]
-
-    # 各章の構造を構築
-    chapter_combined_list = []
-    clean_chapters_eng = []
-    
-    for res in valid_results:
-        summary = res["summary"]
-        translation = res["translated_jp"]
-        # TOC由来のタイトルを使用 (翻訳結果のタイトルよりも信頼できる)
-        final_title = res["title"]
-        
-        # 翻訳テキストからMarkdownのH1タグ(# )を除去して本文のみにする処理が必要か？
-        # 現状のプロンプトではMarkdown構造を維持させるので、H1が含まれる可能性がある。
-        # ただし、階層構造を整えるために、H1を強制的に final_title に置き換えるのが安全。
-        
-        lines = translation.splitlines()
-        content_body = translation
-        
-        # 翻訳の冒頭がH1の場合、それを削除して本文だけにする（タイトルはTOC由来のものを使うため）
-        if lines and lines[0].strip().startswith('# '):
-             content_body = "\n".join(lines[1:]).strip()
-        
-        # 章の構成
-        chapter_md = f"# {final_title}\n\n## 章レジュメ\n{summary}\n\n{content_body}"
-        chapter_combined_list.append(chapter_md)
-        clean_chapters_eng.append(res["clean_eng"])
-
-    structured_md = "\n\n".join(clean_chapters_eng)
-    Utils.write_text_file(output_structured, structured_md)
-    
-    # 章ごとの要約と翻訳を統合した Markdown
-    translated_text = "\n\n".join(chapter_combined_list)
-    
-    # Book Summary (全体要約)
-    book_summary_md = "# 書籍レジュメ\n" + overall_summary
-
-    print_progress("Phase 4: 成果物を統合中...", 95)
-    await _assemble_workflowy(input_file, book_summary_md, translated_text, structured_md, output_final, output_summary, output_structured)
-
-async def _assemble_workflowy(input_file, summary_text, translated_text, structured_md, output_final, output_summary, output_structured):
-    # 1. 要約の処理 (全体要約や章の要約が含まれる Markdown を変換)
-    # 論文モードの場合、summary_textには見出しがないため、ここで付与する
-    if not summary_text.strip().startswith("#"):
-        summary_text = "# レジュメ\n" + summary_text
-        
-    summary_workflowy = Utils.markdown_to_workflowy(summary_text)
-    
     # 2. 翻訳・タイトルの処理
+    # 構造化された英語（Phase 2の結果）からタイトルを抽出する
     eng_lines = structured_md.splitlines()
-    raw_title = input_file.stem
+    title = input_file.stem  # デフォルト
     if eng_lines and eng_lines[0].strip().startswith('# '):
-        raw_title = eng_lines[0].strip().replace('# ', '').strip()
+        title = eng_lines[0].strip().replace('# ', '').strip()
 
-    # タイトルのサニタイズ
-    safe_title = Utils.sanitize_filename(raw_title)
+    # 翻訳結果の処理
+    lines = translated_text.splitlines()
     
-    # 新しいパスを作成
-    new_output_final = output_final.parent / f"{safe_title}_output.txt"
-    new_output_summary = output_summary.parent / f"{safe_title}_summary.txt"
-    new_output_structured = output_structured.parent / f"{safe_title}_structured_eng.md"
-
-    translation_workflowy = Utils.markdown_to_workflowy(translated_text)
+    # 翻訳結果の最初の行がH1 (# タイトル) であれば、本文からは削除する
+    # (ルートには英語タイトルを使うため)
+    if lines and lines[0].strip().startswith('# '):
+        lines = lines[1:]
     
-    # 3. 結合
-    # インデント調整
-    summary_section = "\n".join(["    " + line for line in summary_workflowy.splitlines()])
-    translation_section = "\n".join(["    " + line for line in translation_workflowy.splitlines()])
+    body_text_no_title = "\n".join(lines).strip()
     
-    final_content = f"- {raw_title}\n{summary_section}\n{translation_section}"
-    Utils.write_text_file(new_output_final, final_content)
+    # 見出しレベルの正規化
+    translation_workflowy = Utils.markdown_to_workflowy(body_text_no_title)
     
-    # すでに作成されているファイルをリネーム
-    try:
-        if output_summary.exists() and output_summary != new_output_summary:
-            if new_output_summary.exists():
-                new_output_summary.unlink()
-            output_summary.rename(new_output_summary)
-        if output_structured.exists() and output_structured != new_output_structured:
-            if new_output_structured.exists():
-                new_output_structured.unlink()
-            output_structured.rename(new_output_structured)
-    except Exception as e:
-        print(f"\n[Warning] ファイルのリネーム中にエラーが発生しました: {e}")
-
+    # インデントを追加（ルートノードの下にぶら下げるため、2スペース分下げる）
+    translation_section = "\n".join(["  " + line for line in translation_workflowy.splitlines()])
+    
+    # ルートノードを英語の論文タイトルにし、その下に要約と翻訳本文を配置する
+    final_content = f"- {title}\n{resume_section}\n{translation_section}"
+    
+    Utils.write_text_file(output_final, final_content)
+    
     print_progress("Phase 4: 処理完了!", 100)
     print("\n" + "=" * 60)
     print(f"成果物が生成されました:")
-    print(f"  - 最終出力 (Workflowy形式): {new_output_final}")
-    print(f"  - 要約ファイル: {new_output_summary}")
-    print(f"  - 英語構造化ファイル: {new_output_structured}")
+    print(f"  - 最終出力 (Workflowy形式 - レジュメ含む): {output_final}")
+    print(f"  - 構造化された英語: {output_structured}")
     print("=" * 60)
 
 

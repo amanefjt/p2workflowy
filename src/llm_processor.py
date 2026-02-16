@@ -64,10 +64,12 @@ class LLMProcessor:
                     
             except Exception as e:
                 last_error = e
+                # エラーの詳細を把握しやすくする
+                error_msg = str(e)
                 if attempt < self.MAX_RETRIES - 1:
                     delay = self.BASE_DELAY * (2 ** attempt)
                     if progress_callback:
-                        progress_callback(f"リトライ中... ({attempt + 1}/{self.MAX_RETRIES})")
+                        progress_callback(f"リトライ中... ({attempt + 1}/{self.MAX_RETRIES}) - 原因: {error_msg}")
                     time.sleep(delay)
         
-        raise RuntimeError(f"API呼び出しに失敗しました: {last_error}")
+        raise RuntimeError(f"API呼び出しに失敗しました（{self.MAX_RETRIES}回試行）: {last_error}")

@@ -1,42 +1,40 @@
 ---
 name: p2workflowy パイプライン
-description: 学術論文・書籍を Workflowy 形式に変換する高度なパイプライン（v2.0）
+description: 学術論文を Workflowy 形式に変換する高度なパイプライン（v2.1）
 ---
 
-# p2workflowy パイプライン (v2.0)
+# p2workflowy パイプライン (v2.1)
 
 ## 概要
-`p2workflowy` は、PDF 等から抽出されたテキストを、AI（gemini-3-flash-preview）を使って構造化・要約・翻訳し、Workflowy へ直接貼り付け可能な形式に変換するツールです。
-v2.0では、**堅牢なチャンク処理**と**厳格なプロンプト制御**により、長文処理の安定性と精度が飛躍的に向上しました。
+`p2workflowy` は、PDF 等から抽出されたテキストを、AI（gemini-3-flash-preview）を使って「レジュメ生成」「構造化」「翻訳」を行い、Workflowy へ直接貼り付け可能な形式に変換するツールです。
 
 ## バージョン履歴
+- **v2.1 (2026-02-16)**:
+    - **Cleanup & Simplify**: 未使用の書籍モードロジックや実験的なサニタイズ処理を削除し、コードの可読性を向上。
+    - **Heading-Aware Chunking**: Markdownの見出し階層（H2, H3, H4）を考慮した意味的な分割ロジックを導入。
 - **v2.0 (2026-02-14)**:
-    - **Chunked Structuring**: Paper/Book両モードで、段落を考慮したスマートなチャンク分割 (`_split_text_by_length`) と並列構造化を導入。
-    - **Strict Prompts**: Meta-commentary（AIのひとりごと）を徹底排除する厳格なプロンプト (`STRUCTURING_WITH_HINT_PROMPT`, `BOOK_STRUCTURING_PROMPT`) を採用。
-    - **Sanitization**: 出力後の重複ヘッダーやハルシネーション（Introductionの勝手な挿入）を自動除去する `Utils` メソッドを強化。
+    - **Chunked Processing**: 全文一括処理から、並列チャンク処理への移行。
 
-## 処理モード
+## 処理フロー (Summary-First Sequential Pipeline)
 
-### 1. 論文モード (Paper Mode)
-数十ページ程度の文書向け。
-1. **Summarize**: 文書全体の要約を作成。
-2. **Structure (Chunked)**: 全文を20,000文字単位（段落考慮）で分割し、並列にMarkdown構造化。これにより後半の脱落（Attention Drift）を防ぐ。
-3. **Translate**: 構造化されたMarkdownをセクションごとに翻訳。
+### 1. Phase 1: Semantic Mapping (レジュメ生成)
+- 原文全体から、リサーチ・クエスチョン、核心的主張、各セクションの論理展開を抽出。
+- 日本語で詳細なレジュメを作成。
 
-### 2. 書籍モード (Book Mode)
-100ページ超の書籍向け。
-1. **TOC Analysis**: 目次と章の境界（アンカー）を特定。
-2. **Deterministic Splitting**: アンカーテキストを用いて物理的に章分割。
-3. **Per-Chapter Processing**:
-    - **Summarize**: 章ごとの要約。
-    - **Structure (Chunked)**: 章の内容を分割並列処理で構造化（Paper Modeと同じロジック）。
-    - **Translate**: 構造化データを基に翻訳。
-4. **Assembly**: 全章を統合。
+### 2. Phase 2: Anchored Structuring (構造化)
+- 生成されたレジュメをヒント（構造定義）として、汚い OCR テキストをきれいな Markdown に整形。
+- チャンク並列処理により、長文でも脱落なく最後まで構造化。
+
+### 3. Phase 3: Contextual Translation (並列翻訳)
+- 構造化された Markdown を、見出し階層を考慮して適切に分割。
+- `asyncio.Semaphore` による流量制御を行いながら、Gemini で高精度翻訳。
+
+### 4. Phase 4: Assembly (結合)
+- レジュメと翻訳本文を統合し、Workflowy 形式（インデント付きリスト）に変換。
 
 ## コアロジック (`src/skills.py`)
-- `_structure_text_chunked`: 共通化されたチャンク並列構造化ロジック。
-- `_split_text_by_length`: 改行・段落を考慮したスマート分割ロジック。
+- `_split_markdown_hierarchically`: 見出しレベル（H2 > H3 > H4 > 段落）に基づき、文脈を壊さずにテキストを分割する。
 
 ## 推奨設定
-- **Model**: `gemini-3-flash-preview`（高速・長文対応）
-- **Prompt Rules**: "Original English ONLY", "No Meta-commentary"
+- **Model**: `gemini-3-flash-preview`
+- **Chunk Size**: `40,000` 文字 (v2.1)

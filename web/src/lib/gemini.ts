@@ -9,7 +9,7 @@ import {
     BOOK_CHAPTER_SUMMARY_PROMPT,
     BOOK_STRUCTURING_PROMPT,
     BOOK_TRANSLATION_PROMPT,
-    BOOK_TRANSLATION_PROMPT_SIMPLE,
+    SIMPLE_TRANSLATION_PROMPT,
     TOC_ANALYSIS_PROMPT
 } from './constants';
 
@@ -127,13 +127,11 @@ export class GeminiService {
 
     /** Phase 5 (Simple): Translate without structuring, using summary as context */
     async translateBookChapterSimple(
-        bookSummary: string,
         chapterSummary: string,
         chapterText: string,
         glossary: string
     ): Promise<string> {
-        const prompt = BOOK_TRANSLATION_PROMPT_SIMPLE
-            .replace('{overall_summary}', bookSummary)
+        const prompt = SIMPLE_TRANSLATION_PROMPT
             .replace('{chapter_summary}', chapterSummary)
             .replace('{glossary_content}', glossary)
             .replace('{chunk_text}', chapterText);

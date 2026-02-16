@@ -1,76 +1,44 @@
-# p2workflowy v2.0 System Manual
+# p2workflowy v2.1 System Manual
 
 ## 1. System Overview
-**p2workflowy** is a specialized pipeline for converting academic papers (PDF/Images) and books into deep, structured Workflowy outlines.
-Version 2.0 (Feb 2026) introduces a robust, chunk-based architecture designed to handle large texts without hallucination or truncation.
+**p2workflowy** は、学術論文を Workflowy 形式の階層構造アウトラインに変換するための専門的なパイプラインツールです。
+Gemini 3 Flash の強力なロングコンテキストと処理速度を活かし、長文の論文でも精度を落とさず処理します。
 
-- **Primary Model**: `gemini-3-flash-preview` (Required for long context and speed).
+- **推奨モデル**: `gemini-3-flash-preview`
 
-## 2. Core Architecture
+## 2. コア・アーキテクチャ
 
-### 2.1 Unified Chunking Strategy (`src/skills.py`)
-Both Paper Mode and Book Mode now use a shared chunking logic to ensure consistency.
+### 2.1 階層的分割戦略 (Hierarchical Chunking)
+翻訳品質と文脈維持を両立するため、`src/skills.py` では以下の優先順位でテキストを分割します。
+1. **H2 見出し**: 章や主要セクション
+2. **H3 見出し**: 節
+3. **H4 見出し**: 項
+4. **段落 (\n\n)**: 見出しがない場合、または見出し内が長すぎる場合
 
-- **Paragraph-Aware Splitting**:
-  - The system splits text into ~20,000 character chunks.
-  - Crucially, it respects paragraph boundaries (`\n\n`) and line breaks (`\n`) to prevent cutting sentences in half.
-  - **Benefit**: Reduces AI confusion at chunk boundaries, preventing "hallucinated" headers or broken sentences.
+これにより、文の途中でテキストが切断されることを防ぎ、AIが前後の脈絡を正確に把握した状態で翻訳を行うことができます。
 
-- **Parallel Processing**:
-  - Chunks are processed in parallel (`asyncio.gather`) to maximize speed.
-  - **Semaphore**: Book Mode limits concurrency to 5 threads to avoid API rate limits.
+### 2.2 処理パイプライン (Sequential Flow)
+1. **Phase 1: レジュメ生成 (Summarize)**:
+   - 全文から論理構造を抽出し、日本語で詳細な要約を作成します。
+2. **Phase 2: 構造化 (Structure)**:
+   - レジュメの見出しをガイドにして、OCRのノイズを除去しながら英語の Markdown に整形します。
+3. **Phase 3: 並列翻訳 (Translate)**:
+   - 分割されたセクションを並列に翻訳します。同時実行数は `3` に制限されています。
+4. **Phase 4: 統合と変換 (Assembly)**:
+   - レジュメと翻訳本文を Workflowy 形式（2スペースインデント）に変換し、一つのファイルにまとめます。
 
-### 2.2 Paper Mode Flow
-1. **Summarize**: Generates a global summary.
-2. **Structure (Chunked)**: Splits the *entire* raw text into chunks and structures them in parallel.
-   - *Why?* Previous versions tried to split by summary headers, which was fragile. Full-text chunking is robust against OCR noise.
-3. **Translate**: Translates the clean Markdown section-by-section.
+## 3. プロンプト管理 (`shared/prompts.json`)
+- **STRUCTURING_WITH_HINT_PROMPT**: 構造化用。レジュメのアウトラインに沿った整形を指示。
+- **SUMMARY_PROMPT**: 日本語レジュメ用。詳細な論理展開（CoT）を要求。
+- **TRANSLATION_PROMPT**: 翻訳用。用語集（Glossary）の適用と文体の維持。
 
-### 2.3 Book Mode Flow
-1. **TOC Extraction**: Identifies chapters.
-2. **Physical Splitting**: Splits the book into chapters using "Anchor Text" matching.
-3. **Chapter Pipeline**:
-   - **Summarize**: Chapter summary.
-   - **Structure**: Uses the same **Chunked Structuring** as Paper Mode.
-   - **Translate**: Translates section-by-section using `_split_markdown_by_headers`.
+## 4. ファイル構成
+- `src/main.py`: パイプラインのエントリポイント。
+- `src/skills.py`: AI処理のコアロジック。
+- `src/utils.py`: ファイル操作、Workflowy変換、テキスト整形。
+- `src/llm_processor.py`: Gemini API との通信（リトライ・進捗通知）。
+- `shared/prompts.json`: AIへの全指示（プロンプト）。
 
-## 3. Prompt Engineering Guidelines
-
-### 3.1 Strict Output Rules
-To prevent "AI Rot" (meta-commentary, hallucinations), all prompts (`shared/prompts.json`) enforce strict rules:
-
-1.  **NO Meta-Commentary**:
-    - Forbidden: "Here is the structured text", "I removed the headers", "Final check".
-    - Rule: Start directly with content, end with content.
-2.  **Original English ONLY (Structuring)**:
-    - The Structuring phase MUST output English. Japanese output here confuses the Translation phase.
-3.  **No Redundant Headers**:
-    - The AI is forbidden from repeating the Main Title (`# Title`) inside the body.
-    - `Utils.sanitize_structured_output` programmatically removes duplicate H1s.
-
-### 3.2 Translation Rules
-- **No Self-Correction**: The AI must not say "I corrected a typo". It should just translate.
-- **Handling Inconsistencies**: If the Glossary conflicts with the text, the AI is instructed to ignore the conflict and translate, rather than reporting it.
-
-## 4. Troubleshooting & Gotchas
-
-### 4.1 "H1 Header Duplication"
-- **Symptom**: The same chapter title appears multiple times in the Workflowy output.
-- **Cause**: In parallel processing, the AI often adds the title to *every* chunk.
-- **Fix**: `Utils.sanitize_structured_output` removes all H1s after the first one.
-
-### 4.2 "Introduction" Hallucination
-- **Symptom**: `## Introduction` appears in the middle of a chapter.
-- **Cause**: The AI sees a chunk starting with a general sentence and assumes it's a new intro.
-- **Fix**: The system automatically scans for and removes `## Introduction` headers that appear after line 30.
-
-### 4.3 "Missing Sections" in Long Papers
-- **Symptom**: The output ends abruptly after page 10.
-- **Cause**: Token limit of the model or single-pass processing.
-- **Fix**: v2.0 uses **Chunked Structuring**. If parts are still missing, check `MAX_TRANSLATION_CHUNK_SIZE` in `src/skills.py` (Default: 20,000 chars).
-
-## 5. Developer Notes
-- **Testing**: Use `dummy_book.txt` for quick pipeline verification.
-- **Logs**:
-  - `docs/management/requirements_log.md`: History of feature changes.
-  - `docs/management/troubleshooting_log.md`: Database of past errors and fixes.
+## 5. 開発・運用
+- **中間ファイル**: `intermediate/` フォルダに一時的な生成物が保存されます。
+- **成果物**: `_output.txt` (Workflowy形式) および `_structured_eng.md` (英語形式) が入力ファイルと同じディレクトリに生成されます。

@@ -125,13 +125,13 @@ const escapeRegExp = (string: string): string => {
 };
 
 export const normalizeMarkdownHeadings = (markdownText: string): string => {
-    const lines = markdownText.split('\n');
-    const normalizedLines: string[] = [];
+    if (!markdownText) return markdownText;
 
-    // Find the minimum heading level used in the document
-    let minLevel = 100;
+    const lines = markdownText.split('\n');
+    let minLevel = 10;
+
     for (const line of lines) {
-        const match = line.match(/^(#+)\s/);
+        const match = line.match(/^(#{1,10})\s/);
         if (match) {
             const level = match[1].length;
             if (level < minLevel) {
@@ -140,24 +140,19 @@ export const normalizeMarkdownHeadings = (markdownText: string): string => {
         }
     }
 
-    // Return original if no headings found
-    if (minLevel === 100) {
+    if (minLevel === 10) {
         return markdownText;
     }
 
-    // Calculate offset (e.g., if min is ## (2), offset is 1 to make it # (1))
     const offset = minLevel - 1;
+    const normalizedLines: string[] = [];
 
     for (const line of lines) {
-        const match = line.match(/^(#+)\s+(.*)/);
+        const match = line.match(/^(#{1,10})\s+(.*)/);
         if (match) {
-            const originalHashes = match[1];
+            const currentLevel = match[1].length;
             const content = match[2];
-            const currentLevel = originalHashes.length;
-
-            // Correct the level (minimum 1)
             const newLevel = Math.max(1, currentLevel - offset);
-
             normalizedLines.push(`${'#'.repeat(newLevel)} ${content}`);
         } else {
             normalizedLines.push(line);
@@ -168,49 +163,45 @@ export const normalizeMarkdownHeadings = (markdownText: string): string => {
 };
 
 export const markdownToWorkflowy = (markdownText: string): string => {
+    if (!markdownText) return "";
+
     // First normalize headings
     const normalizedText = normalizeMarkdownHeadings(markdownText);
 
     const lines = normalizedText.split('\n');
     const workflowyLines: string[] = [];
-    let currentLevel = 0;
+    let currentHeaderLevel = 0;
 
     for (const line of lines) {
-        const stripped = line.trim();
-        if (!stripped) continue;
+        if (!line.trim()) continue;
 
-        // 1. Handle Headings (#) -> Convert to hierarchical list
-        if (stripped.startsWith('#')) {
-            // Count #
-            const match = stripped.match(/^(#+)/);
-            const level = match ? match[1].length - 1 : 0;
-            currentLevel = Math.max(0, level);
-            const content = stripped.replace(/^#+\s*/, '').trim();
+        // 1. Handle Headings (#) -> Convert to hierarchical list (H1-H10)
+        const headerMatch = line.trim().match(/^(#{1,10})\s+(.*)/);
+        if (headerMatch) {
+            const level = headerMatch[1].length;
+            const content = headerMatch[2];
+            currentHeaderLevel = level;
 
-            // Indent: 4 spaces per level
-            const indent = "    ".repeat(currentLevel);
-            workflowyLines.push(`${indent}- ${content}`);
+            // Indent: (level - 1) * 2 spaces
+            const indentSize = (level - 1) * 2;
+            workflowyLines.push(`${" ".repeat(indentSize)}- ${content}`);
             continue;
         }
 
         // 2. Handle List Markers (-, *, 1.)
-        const listMatch = line.match(/^(\s*)([-*]|\d+\.)\s+(.*)/);
+        const listMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)/);
         if (listMatch) {
-            const originalIndent = listMatch[1];
+            const originalIndent = listMatch[1].length;
             const content = listMatch[3];
-            const spaces = originalIndent.replace(/\t/g, '    ');
-            // Internal list depth (2 spaces = 1 level)
-            const listInternalLevel = Math.floor(spaces.length / 2);
 
-            // Nest under current heading level + 1
-            const newLevel = currentLevel + 1 + listInternalLevel;
-            const newIndent = "    ".repeat(newLevel);
-            workflowyLines.push(`${newIndent}- ${content}`);
+            // Indent: (currentHeaderLevel * 2) + originalIndent
+            const indentSize = (currentHeaderLevel * 2) + originalIndent;
+            workflowyLines.push(`${" ".repeat(indentSize)}- ${content}`);
         } else {
-            // Body text -> Nest 1 level deeper than heading
-            const bodyLevel = currentLevel + 1;
-            const newIndent = "    ".repeat(bodyLevel);
-            workflowyLines.push(`${newIndent}- ${stripped}`);
+            // Body text
+            const originalIndent = line.length - line.trimStart().length;
+            const indentSize = (currentHeaderLevel * 2) + originalIndent;
+            workflowyLines.push(`${" ".repeat(indentSize)}- ${line.trim()}`);
         }
     }
 
@@ -362,7 +353,7 @@ export const assembleBookWorkflowy = (
     const summaryWorkflowy = bookSummary
         .split('\n')
         .filter(line => line.trim())
-        .map(line => `    ${line}`)
+        .map(line => `  ${line}`)
         .join('\n');
     parts.push(`- Book Summary\n${summaryWorkflowy}`);
 
@@ -375,20 +366,20 @@ export const assembleBookWorkflowy = (
         // Convert translation markdown to workflowy format
         const translationWorkflowy = markdownToWorkflowy(translation)
             .split('\n')
-            .map(line => `        ${line}`)
+            .map(line => `    ${line}`)
             .join('\n');
 
         // Summary lines (already in workflowy "-" format from SUMMARY_PROMPT)
         const summaryLines = summary
             .split('\n')
             .filter(line => line.trim())
-            .map(line => `        ${line}`)
+            .map(line => `    ${line}`)
             .join('\n');
 
         parts.push(
             `- ${chapter.title}\n` +
-            `    - Summary\n${summaryLines}\n` +
-            `    - Translation / Body\n${translationWorkflowy}`
+            `  - Summary\n${summaryLines}\n` +
+            `  - Translation / Body\n${translationWorkflowy}`
         );
     }
 

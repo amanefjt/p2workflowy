@@ -60,18 +60,18 @@ graph TD
     end
     
     subgraph "書籍モード (Book Mode)"
-    Mode --> B1[Phase 1: 目次分析<br/>TOCと章の開始位置を特定]
-    B1 --> B15[Phase 1.5: 全体要約生成]
-    B15 --> B2[Phase 2: 章分割<br/>アンカー照合による確実な切り出し]
-    B2 --> B3[Phase 3: 各章の並列処理]
+    Mode --> B1[Phase 1: 全体レジュメ & 目次抽出]
+    B1 --> B2[Phase 2: 章分割]
+    B2 --> B3[Phase 3: 章ごとの順次処理]
     
-    subgraph "各章の内部ステップ"
-    B3 --> B3S[1. 章要約生成]
-    B3S --> B3C[2. 本文の構造化・クリーンアップ]
-    B3C --> B3T[3. 文脈を考慮した翻訳]
+    subgraph "章内処理 (Hybrid Parallelism)"
+    B3 --> B3S[1. 章レジュメ生成]
+    B3S --> B3SP[2. 節(Section)分割]
+    B3SP --> B3T[3. 各節の並列処理<br/>(構造化 + 翻訳)]
+    B3T --> B3C[4. 章統合]
     end
     
-    B3T --> B4[Phase 4: 成果物統合]
+    B3C --> B4[Phase 4: 全体統合]
     end
     
     P4 --> OUT([Workflowy形式出力])
@@ -96,6 +96,7 @@ graph TD
 1. 依存関係のインストール: `pip install -r requirements.txt`
 2. `.env` ファイルを作成し `GEMINI_API_KEY=あなたのキー` を設定
 3. 実行: `python -m src.main`
+   - 起動後、モードを選択してください: `1` (論文モード) または `2` (書籍モード)
 
 ---
 

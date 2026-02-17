@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # Summary-First Approach コーディング規約
 
 `p2workflowy` プロジェクトにおける、論文処理パイプラインの基本設計指針です。
@@ -29,4 +33,4 @@
 - ブラウザ完結型（サーバー不要）
 - BYOK (Bring Your Own Key) モデル: ユーザーが各自の Gemini API キーを入力
 - 静的サイトとして Cloudflare Pages 等で公開可能
-- UI は日本語、モデル選択は `gemini-3-flash-preview` (推奨) と `gemini-2.5-flash`
+- UI は日本語、モデル選択は `gemini-3-flash-preview` (推奨) 

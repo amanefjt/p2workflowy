@@ -30,12 +30,6 @@
 - 全体の要約を先に作成し、それをガイドにして本文を並列で高速に翻訳します。
 - 論文の構造（Introduction, Methods, Results等）を自動認識してWorkflowy形式に変換します。
 
-### 2. **書籍モード (Book Mode)**
-100ページを超えるような本格的な書籍の処理に対応した新機能です。
-- 全体の構成と目次を分析した後、章（Chapter）ごとに文脈を維持しながら、要約と翻訳を段階的に行います。
-- Gemini 3 Flash Preview の 1M コンテキストウィンドウを最大限に活用し、一貫性のある処理を実現します。
-- **⚠️ 注意**: 書籍モードは現在、開発中のβ版のため、出力の構造や精度がやや不安定な場合があります。大まかな内容把握にご利用ください。
-
 ### 3. **アカデミック翻訳 & 専門用語辞書**
 専門用語辞書（`glossary.csv`）を読み込ませることで、特定の分野に特有の用語を常に一定の訳語で翻訳できます。
 
@@ -50,32 +44,11 @@ PDFからコピー＆ペーストした際などに発生するテキストの�
 
 ```mermaid
 graph TD
-    Input[入力テキスト (.txt)] --> Mode{モード選択}
-    
-    subgraph "論文モード (Paper Mode)"
-    Mode --> P1[Phase 1: 原文要約]
+    Input[入力テキスト (.txt)] --> P1[Phase 1: 原文要約]
     P1 --> P2[Phase 2: 構造復元<br/>要約をヒントに構造を再構築]
     P2 --> P3[Phase 3: 並列翻訳<br/>セクション単位で高精度に翻訳]
     P3 --> P4[Phase 4: 成果物統合]
-    end
-    
-    subgraph "書籍モード (Book Mode)"
-    Mode --> B1[Phase 1: 全体レジュメ & 目次抽出]
-    B1 --> B2[Phase 2: 章分割]
-    B2 --> B3[Phase 3: 章ごとの順次処理]
-    
-    subgraph "章内処理 (Hybrid Parallelism)"
-    B3 --> B3S[1. 章レジュメ生成]
-    B3S --> B3SP[2. 節(Section)分割]
-    B3SP --> B3T[3. 各節の並列処理<br/>(構造化 + 翻訳)]
-    B3T --> B3C[4. 章統合]
-    end
-    
-    B3C --> B4[Phase 4: 全体統合]
-    end
-    
     P4 --> OUT([Workflowy形式出力])
-    B4 --> OUT
 ```
 
 ---
@@ -95,8 +68,7 @@ graph TD
 ### Python版のクイックスタート
 1. 依存関係のインストール: `pip install -r requirements.txt`
 2. `.env` ファイルを作成し `GEMINI_API_KEY=あなたのキー` を設定
-3. 実行: `python -m src.main`
-   - 起動後、モードを選択してください: `1` (論文モード) または `2` (書籍モード)
+3. 実行: `python -m src.main --input your_paper.txt`
 
 ---
 

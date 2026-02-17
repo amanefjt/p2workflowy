@@ -2,8 +2,8 @@ import React, { useState, useRef } from 'react';
 import { useAppSettings } from './hooks/useAppSettings';
 import { GeminiService, batchProcess } from './lib/gemini';
 import { DEFAULT_MODEL, MAX_TRANSLATION_CHUNK_SIZE } from './lib/constants';
-import { markdownToWorkflowy, splitMarkdownByHeaders, splitByAnchors, assembleBookWorkflowy, ChapterData, removeRedundantHeaders } from './lib/formatter';
-import { Book, FileText, Settings, Upload, Check, Copy, Loader2, AlertCircle, Trash2, X } from 'lucide-react';
+import { markdownToWorkflowy, splitMarkdownHierarchically, removeRedundantHeaders } from './lib/formatter';
+import { FileText, Settings, Upload, Check, Copy, Loader2, AlertCircle, Trash2, X } from 'lucide-react';
 
 /** バッチ並列の同時実行数 */
 const BATCH_CONCURRENCY = 5;
@@ -18,8 +18,6 @@ function App() {
     const [fileName, setFileName] = useState<string>('');
     const [inputMode, setInputMode] = useState<'file' | 'text'>('file');
     const [directText, setDirectText] = useState<string>('');
-    const [docType, setDocType] = useState<'paper' | 'book'>('paper');
-    const [bookSubMode, setBookSubMode] = useState<'normal' | 'simple'>('normal');
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -55,208 +53,58 @@ function App() {
             const gemini = new GeminiService(apiKey);
             const glossaryContent = dictionaries.map(d => d.content).join('\n');
 
-            if (docType === 'paper') {
-                // --- Paper Mode (既存ロジック維持) ---
-                setProgress(`AIが文書構造を解析中... (${DEFAULT_MODEL})`);
-                const rawMarkdown = await gemini.structureText(text);
+            // --- Phase 1: Resume Generation (レジュメ生成) ---
+            setProgress(`【Phase 1】レジュメを生成中... (${DEFAULT_MODEL})`);
+            // 原文から直接レジュメを作成する
+            const resumeContext = await gemini.generateResume(text);
 
-                setProgress('全体要約を作成中...');
-                const summaryContext = await gemini.generateSummary(rawMarkdown);
+            // --- Phase 2: Structuring with Hint (構造化) ---
+            setProgress('【Phase 2】レジュメをヒントに構造化中...');
+            // レジュメをヒントにしてOCRテキストを構造化する
+            const structuredMarkdown = await gemini.structureTextWithHint(text, resumeContext);
 
-                const sections = splitMarkdownByHeaders(rawMarkdown, MAX_TRANSLATION_CHUNK_SIZE);
-                setProgress(`${sections.length}セクションを並列翻訳・整形中...`);
+            // --- Phase 3: Translation (翻訳) ---
+            // 階層構造を考慮して分割
+            const sections = splitMarkdownHierarchically(structuredMarkdown, MAX_TRANSLATION_CHUNK_SIZE);
+            setProgress(`【Phase 3】${sections.length}セクションを並列翻訳中...`);
 
-                const translatedResults = await batchProcess(
-                    sections,
-                    async (section, idx) => {
-                        try {
-                            return await gemini.translateSection(section, summaryContext, glossaryContent);
-                        } catch (err) {
-                            console.error(`Error translating section ${idx}:`, err);
-                            return section + "\n\n(翻訳エラー)";
-                        }
-                    },
-                    BATCH_CONCURRENCY
-                );
+            const translatedResults = await batchProcess(
+                sections,
+                async (section, idx) => {
+                    try {
+                        return await gemini.translateSection(section, resumeContext, glossaryContent);
+                    } catch (err) {
+                        console.error(`Error translating section ${idx}:`, err);
+                        return section + "\n\n(翻訳エラー)";
+                    }
+                },
+                BATCH_CONCURRENCY
+            );
 
-                const finalMarkdown = removeRedundantHeaders(translatedResults.join('\n\n'));
+            const finalMarkdown = removeRedundantHeaders(translatedResults.join('\n\n'));
 
-                // Formatting
-                setProgress('Workflowy形式に変換中...');
-                let title = currentFileName;
-                const engLines = rawMarkdown.split('\n');
-                if (engLines.length > 0 && engLines[0].startsWith('# ')) {
-                    title = engLines[0].replace('# ', '').trim();
-                }
-
-                const lines = finalMarkdown.split('\n');
-                let bodyText = finalMarkdown;
-                if (lines.length > 0 && lines[0].startsWith('# ')) {
-                    bodyText = lines.slice(1).join('\n').trim();
-                }
-
-                const workflowyBody = markdownToWorkflowy(bodyText);
-                const nestedBody = workflowyBody.split('\n').map(line => '  ' + line).join('\n');
-
-                const summaryWorkflowy = markdownToWorkflowy(summaryContext);
-                const nestedSummary = summaryWorkflowy.split('\n').map(line => '    ' + line).join('\n');
-                const summarySection = `  - 要約 (Summary)\n${nestedSummary}`;
-
-                setResult(`- ${title}\n${summarySection}\n${nestedBody}`);
-
-            } else {
-                // ================================================
-                // === Book Mode: 6-Phase Multi-Pass Pipeline ===
-                // ================================================
-
-                // --- Phase 1: TOC Analysis (AI driven) ---
-                setProgress('Phase 1/6: 書籍構造を解析中 (AI)...');
-                const structureData = await gemini.analyzeBookStructure(text);
-                const chapters = splitByAnchors(text, structureData);
-                console.log(`[Book Mode] Phase 1 完了: ${chapters.length} 章を検出`, chapters);
-
-                if (bookSubMode === 'simple') {
-                    // ================================================
-                    // === Simple Mode: Optimized Pipeline ===
-                    // ================================================
-                    setProgress(`簡易処理中: 章の並列処理を開始 (全${chapters.length}章)...`);
-
-                    const processedChapters = await batchProcess(
-                        chapters,
-                        async (chapter: ChapterData, idx) => {
-                            try {
-                                setProgress(`簡易処理中: 章 ${idx + 1}/${chapters.length} の要約を作成中...`);
-                                // 1. Summarize
-                                const summaryText = await gemini.generateChapterSummary(chapter.raw_text);
-
-                                setProgress(`簡易処理中: 章 ${idx + 1}/${chapters.length} を翻訳中...`);
-                                // 2. Translate (Sequential to Summarize)
-                                let bodyText = await gemini.translateBookChapterSimple(
-                                    summaryText,
-                                    chapter.raw_text,
-                                    glossaryContent
-                                );
-
-                                // 3. Sanitize (Remove headers)
-                                bodyText = bodyText.replace(/^#+.*$/gm, '').trim();
-
-                                return {
-                                    title: chapter.title,
-                                    summaryText,
-                                    bodyText
-                                };
-                            } catch (err) {
-                                console.error(`Error processing chapter ${idx}:`, err);
-                                return {
-                                    title: chapter.title,
-                                    summaryText: '(要約エラー)',
-                                    bodyText: '(翻訳エラー)'
-                                };
-                            }
-                        },
-                        BATCH_CONCURRENCY
-                    );
-
-                    // Step C: Mechanical Merging (Client-side)
-                    setProgress('Workflowy形式に変換中 (機械的結合)...');
-                    const finalOutput = processedChapters.map(chap => {
-                        const summaryWorkflowy = markdownToWorkflowy(chap.summaryText)
-                            .split('\n')
-                            .map(line => '    ' + line)
-                            .join('\n');
-
-                        const bodyWorkflowy = markdownToWorkflowy(chap.bodyText)
-                            .split('\n')
-                            .map(line => '    ' + line)
-                            .join('\n');
-
-                        return `- ${chap.title}\n  - Summary\n${summaryWorkflowy}\n  - Full Text (Translation)\n${bodyWorkflowy}`;
-                    }).join("\n");
-
-                    setResult(finalOutput);
-
-                } else {
-                    // ================================================
-                    // === Normal Mode: 6-Phase Multi-Pass Pipeline ===
-                    // ================================================
-                    // --- Phase 2: Structuring (Parallel, Batch) ---
-                    let completedP2 = 0;
-                    setProgress(`Phase 2/6: 章の構造化中 (0/${chapters.length})...`);
-
-                    const structuredChapters: string[] = await batchProcess(
-                        chapters,
-                        async (chapter: ChapterData, _idx) => {
-                            try {
-                                const result = await gemini.structureChapter(
-                                    `Current Chapter: ${chapter.title}\nSection Type: ${chapter.section_type || 'body'}`,
-                                    chapter.raw_text
-                                );
-                                completedP2++;
-                                setProgress(`Phase 2/6: 章の構造化中 (${completedP2}/${chapters.length})...`);
-                                return result;
-                            } catch (err) {
-                                console.error(`[Phase 2] Error structuring chapter ${chapter.id}:`, err);
-                                completedP2++;
-                                return chapter.raw_text;
-                            }
-                        },
-                        BATCH_CONCURRENCY
-                    );
-
-                    // --- Phase 3: Book-Level Summarization ---
-                    setProgress('Phase 3/6: 書籍全体の要約を作成中...');
-                    const allStructuredText = structuredChapters.join('\n\n---\n\n');
-                    const bookSummary = await gemini.generateBookSummary(allStructuredText);
-
-                    // --- Phase 4 & 5 Combined: Chapter-Level Summarization & Translation (Parallel, Batch) ---
-                    let completedP45 = 0;
-                    setProgress(`Phase 4&5/6: 章ごとの要約・翻訳中 (0/${chapters.length})...`);
-
-                    const processedChaptersResult = await batchProcess(
-                        structuredChapters,
-                        async (structuredChapter, idx) => {
-                            try {
-                                // 1. Chapter Summary
-                                const chapterSummary = await gemini.generateChapterSummary(structuredChapter);
-
-                                // 2. Chapter Translation
-                                const translation = await gemini.translateBookChapter(
-                                    bookSummary,
-                                    chapterSummary,
-                                    structuredChapter,
-                                    glossaryContent
-                                );
-
-                                completedP45++;
-                                setProgress(`Phase 4&5/6: 章ごとの要約・翻訳中 (${completedP45}/${chapters.length})...`);
-
-                                return {
-                                    summary: chapterSummary,
-                                    translation: removeRedundantHeaders(translation)
-                                };
-                            } catch (err) {
-                                console.error(`[Phase 4&5] Error processing chapter ${idx}:`, err);
-                                completedP45++;
-                                return {
-                                    summary: '(要約エラー)',
-                                    translation: '(翻訳エラー)'
-                                };
-                            }
-                        },
-                        BATCH_CONCURRENCY
-                    );
-
-                    // --- Phase 6: Final Assembly ---
-                    setProgress('Phase 6/6: 最終組立中 (WorkFlowy形式)...');
-                    const finalResult = assembleBookWorkflowy(
-                        bookSummary,
-                        chapters,
-                        processedChaptersResult.map(r => r.summary),
-                        processedChaptersResult.map(r => r.translation)
-                    );
-                    setResult(finalResult);
-                }
+            // Formatting
+            setProgress('Workflowy形式に変換中...');
+            let title = currentFileName;
+            const engLines = structuredMarkdown.split('\n');
+            if (engLines.length > 0 && engLines[0].startsWith('# ')) {
+                title = engLines[0].replace('# ', '').trim();
             }
+
+            const lines = finalMarkdown.split('\n');
+            let bodyText = finalMarkdown;
+            if (lines.length > 0 && lines[0].startsWith('# ')) {
+                bodyText = lines.slice(1).join('\n').trim();
+            }
+
+            const workflowyBody = markdownToWorkflowy(bodyText);
+            const nestedBody = workflowyBody.split('\n').map(line => '  ' + line).join('\n');
+
+            const summaryWorkflowy = markdownToWorkflowy(resumeContext);
+            const nestedSummary = summaryWorkflowy.split('\n').map(line => '    ' + line).join('\n');
+            const summarySection = `  - 要約 (Summary)\n${nestedSummary}`;
+
+            setResult(`- ${title}\n${summarySection}\n${nestedBody}`);
 
             setProgress('');
         } catch (err: any) {
@@ -377,7 +225,6 @@ function App() {
                 <section className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
                     <div className="flex items-center justify-between mb-4">
                         <h2 className="text-base font-bold flex items-center gap-2 text-gray-700">
-                            <Book className="w-4 h-4" />
                             辞書設定 (任意)
                         </h2>
                         <button onClick={handleDownloadSample} className="text-xs text-indigo-600 hover:underline">
@@ -434,48 +281,6 @@ function App() {
                                 </button>
                             </div>
 
-                            {/* Processing Mode Selection */}
-                            <div className="flex bg-indigo-50 p-1 rounded-lg border border-indigo-100">
-                                <button
-                                    onClick={() => setDocType('paper')}
-                                    className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all ${docType === 'paper' ? 'bg-white text-indigo-600 shadow-sm' : 'text-indigo-400 hover:text-indigo-600'}`}
-                                >
-                                    <FileText className="w-3 h-3" />
-                                    論文モード
-                                </button>
-                                <button
-                                    onClick={() => setDocType('book')}
-                                    className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all ${docType === 'book' ? 'bg-white text-indigo-600 shadow-sm' : 'text-indigo-400 hover:text-indigo-600'}`}
-                                >
-                                    <Book className="w-3 h-3" />
-                                    書籍モード
-                                </button>
-                            </div>
-
-                            {/* Book Sub-Mode Toggle */}
-                            {docType === 'book' && (
-                                <div className="flex bg-amber-50 p-1 rounded-lg border border-amber-100 animate-in fade-in slide-in-from-left-4 duration-300">
-                                    <button
-                                        onClick={() => setBookSubMode('normal')}
-                                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${bookSubMode === 'normal' ? 'bg-white text-amber-700 shadow-sm' : 'text-amber-600/70 hover:text-amber-800'}`}
-                                        title="既存のロジック: 構造化 + 要約 + 翻訳"
-                                    >
-                                        通常処理
-                                    </button>
-                                    <button
-                                        onClick={() => setBookSubMode('simple')}
-                                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${bookSubMode === 'simple' ? 'bg-white text-amber-700 shadow-sm' : 'text-amber-600/70 hover:text-amber-800'}`}
-                                        title="新規ロジック: 構造化なし + 要約 + ベタ打ち翻訳 (ハルシネーション低減)"
-                                    >
-                                        簡易処理
-                                    </button>
-                                </div>
-                            )}
-                            {docType === 'book' && (
-                                <p className="text-[10px] text-amber-600 font-medium animate-pulse">
-                                    ※書籍モードは現在やや不安定です
-                                </p>
-                            )}
                         </div>
                     </div>
 

@@ -3,126 +3,7 @@
  * Ported from src/utils.py
  */
 
-export interface ChapterData {
-    id: number;
-    title: string;
-    raw_text: string;
-    is_numbered?: boolean;
-    section_type?: string;
-    start_snippet?: string;
-}
 
-/**
- * AIの目次解析結果に基づいて、アンカーテキスト照合によりテキストを分割する (Anchor Text Method)
- */
-export const splitByAnchors = (fullText: string, structureData: { chapters: any[] }): ChapterData[] => {
-    const chaptersToc = structureData.chapters || [];
-    if (chaptersToc.length === 0) {
-        return [{ id: 1, title: 'Full Text', raw_text: fullText.trim() }];
-    }
-
-    const indices: number[] = [];
-    const validChapters: any[] = [];
-    let currentSearchPos = 0;
-
-    for (const chapter of chaptersToc) {
-        const title = chapter.title || "Unknown Chapter";
-        const startSnippet = (chapter.start_snippet || "").trim();
-
-        if (!startSnippet && !title) continue;
-
-        const { pos, strategy } = findAnchorPosition(fullText, startSnippet, title, currentSearchPos);
-
-        if (pos !== -1) {
-            console.log(`[splitByAnchors] ✓ '${title}' — ${strategy} (pos=${pos})`);
-            indices.push(pos);
-            validChapters.push(chapter);
-            currentSearchPos = pos + 1;
-        } else {
-            console.log(`[splitByAnchors] ✗ '${title}' — 発見できず`);
-        }
-    }
-
-    const result: ChapterData[] = [];
-    for (let i = 0; i < indices.length; i++) {
-        const start = indices[i];
-        const end = i + 1 < indices.length ? indices[i + 1] : fullText.length;
-        const chunkText = fullText.slice(start, end).trim();
-        const tocItem = validChapters[i];
-
-        result.push({
-            id: i + 1,
-            title: tocItem.title,
-            raw_text: chunkText,
-            is_numbered: tocItem.is_numbered,
-            section_type: tocItem.section_type,
-            start_snippet: tocItem.start_snippet
-        });
-    }
-
-    return result.length > 0 ? result : [{ id: 1, title: 'Full Text', raw_text: fullText.trim() }];
-};
-
-/**
- * アンカーテキストの位置を多段階で検索する
- */
-const findAnchorPosition = (fullText: string, startSnippet: string, title: string, searchFrom: number): { pos: number, strategy: string } => {
-    const targetText = fullText.slice(searchFrom);
-    const normalizedSnippet = normalizeWhitespace(startSnippet);
-    const normalizedTitle = normalizeWhitespace(title);
-
-    // Plan A: Title + Snippet (Regex)
-    if (normalizedTitle && normalizedSnippet) {
-        const tWords = normalizedTitle.split(/\s+/).filter(w => w.length > 0);
-        const sWords = normalizedSnippet.split(/\s+/).filter(w => w.length > 0).slice(0, 5);
-
-        if (tWords.length > 0 && sWords.length > 0) {
-            const pT = tWords.map(w => escapeRegExp(w)).join('\\s+');
-            const pS = sWords.map(w => escapeRegExp(w)).join('\\s+');
-            const regex = new RegExp(`(${pT})[\\s\\S]{0,500}?${pS}`, 'i');
-            const match = targetText.match(regex);
-            if (match && match.index !== undefined) {
-                return { pos: searchFrom + match.index, strategy: "Plan A (Title + Snippet)" };
-            }
-        }
-    }
-
-    // Plan B: Snippet Only
-    if (normalizedSnippet) {
-        const sWords = normalizedSnippet.split(/\s+/).filter(w => w.length > 0).slice(0, 10);
-        if (sWords.length >= 5) {
-            const pS = sWords.map(w => escapeRegExp(w)).join('\\s+');
-            const regex = new RegExp(pS, 'i');
-            const match = targetText.match(regex);
-            if (match && match.index !== undefined) {
-                return { pos: searchFrom + match.index, strategy: "Plan B (Snippet Only)" };
-            }
-        }
-    }
-
-    // Plan C: Title Only
-    if (normalizedTitle) {
-        const tWords = normalizedTitle.split(/\s+/).filter(w => w.length > 0);
-        if (tWords.length > 0) {
-            const pT = tWords.map(w => escapeRegExp(w)).join('\\s+');
-            const regex = new RegExp(pT, 'i');
-            const match = targetText.match(regex);
-            if (match && match.index !== undefined) {
-                return { pos: searchFrom + match.index, strategy: "Plan C (Title Only)" };
-            }
-        }
-    }
-
-    return { pos: -1, strategy: "Failed" };
-};
-
-const normalizeWhitespace = (text: string): string => {
-    return text.replace(/\s+/g, ' ').trim();
-};
-
-const escapeRegExp = (string: string): string => {
-    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-};
 
 export const normalizeMarkdownHeadings = (markdownText: string): string => {
     if (!markdownText) return markdownText;
@@ -208,183 +89,95 @@ export const markdownToWorkflowy = (markdownText: string): string => {
     return workflowyLines.join('\n');
 };
 
-export const splitMarkdownByHeaders = (text: string, maxChars: number = 4000): string[] => {
-    const lines = text.split('\n');
-    const chunks: string[] = [];
-    let currentChunk: string[] = [];
 
-    for (const line of lines) {
-        if (line.trim().startsWith('#')) {
-            if (currentChunk.length > 0) {
-                chunks.push(currentChunk.join('\n'));
-            }
-            currentChunk = [line];
-        } else {
-            currentChunk.push(line);
-        }
-    }
+/**
+ * Markdownの見出し階層を考慮して階層的に分割する。
+ * Ported from src/skills.py: _split_markdown_hierarchically
+ */
+export const splitMarkdownHierarchically = (text: string, maxLength: number = 4000): string[] => {
+    // 1. まず H2 で分割
+    const sections = splitByHeadingLevel(text, 2);
 
-    if (currentChunk.length > 0) {
-        chunks.push(currentChunk.join('\n'));
-    }
-
-    // Check chunk sizes and split if necessary
     const finalChunks: string[] = [];
-    for (const chunk of chunks) {
-        if (chunk.length > maxChars) {
-            finalChunks.push(...splitTextByLength(chunk, maxChars));
-        } else {
-            finalChunks.push(chunk);
+    for (const section of sections) {
+        if (section.length <= maxLength) {
+            finalChunks.push(section);
+            continue;
+        }
+
+        // 2. H2 が大きすぎる場合、H3 で分割
+        const subsections = splitByHeadingLevel(section, 3);
+        for (const sub of subsections) {
+            if (sub.length <= maxLength) {
+                finalChunks.push(sub);
+                continue;
+            }
+
+            // 3. H3 も大きすぎる場合、H4 で分割
+            const subsubsections = splitByHeadingLevel(sub, 4);
+            for (const subsub of subsubsections) {
+                if (subsub.length <= maxLength) {
+                    finalChunks.push(subsub);
+                    continue;
+                }
+
+                // 4. H4 も大きすぎる場合、段落 (\n\n) で分割
+                const paragraphs = splitByParagraph(subsub, maxLength);
+                finalChunks.push(...paragraphs);
+            }
         }
     }
 
     return finalChunks;
 };
 
-const splitTextByLength = (text: string, maxLength: number): string[] => {
-    if (text.length <= maxLength) return [text];
-
+const splitByHeadingLevel = (text: string, level: number): string[] => {
+    const marker = "#".repeat(level) + " ";
+    const lines = text.split('\n');
     const chunks: string[] = [];
     let currentChunk: string[] = [];
-    let currentLength = 0;
 
-    const lines = text.split('\n');
     for (const line of lines) {
-        const lineLen = line.length + 1; // +1 for newline
-        if (currentLength + lineLen > maxLength) {
+        if (line.startsWith(marker)) {
             if (currentChunk.length > 0) {
                 chunks.push(currentChunk.join('\n'));
             }
             currentChunk = [line];
-            currentLength = lineLen;
         } else {
             currentChunk.push(line);
-            currentLength += lineLen;
         }
     }
 
     if (currentChunk.length > 0) {
         chunks.push(currentChunk.join('\n'));
     }
-
     return chunks;
 };
 
-// --- Book Mode Utilities ---
+const splitByParagraph = (text: string, maxLength: number): string[] => {
+    const paragraphs = text.split('\n\n');
+    const chunks: string[] = [];
+    let currentChunk: string[] = [];
+    let currentLen = 0;
 
-/**
- * Phase 1: テキストをH1見出し（# Chapter ...）で章ごとに分割する。
- * 見出しが見つからない場合はテキスト全体を1つの章として返す。
- */
-export const splitByChapterHeaders = (text: string): ChapterData[] => {
-    const lines = text.split('\n');
-    const chapters: ChapterData[] = [];
-    let currentTitle = '';
-    let currentLines: string[] = [];
-    let chapterId = 0;
-
-    for (const line of lines) {
-        // H1見出し（# で始まり ## でない）で章を区切る
-        const h1Match = line.match(/^#\s+(.+)/);
-        const isH2OrDeeper = line.match(/^#{2,}\s/);
-
-        if (h1Match && !isH2OrDeeper) {
-            // 前の章を保存
-            if (currentLines.length > 0 || currentTitle) {
-                chapterId++;
-                chapters.push({
-                    id: chapterId,
-                    title: currentTitle || `Section ${chapterId}`,
-                    raw_text: currentLines.join('\n').trim(),
-                });
-            }
-            currentTitle = h1Match[1].trim();
-            currentLines = [line];
+    for (const p of paragraphs) {
+        const pLen = p.length + 2; // \n\n 分
+        if (currentLen + pLen > maxLength && currentChunk.length > 0) {
+            chunks.push(currentChunk.join('\n\n'));
+            currentChunk = [p];
+            currentLen = pLen;
         } else {
-            currentLines.push(line);
+            currentChunk.push(p);
+            currentLen += pLen;
         }
     }
 
-    // 最後の章を保存
-    if (currentLines.length > 0) {
-        chapterId++;
-        chapters.push({
-            id: chapterId,
-            title: currentTitle || `Section ${chapterId}`,
-            raw_text: currentLines.join('\n').trim(),
-        });
+    if (currentChunk.length > 0) {
+        chunks.push(currentChunk.join('\n\n'));
     }
-
-    // 章が見つからなかった場合、全体を1つの章として扱う
-    if (chapters.length === 0) {
-        chapters.push({
-            id: 1,
-            title: 'Full Text',
-            raw_text: text.trim(),
-        });
-    }
-
-    return chapters;
+    return chunks;
 };
 
-/**
- * Phase 6: 全中間データをWorkFlowy形式の最終出力に組み立てる。
- *
- * 出力フォーマット:
- * - Book Summary
- *     - [book_summary content]
- * - Chapter 1: Title
- *     - Summary
- *         - [chapter_summary content]
- *     - Translation / Body
- *         - [chapter_translation content]
- * - Chapter 2: Title
- *     ...
- */
-export const assembleBookWorkflowy = (
-    bookSummary: string,
-    chapters: ChapterData[],
-    chapterSummaries: string[],
-    chapterTranslations: string[]
-): string => {
-    const parts: string[] = [];
-
-    // Book Summary (Root level)
-    const summaryWorkflowy = bookSummary
-        .split('\n')
-        .filter(line => line.trim())
-        .map(line => `  ${line}`)
-        .join('\n');
-    parts.push(`- Book Summary\n${summaryWorkflowy}`);
-
-    // Each Chapter
-    for (let i = 0; i < chapters.length; i++) {
-        const chapter = chapters[i];
-        const summary = chapterSummaries[i] || '(要約なし)';
-        const translation = chapterTranslations[i] || '(翻訳なし)';
-
-        // Convert translation markdown to workflowy format
-        const translationWorkflowy = markdownToWorkflowy(translation)
-            .split('\n')
-            .map(line => `    ${line}`)
-            .join('\n');
-
-        // Summary lines (already in workflowy "-" format from SUMMARY_PROMPT)
-        const summaryLines = summary
-            .split('\n')
-            .filter(line => line.trim())
-            .map(line => `    ${line}`)
-            .join('\n');
-
-        parts.push(
-            `- ${chapter.title}\n` +
-            `  - Summary\n${summaryLines}\n` +
-            `  - Translation / Body\n${translationWorkflowy}`
-        );
-    }
-
-    return parts.join('\n');
-};
 
 /**
  * AIによるハルシネーション（重複したH1見出しや、文中の不自然なIntroduction）を強制的に削除する。

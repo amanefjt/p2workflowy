@@ -1,0 +1,13 @@
+# 3. 各セクションの展開
+
+## INTRODUCTION：物を通じて思考する
+
+The project, then, is primarily methodological. It encourages anthropologists to attend to 'things' as they emerge in diverse ethnographic settings, and to begin such investigations with what, for the ethnographer, may appear as a logical reversal: rather than providing data to which theory is applied, revealing the strengths and flaws of an existing theoretical model, the things encountered in fieldwork are allowed to dictate the terms of their own analysis — including new premises altogether for theory. In this sense, of course, the project is not new. The promise of methodologies that 'think through things' has long been implicit in the ethnographic method itself, with its imperative to go out and 'see for oneself' and to participate in, as well as observe, other peoples' lives. Ethnographic fieldwork compels its practitioners to engage with people and their things in a variety of ways, not simply by talking to them or reading about them in their own or others' texts. Anthropologists prepare and share food with their informants, help to build houses and participate in producing all manner of artefacts, from blowpipes to photographic records to legal claims. So the injunction to let these interactions speak for themselves is not an innovation. What the approach advanced here attempts to add to these routine activities is a collapse of the experience/analysis divide, such that the experience of things in the field is already an encounter, simpliciter, with meanings.
+
+## Things as meanings：意味としての物
+
+But first, why 'things' at all, and why an 'artefact-oriented' anthropology? At first glance it might appear that this terminology upholds the very oppositions we are calling into question (sociality v. materiality, culture v. nature, meanings v. things). The prescription to think through things would appear to require a clarification as to what may count as a thing in the first place. Such a clarification, however, is one which we are not just reluctant, but patently committed, to denying the reader. Things, it is suggested, ought not to be delineated in advance of the ethnographic encounters from which they emerge. To pre-empt an ethnographically defined understanding of what constitutes a thing would be to simply offer an alternative theory of things.
+
+## What things? / Thing-as-heuristic v. Thing-as-analytic：発見的手法としての物
+
+Thing-as-heuristic v. thing-as-analytic

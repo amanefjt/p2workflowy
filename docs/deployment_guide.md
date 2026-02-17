@@ -1,26 +1,36 @@
-# p2workflowy デプロイ手順書 (Streamlit Cloud 版)
+# p2workflowy 使用・デプロイガイド
 
-この手順に従うことで、`p2workflowy` を自分専用の URL で公開し、他の人もブラウザから使えるようになります。
+`p2workflowy` は、Webブラウザ版（React）と Python CLI版の2種類を提供しています。
 
-## 📋 事前準備
-1.  **GitHub アカウント**: 自身のリポジトリ `amanefjt/p2workflowy` に最新のコードが反映されていること。
-2.  **Streamlit Cloud アカウント**: [streamlit.io/cloud](https://streamlit.io/cloud) で GitHub アカウントを使ってサインアップしてください。
+## 1. Web版 (推奨)
+ブラウザだけで完結し、環境構築が不要です。
 
-## 🚀 デプロイ手順
+### 🚀 公開・デプロイ方法
+Web版は静的サイトとして Cloudflare Pages や Vercel にデプロイ可能です。
+1. `web/` ディレクトリに移動します。
+2. 依存関係のインストール: `npm install`
+3. ビルド: `npm run build`
+4. `web/dist` フォルダの内容をホスティングサービスにアップロードします。
 
-1.  **新しいアプリの作成**: 
-    - Streamlit Cloud のダッシュボードで 「Create app」 ボタンを押します。
-2.  **リポジトリの選択**: 
-    - `amanefjt/p2workflowy` を選択します。
-    - **Main file path**: `src/app.py` と入力してください。
-3.  **高度な設定 (Optional)**:
-    - デフォルトの設定で問題ありません。
-4.  **デプロイ完了**: 
-    - 「Deploy!」 を押すと、数分後に `https://xxx.streamlit.app` という URL が発行されます。
+### 🔐 セキュリティ
+- ユーザーが入力した API キーはブラウザのローカルストレージにのみ保存され、サーバーへ送信されることはありません。
 
-## 🔐 セキュリティについて
-- 公開された URL は誰でもアクセス可能ですが、**各ユーザーが自分の API キーを入力しない限り、一切の処理（お金の発生）は行われません。**
-- キーはセッション内でのみ保持され、サーバーには保存されません。
+---
 
-## 💡 トラブルシューティング
-- もし起動時にエラーが出る場合は、Streamlit Cloud のコンソール画面（右下）を確認してください。依存関係のエラーの場合は、`requirements.txt` が正しく読み込まれているかチェックします。
+## 2. Python CLI版
+大量のファイルを一括処理したり、ローカルスクリプトとして組み込む場合に適しています。
+
+### 💻 セットアップ
+1. 依存関係のインストール: `pip install -r requirements.txt`
+2. `.env` ファイルに `GEMINI_API_KEY` を設定、またはコマンド実行時に提供します。
+
+### 🚀 実行方法
+```bash
+python -m src.main --input path/to/your_paper.txt
+```
+
+---
+
+## 💡 共通の注意事項
+- **Gemini API キー**: どちらのバージョンも、利用にはご自身の [Google AI Studio](https://aistudio.google.com/) から発行された API キーが必要です。
+- **コスト**: Gemini 1.5 Flash の無料枠の範囲内で十分に動作しますが、最新の利用規約を確認してください。

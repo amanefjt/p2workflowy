@@ -47,27 +47,27 @@ export class GeminiService {
 }
 
 // --- Batch Concurrency Utility ---
-
 /**
  * Promise.all のバッチ制御版。
  * 最大 concurrency 件ずつ並列実行し、Rate Limit を回避する。
  */
-export async function batchProcess<T>(
+export async function batchProcess<T, R>(
     items: T[],
-    fn: (item: T, index: number) => Promise<any>,
+    fn: (item: T, index: number) => Promise<R>,
     concurrency: number = 3
-): Promise<any[]> {
-    const results: any[] = new Array(items.length);
+): Promise<R[]> {
+    const results: R[] = new Array(items.length);
+    const queue = [...items.entries()];
 
-    for (let i = 0; i < items.length; i += concurrency) {
-        const batch = items.slice(i, i + concurrency);
-        const batchResults = await Promise.all(
-            batch.map((item, batchIdx) => fn(item, i + batchIdx))
-        );
-        for (let j = 0; j < batchResults.length; j++) {
-            results[i + j] = batchResults[j];
+    const workers = Array(Math.min(concurrency, items.length)).fill(null).map(async () => {
+        while (queue.length > 0) {
+            const entry = queue.shift();
+            if (!entry) break;
+            const [idx, item] = entry;
+            results[idx] = await fn(item, idx);
         }
-    }
+    });
 
+    await Promise.all(workers);
     return results;
 }

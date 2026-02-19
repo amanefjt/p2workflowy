@@ -1,12 +1,18 @@
 import React, { useState, useRef } from 'react';
 import { useAppSettings } from './hooks/useAppSettings';
 import { GeminiService, batchProcess } from './lib/gemini';
-import { DEFAULT_MODEL, MAX_TRANSLATION_CHUNK_SIZE } from './lib/constants';
-import { markdownToWorkflowy, splitMarkdownHierarchically, removeRedundantHeaders } from './lib/formatter';
+import { MAX_TRANSLATION_CHUNK_SIZE, EXCLUDE_SECTION_KEYWORDS } from './lib/constants';
+import {
+    markdownToWorkflowy,
+    splitMarkdownHierarchically,
+    removeRedundantHeaders,
+    extractStructureFromResume,
+    removeUnwantedSections
+} from './lib/formatter';
 import { FileText, Settings, Upload, Check, Copy, Loader2, AlertCircle, Trash2, X } from 'lucide-react';
 
-/** バッチ並列の同時実行数 */
-const BATCH_CONCURRENCY = 5;
+/** バッチ並列の同時実行数 (Python版の Semaphore(3) に合わせる) */
+const BATCH_CONCURRENCY = 3;
 
 function App() {
     const { apiKey, setApiKey, dictionaries, addDictionary, removeDictionary, loading: settingsLoading } = useAppSettings();
@@ -54,27 +60,39 @@ function App() {
             const glossaryContent = dictionaries.map(d => d.content).join('\n');
 
             // --- Phase 1: Resume Generation (レジュメ生成) ---
-            setProgress(`【Phase 1】レジュメを生成中... (${DEFAULT_MODEL})`);
+            setProgress(`【Phase 1】原文からレジュメを生成中...`);
             // 原文から直接レジュメを作成する
             const resumeContext = await gemini.generateResume(text);
 
             // --- Phase 2: Structuring with Hint (構造化) ---
-            setProgress('【Phase 2】レジュメをヒントに構造化中...');
+            setProgress('【Phase 2】レジュメをヒントに構造を復元中...');
+            // レジュメから見出しのみを抽出してヒントにする
+            const structureHint = extractStructureFromResume(resumeContext);
             // レジュメをヒントにしてOCRテキストを構造化する
-            const structuredMarkdown = await gemini.structureTextWithHint(text, resumeContext);
+            let structuredMarkdown = await gemini.structureTextWithHint(text, structureHint);
+
+            // 不要なセクション（References等）を削除
+            structuredMarkdown = removeUnwantedSections(structuredMarkdown, EXCLUDE_SECTION_KEYWORDS);
 
             // --- Phase 3: Translation (翻訳) ---
             // 階層構造を考慮して分割
             const sections = splitMarkdownHierarchically(structuredMarkdown, MAX_TRANSLATION_CHUNK_SIZE);
-            setProgress(`【Phase 3】${sections.length}セクションを並列翻訳中...`);
+            const totalSections = sections.length;
+            let completedSections = 0;
+            setProgress(`【Phase 3】翻訳を開始します (全 ${totalSections} チャンク)`);
 
             const translatedResults = await batchProcess(
                 sections,
                 async (section, idx) => {
                     try {
-                        return await gemini.translateSection(section, resumeContext, glossaryContent);
+                        setProgress(`【Phase 3】チャンク ${idx + 1}/${totalSections} 翻訳中...`);
+                        const translated = await gemini.translateSection(section, resumeContext, glossaryContent);
+                        completedSections++;
+                        setProgress(`【Phase 3】チャンク ${completedSections}/${totalSections} 完了`);
+                        return translated;
                     } catch (err) {
                         console.error(`Error translating section ${idx}:`, err);
+                        completedSections++;
                         return section + "\n\n(翻訳エラー)";
                     }
                 },
@@ -85,24 +103,28 @@ function App() {
 
             // Formatting
             setProgress('Workflowy形式に変換中...');
+
+            // 1. レジュメのWorkflowy化 (Python版: resume_section = "  - レジュメ (Resume)\n" + ...)
+            const resumeWorkflowy = markdownToWorkflowy(resumeContext);
+            const nestedSummary = resumeWorkflowy.split('\n').map(line => '    ' + line).join('\n');
+            const summarySection = `  - レジュメ (Resume)\n${nestedSummary}`;
+
+            // 2. タイトル抽出
             let title = currentFileName;
             const engLines = structuredMarkdown.split('\n');
             if (engLines.length > 0 && engLines[0].startsWith('# ')) {
                 title = engLines[0].replace('# ', '').trim();
             }
 
+            // 3. 翻訳本文のWorkflowy化 (Python版: titleを除去して全体を深める)
             const lines = finalMarkdown.split('\n');
-            let bodyText = finalMarkdown;
+            let bodyTextNoTitle = finalMarkdown;
             if (lines.length > 0 && lines[0].startsWith('# ')) {
-                bodyText = lines.slice(1).join('\n').trim();
+                bodyTextNoTitle = lines.slice(1).join('\n').trim();
             }
 
-            const workflowyBody = markdownToWorkflowy(bodyText);
+            const workflowyBody = markdownToWorkflowy(bodyTextNoTitle);
             const nestedBody = workflowyBody.split('\n').map(line => '  ' + line).join('\n');
-
-            const summaryWorkflowy = markdownToWorkflowy(resumeContext);
-            const nestedSummary = summaryWorkflowy.split('\n').map(line => '    ' + line).join('\n');
-            const summarySection = `  - 要約 (Summary)\n${nestedSummary}`;
 
             setResult(`- ${title}\n${summarySection}\n${nestedBody}`);
 

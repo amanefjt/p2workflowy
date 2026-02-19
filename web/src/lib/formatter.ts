@@ -219,3 +219,73 @@ export function removeRedundantHeaders(markdownText: string): string {
 
     return cleanedLines.join('\n');
 }
+
+/**
+ * レジュメからセクションの見出しのみを抽出し、構造化ヒント用の軽量なアウトラインを作成する。
+ * Ported from src/utils.py: extract_structure_from_resume
+ */
+export function extractStructureFromResume(resumeText: string): string {
+    if (!resumeText) return "";
+
+    const lines = resumeText.split(/\r?\n/);
+    const outlineLines: string[] = [];
+
+    const analysisKeywords = ["リサーチ・クエスチョン", "核心的主張", "中心的な主張", "論理展開"];
+    const excludeSections = ["References", "Bibliography", "Acknowledgements", "Index", "参考文献", "謝辞"];
+
+    for (const line of lines) {
+        const stripped = line.trim();
+        if (stripped.startsWith('#')) {
+            if (analysisKeywords.some(kw => stripped.includes(kw))) continue;
+            if (excludeSections.some(kw => stripped.toLowerCase().includes(kw.toLowerCase()))) continue;
+            outlineLines.push(stripped);
+        }
+    }
+
+    return outlineLines.join('\n');
+}
+
+/**
+ * Markdownテキストから、指定されたキーワードを含むセクション（見出しとその配下の本文）を削除する。
+ * Ported from src/utils.py: remove_unwanted_sections
+ */
+export function removeUnwantedSections(markdownText: string, excludeKeywords: string[]): string {
+    if (!markdownText) return "";
+
+    const protectedKeywords = ["abstract", "notes", "注釈", "抄録"];
+    const lines = markdownText.split(/\r?\n/);
+    const newLines: string[] = [];
+    let skipping = false;
+    let currentSkipLevel = 0;
+
+    const headingRe = /^(#{1,10})\s+(.*)/;
+
+    for (const line of lines) {
+        const stripped = line.trim();
+        const headerMatch = stripped.match(headingRe);
+
+        if (headerMatch) {
+            const level = headerMatch[1].length;
+            const title = headerMatch[2].toLowerCase();
+
+            const shouldExclude = excludeKeywords.some(kw => title.includes(kw.toLowerCase()));
+            const isProtected = protectedKeywords.some(p => title.includes(p));
+
+            if (shouldExclude && !isProtected) {
+                skipping = true;
+                currentSkipLevel = level;
+                continue;
+            } else {
+                if (skipping && level <= currentSkipLevel) {
+                    skipping = false;
+                }
+            }
+        }
+
+        if (!skipping) {
+            newLines.push(line);
+        }
+    }
+
+    return newLines.join('\n').trim();
+}

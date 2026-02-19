@@ -11,8 +11,8 @@ import {
 } from './lib/formatter';
 import { FileText, Settings, Upload, Check, Copy, Loader2, AlertCircle, Trash2, X } from 'lucide-react';
 
-/** バッチ並列の同時実行数 (Python版の Semaphore(3) に合わせる) */
-const BATCH_CONCURRENCY = 3;
+/** バッチ並列の同時実行数 (Python版の Semaphore(4) に合わせる) */
+const BATCH_CONCURRENCY = 4;
 
 function App() {
     const { apiKey, setApiKey, dictionaries, addDictionary, removeDictionary, loading: settingsLoading } = useAppSettings();

@@ -6,7 +6,7 @@ import { markdownToWorkflowy, splitMarkdownByHeaders, splitByAnchors, assembleBo
 import { Book, FileText, Settings, Upload, Check, Copy, Loader2, AlertCircle, Trash2, X } from 'lucide-react';
 
 /** バッチ並列の同時実行数 */
-const BATCH_CONCURRENCY = 5;
+const BATCH_CONCURRENCY = 3;
 
 function App() {
     const { apiKey, setApiKey, dictionaries, addDictionary, removeDictionary, loading: settingsLoading } = useAppSettings();

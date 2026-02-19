@@ -21,6 +21,7 @@ class Utils:
         - 核心的主張（Thesis）
         - 各セクション内の「中心的な主張」「論理展開」
         - 箇条書きの内容
+        - 参考文献、謝辞等の不要なセクション (Abstract, Notesなどは残す)
         """
         if not resume_text:
             return ""
@@ -29,19 +30,72 @@ class Utils:
         outline_lines = []
         
         # フィルタリング用のキーワード
-        skip_keywords = ["リサーチ・クエスチョン", "核心的主張", "中心的な主張", "論理展開"]
+        # 分析項目
+        analysis_keywords = ["リサーチ・クエスチョン", "核心的主張", "中心的な主張", "論理展開"]
+        # 物理的に除外したいセクション（ただし Abstract, Notes は含めない）
+        exclude_sections = ["References", "Bibliography", "Acknowledgements", "Index", "参考文献", "謝辞"]
         
         for line in lines:
             stripped = line.strip()
             
             # 見出し行（# で始まる行）のみを対象とする
             if stripped.startswith('#'):
-                # 特定の分析項目（リサーチ・クエスチョン等）を含む見出しは除外する
-                should_skip = any(kw in stripped for kw in skip_keywords)
-                if not should_skip:
-                    outline_lines.append(stripped)
+                # 1. 分析項目を含む見出しは除外
+                if any(kw in stripped for kw in analysis_keywords):
+                    continue
+                
+                # 2. 参考文献などの不要セクションを除外
+                if any(kw.lower() in stripped.lower() for kw in exclude_sections):
+                    continue
+                
+                outline_lines.append(stripped)
         
         return "\n".join(outline_lines)
+
+    @staticmethod
+    def remove_unwanted_sections(markdown_text: str, exclude_keywords: list[str]) -> str:
+        """
+        Markdownテキストから、指定されたキーワードを含むセクション（見出しとその配下の本文）を削除する。
+        ただし 'Abstract' と 'Notes' は除外キーワードに含まれていても保護する。
+        """
+        if not markdown_text:
+            return ""
+
+        # 保護すべきキーワード
+        protected = {"abstract", "notes", "注釈", "抄録"}
+        
+        lines = markdown_text.splitlines()
+        new_lines = []
+        skipping = False
+        current_skip_level = 0
+
+        heading_re = re.compile(r'^(#{1,10})\s+(.*)')
+
+        for line in lines:
+            stripped = line.strip()
+            header_match = heading_re.match(stripped)
+
+            if header_match:
+                level = len(header_match.group(1))
+                title = header_match.group(2).lower()
+
+                # スキップ判定
+                should_exclude = any(kw.lower() in title for kw in exclude_keywords)
+                is_protected = any(p in title for p in protected)
+
+                if should_exclude and not is_protected:
+                    skipping = True
+                    current_skip_level = level
+                    continue
+                else:
+                    # 新しい見出しが、スキップ中の見出しレベルと同じかそれより浅い場合はスキップ終了
+                    if skipping and level <= current_skip_level:
+                        skipping = False
+            
+            if not skipping:
+                new_lines.append(line)
+
+        return "\n".join(new_lines).strip()
 
 
     @staticmethod

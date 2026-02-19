@@ -13,21 +13,18 @@ Gemini 3 Flash は、最先端の知能を圧倒的なスピードと低コス�
     - **Speed**: Gemini 2.5 Pro の **3倍の処理速度** を実現。
     - **Cost**: 入力 $0.50 / 1M tokens, 出力 $3.00 / 1M tokens (極めて低コスト)。
 
-## Chunk Size Optimization
-構造化（Phase 2）および翻訳（Phase 3）において、制限要因となるのは **出力トークン制限 (65k)** です。
-原文を 1:1 で出力・翻訳する場合、入力サイズは出力制限内に収まる必要があります。
+### Optimization Strategy
+Gemini 3 Flash の広大な出力トークン制限 (65k) を活かしつつ、日本語翻訳時のテキスト膨張と AI による要約化（Summarization）を防ぐため、フェーズごとに最適なチャンクサイズを設定します。
 
-### Calculation
-- **Max Output**: 65,536 tokens.
-- **Character Conversion**: 1 token ≈ 約3〜4文字 (英日混在環境)。
-- **Capacity**: 最大約 200,000文字程度の出力が可能。
-- **Optimization Strategy**: Gemini 3 Flash の高速な処理能力を活かし、チャンクサイズを大きく設定することで、セクションの分断を防ぎ、文脈（Context）の維持を優先します。
-
-### Recommended Setting
-- **Optimized Setting**: **40,000 characters**.
-    - 40,000文字は約 10,000〜15,000トークンに相当。
-    - 出力制限 (65k) の約 20〜23% に抑えることで、ハルシネーションや不完全な出力を防ぐ十分なセーフティバッファを確保。
-    - 並列翻訳パイプライン（Phase 3）においても、リクエスト回数を減らしつつ高速な処理を実現。
+### Recommended Settings
+- **MAX_STRUCTURING_CHUNK_SIZE**: **15,000 characters**
+    - 構造化（Phase 2: 英→英）において、AI の「出力スタミナ（書き切り限界）」に配慮した設定。
+    - 40,000文字では大規模な論文で AI が勝手に要約を始めてしまうリスクがあるため、翻訳サイズと同等の 15,000文字に抑えるのが最も安全で高精度です。
+- **MAX_TRANSLATION_CHUNK_SIZE**: **15,000 characters**
+    - 翻訳（Phase 3: 英→日）では、翻訳後の日本語が安全に出力上限（および AI の「書き切り」の限界）に収まるように設定。
+    - 40,000文字の翻訳では、AI がトークン消費を抑えるために意図せず要約を行うリスクがあるため、15,000文字程度に抑えるのが最も安定します。
 
 ## Configuration
-`shared/prompts.json` の `MAX_TRANSLATION_CHUNK_SIZE` を `40000` に設定します。
+`shared/prompts.json` で以下の通り定義されています：
+- `MAX_STRUCTURING_CHUNK_SIZE`: `40000`
+- `MAX_TRANSLATION_CHUNK_SIZE`: `15000`

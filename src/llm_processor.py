@@ -54,6 +54,7 @@ class LLMProcessor:
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         temperature=0.0,
+                        max_output_tokens=65536,  # Gemini 1.5/3 Flash の物理上限
                     )
                 )
                 
@@ -68,8 +69,11 @@ class LLMProcessor:
                 error_msg = str(e)
                 if attempt < self.MAX_RETRIES - 1:
                     delay = self.BASE_DELAY * (2 ** attempt)
+                    msg = f"リトライ中... ({attempt + 1}/{self.MAX_RETRIES}) - 原因: {error_msg}"
                     if progress_callback:
-                        progress_callback(f"リトライ中... ({attempt + 1}/{self.MAX_RETRIES}) - 原因: {error_msg}")
+                        progress_callback(msg)
+                    else:
+                        print(msg)
                     time.sleep(delay)
         
         raise RuntimeError(f"API呼び出しに失敗しました（{self.MAX_RETRIES}回試行）: {last_error}")

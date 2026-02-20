@@ -67,8 +67,8 @@ class PaperProcessorSkills:
         if not prompts:
             return ""
 
-        # セマフォで並列数を制限 (以前の標準である 4 に戻す)
-        semaphore = asyncio.Semaphore(4)
+        # セマフォで並列数を制限 (以前の標準である 3 に戻す)
+        semaphore = asyncio.Semaphore(3)
 
         total = len(prompts)
         completed = 0

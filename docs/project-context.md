@@ -28,10 +28,12 @@ PDFから抽出したテキストには特有のノイズがあります。以�
   3. **直前に翻訳したチャンクの「原文と訳文」のペア（Sliding Window）**
 - これにより、代名詞（it, they）の指す対象や、文体（だ・である調）の一貫性が保たれます。
 
-### D. Fallback / Fault Tolerance (止まらない設計)
-PDFの構造は千差万別のため、想定外のテキスト構成が必ず来ます。
-- 見出しの正規表現マッチングが空振りしても、エラーで落とさないでください。迷子になった段落は `[Unlabeled Section]` というセクションに格納して次へ進んでください。
-- 翻訳のAPIリクエスト（Structured Outputs利用）が、JSONパースエラーや要素数不一致を起こした場合、最大3回リトライします。それでも失敗した場合は、そのチャンクだけ `{"en": "原文", "ja": "[翻訳エラー]"}` としてフォールバックし、全体のパイプラインは絶対に最後まで完遂させてください。
+### E. Performance Standard (Golden Rule)
+Gemini 3 Flash の性能を最大化するための検証済みパラメータ（Golden Rule）です。これらを変更する際は、必ずベンチマーク測定を行ってください。
+- **Schema-free**: `response_schema` は使用しない。APIペナルティ回避のため。
+- **Concurrency**: `Semaphore(4)`。4並列を推奨。
+- **Batching**: `MAX_BATCH_CHARS=6000`, `MAX_BATCH_CHUNKS=20`。
+- **Fallback**: LLMの JSON 出力が Markdown ブロックで囲まれてもパースできるよう、正規表現による抽出を必須とする。
 
 ## 3. Legacy Code Treatment
 旧リポジトリ（V1）のコードは、アーキテクチャレベルでは完全に「負債」です。

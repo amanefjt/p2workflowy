@@ -55,22 +55,6 @@ def format_previous_translation(previous_nodes: List[TreeNode]) -> str:
     return "\n\n".join([node.text for node in recent_nodes])
 
 
-def extract_relevant_glossary(text: str, master_glossary: dict) -> dict:
-    """
-    チャンクのテキストをスキャンし、実際に含まれる用語のみを抽出したミニ辞書を生成する。
-    """
-    mini_glossary = {}
-    if not master_glossary:
-        return mini_glossary
-    
-    text_lower = text.lower()
-    for en, ja in master_glossary.items():
-        if en.lower() in text_lower:
-            mini_glossary[en] = ja
-            
-    return mini_glossary
-
-
 # ============================================================
 # 翻訳メインロジック (非同期)
 # ============================================================
@@ -123,6 +107,16 @@ async def translate_batch(
         "{chunk_json}", input_json
     )
 
+    # ログ用チャンクID文字列
+    chunk_ids = [c.get("id") for c in chunks]
+    chunk_ids_str = f"{min(chunk_ids)}-{max(chunk_ids)}" if chunk_ids else "N/A"
+
+    # メトリクス用のメタデータ
+    metrics_metadata = {
+        "section": section_name,
+        "batch_id": chunk_ids_str
+    }
+
     max_retries = 5
     translated_dict = {}
 
@@ -137,10 +131,6 @@ async def translate_batch(
             "required": ["id", "ja"]
         }
     }
-
-    # ログ用チャンクID文字列
-    chunk_ids =[c.get("id") for c in chunks]
-    chunk_ids_str = f"{min(chunk_ids)}-{max(chunk_ids)}" if chunk_ids else "N/A"
 
     for attempt in range(max_retries):
         try:
@@ -157,7 +147,8 @@ async def translate_batch(
                     response_mime_type="application/json",
                     # 性能と安定性の向上のためスキーマ強制を解除（No Schema 戦略）
                     # response_schema=response_schema,
-                    max_retries=1
+                    max_retries=1,
+                    metrics_metadata=metrics_metadata
                 )
             
             # response_schema を解除したため、Markdown 形式 (```json ... ```) への耐性を高める
@@ -243,7 +234,7 @@ async def process_section(
             batch_chunks: List[dict] = []
             batch_chars: int = 0
             
-            # 1回あたりのバッチサイズ（グローバル設定を使用）
+            # 1回あたりのバッチサイズ（MAX_BATCH_CHUNKS, MAX_BATCH_CHARS を使用）
             while i < len(chunk_list) and len(batch_chunks) < MAX_BATCH_CHUNKS:
                 next_chunk = chunk_list[i]
                 chunk_text = next_chunk.get("text", "")
@@ -262,11 +253,6 @@ async def process_section(
             # API側の渋滞を防ぐために微小ディレイを挟む（直列のため短縮）
             await asyncio.sleep(random.uniform(0.5, 1.5))
 
-            # Dynamic Glossary Injection
-            combined_text = " ".join([c.get("text", "") for c in batch_chunks])
-            mini_glossary = extract_relevant_glossary(combined_text, master_glossary)
-            glossary_content = format_glossary(mini_glossary)
-            
             batch_translated_nodes = await translate_batch(
                 chunks=batch_chunks,
                 glossary_content=glossary_content,
@@ -282,7 +268,7 @@ async def process_section(
                 
             # プログレス更新
             progress_state[0] += len(batch_chunks)
-            print_log(f"  [Phase 4] 翻訳進捗: [{progress_state[0]}/{progress_state[1]}]")
+            print_log(f"  [Phase 4] 翻訳進捗: {progress_state[0]}/{progress_state[1]} チャンク")
 
     return section_name, translated_nodes
 
@@ -378,13 +364,30 @@ async def _run_phase4_async(
     semaphore = asyncio.Semaphore(4)
     tasks = []
     
-    # レジュメの読み込み
+    # 1. 語彙データの統合読み込み
+    master_glossary = load_glossary_csv(glossary_path)
+    
+    # phase2_meta.json から AI 抽出語彙をマージ 
+    if phase2_state_path.exists():
+        with open(phase2_state_path, "r", encoding="utf-8") as f:
+            phase2_data = json.load(f)
+            ai_keywords = phase2_data.get("keywords_data", [])
+            for kw in ai_keywords:
+                en = kw.get("en", "").strip()
+                ja = kw.get("ja", "").strip()
+                if en and en not in master_glossary:
+                    master_glossary[en] = ja
+        print_log(f"  [Phase 4] AI語彙をマージしました。合計語彙数: {len(master_glossary)}")
+
+    # 2. 全体要約の読み込み
     resume_content = ""
     if phase2_state_path.exists():
         with open(phase2_state_path, "r", encoding="utf-8") as f:
             resume_data = json.load(f)
             resume_content = resume_data.get("resume_content", "")
 
+
+    # 各セクションへのタスク作成
     print_log("  [Phase 4] 翻訳処理実行中 (Parallel Execution)...")
     for section_name, chunks in sections_dict.items():
         if not chunks:

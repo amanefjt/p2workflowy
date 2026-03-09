@@ -138,6 +138,14 @@ class SessionState:
     def phase4(self) -> Path:
         return self.session_dir / "phase4_translation.json"
 
+    @property
+    def metrics_csv(self) -> Path:
+        return self.session_dir / "ttft_metrics.csv"
+
+
+# --- メトリクス計測（継続運用） ---
+METRICS_CSV_PATH = STATE_DIR / "ttft_metrics.csv"
+
 
 # --- 互換性のための古い定義（削除予定だが一時的に残す場合は注意） ---
 # 今後は SessionState インスタンス経由でアクセスすることを推奨

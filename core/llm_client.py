@@ -10,6 +10,7 @@ from typing import Any
 from google import genai
 from google.genai import types
 
+from datetime import datetime
 from .config import GEMINI_API_KEY, STATE_DIR, load_coreprompts, print_log
 
 
@@ -153,6 +154,7 @@ async def call_gemini_async(
     response_schema: Any = None,
     max_retries: int = 3,
     retry_delay: float = 5.0,
+    **kwargs,
 ) -> str:
     """
     Gemini API を非同期ストリーミングで呼び出し、TTFT/TPS 等を計測する。
@@ -230,6 +232,36 @@ async def call_gemini_async(
             
             ttft_val = ttft if ttft is not None else 0
             print_log(f"  [LLM async] Success: Duration {duration:.1f}s (TTFT: {ttft_val:.1f}s, TPS: {tps:.1f}, Prompt: {p_tokens}tk, Output: {c_tokens}tk)")
+            
+            # --- メトリクスを CSV に記録 ---
+            try:
+                from .config import METRICS_CSV_PATH
+                import csv
+                metadata = kwargs.get("metrics_metadata", {})
+                section = metadata.get("section", "N/A")
+                batch_id = metadata.get("batch_id", "N/A")
+                
+                # ファイルが存在しない場合はヘッダーを作成
+                file_exists = METRICS_CSV_PATH.exists()
+                with open(METRICS_CSV_PATH, "a", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f)
+                    if not file_exists:
+                        writer.writerow(["timestamp", "section", "batch_id", "input_chars", "p_tokens", "c_tokens", "ttft", "tps", "duration"])
+                    writer.writerow([
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        section,
+                        batch_id,
+                        len(prompt),
+                        p_tokens,
+                        c_tokens,
+                        f"{ttft_val:.3f}",
+                        f"{tps:.1f}",
+                        f"{duration:.2f}"
+                    ])
+                print_log(f"  [LLM async] Metrics logged to {METRICS_CSV_PATH}")
+            except Exception as e_log:
+                print_log(f"  [LLM async] Metrics logging failed: {e_log}")
+            
             return full_response_text
             
         except Exception as e:

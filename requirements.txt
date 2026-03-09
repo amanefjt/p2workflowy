@@ -1,0 +1,8 @@
+google-genai>=1.0.0
+thefuzz[speedup]
+wordninja
+python-dotenv
+aiolimiter
+fastapi
+uvicorn[standard]
+python-multipart

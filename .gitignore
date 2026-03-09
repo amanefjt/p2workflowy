@@ -1,0 +1,43 @@
+# --- Python 関連 ---
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- システム・OS 関連 ---
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+desktop.ini
+
+# --- p2workflowy 固有のデータ ---
+# APIキーが含まれるため、絶対に無視する必要があります
+.env
+
+# 解析用の中間データ
+state/
+
+# ローカルでのバックアップや古いコードの退避先
+archive/
+
+# 各種データファイル（論文、アップロード、テスト実行結果など）
+data/sample/
+data/uploads/
+data/test_batch/
+
+# ルート直下の生成された成果物（もし存在する場合）
+*_p2.md
+*_p2.txt
+
+# --- エージェント・ドキュメント管理 関連 ---
+# 実装ログやエージェント固有の管理ファイル
+docs/management/
+.antigravity/
+.gemini/
+.agent/

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>p2workflowy - Academic Text to Workflowy</title>
+    <link rel="stylesheet" href="/web/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Outfit:wght@700&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+    <header class="container">
+        <h1 class="logo">p2<span>workflowy</span></h1>
+    </header>
+
+    <main class="container">
+
+        <div class="main-card">
+            <section class="overview">
+                <p>学術論文のテキストを、Workflowyに最適な構造化された日本語アウトラインへ変換します。</p>
+            </section>
+
+            <form id="process-form">
+                <div class="setup-grid">
+                    <!-- BYOK -->
+                    <div class="setup-item">
+                        <h3>1. Gemini API Key</h3>
+                        <div class="form-group">
+                            <input type="password" id="api_key" placeholder="Enter your Gemini API Key...">
+                            <label style="margin-top: 0.5rem;"><a href="https://aistudio.google.com/app/apikey"
+                                    target="_blank" class="link-download">Get API Key from Google AI Studio
+                                    (Free)</a></label>
+                        </div>
+                    </div>
+
+                    <!-- Expertise -->
+                    <div class="setup-item">
+                        <h3>2. Translation Expertise</h3>
+                        <div class="form-group">
+                            <label>専門分野 (Example: 文化人類学, 経済学, 社会学...)</label>
+                            <input type="text" id="expertise" name="expertise" value="文化人類学" placeholder="専門分野を入力...">
+                        </div>
+                    </div>
+
+                    <!-- Glossary -->
+                    <div class="setup-item">
+                        <h3>2. Custom Glossary (Optional)</h3>
+                        <div class="file-row">
+                            <input type="file" id="glossary_file" name="glossary" accept=".csv">
+                            <a href="/api/glossary/sample" class="link-download">Download Sample CSV</a>
+                        </div>
+                    </div>
+
+                    <!-- Input -->
+                    <div class="setup-item">
+                        <h3>3. Paper Content</h3>
+                        <div class="important-note" style="margin-top: 0; margin-bottom: 1rem;">
+                            <strong>Note:</strong> PDFの直接アップロードには対応していません。テキストをコピーして貼り付けてください。<br>
+                            <small>※ PDFをMicrosoft Wordで一度開いてからコピーすると、テキストが比較的綺麗に抜き出せるため推奨されます。</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Title (Optional)</label>
+                            <input type="text" id="title" name="title" placeholder="論文のタイトル...">
+                        </div>
+                        <div class="form-group">
+                            <label>Paste Text Here</label>
+                            <textarea id="text" name="text" rows="10" placeholder="PDFからコピーした内容を貼り付けてください..."
+                                required></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" id="submit-btn" class="btn-submit">変換を開始する</button>
+            </form>
+
+            <!-- Status Container -->
+            <div id="status-container" class="hidden">
+                <div class="status-box">
+                    <div class="progress-header">
+                        <span id="status-text">Processing...</span>
+                        <span id="percent-text">0%</span>
+                    </div>
+                    <div class="progress-track">
+                        <div id="progress-fill"></div>
+                    </div>
+                    <div id="log-viewer" class="log-mini"></div>
+
+                    <div id="download-links" class="results-area hidden">
+                        <a id="dl-markdown" class="btn-download" href="#" target="_blank">Download Markdown (.md)</a>
+                        <a id="dl-workflowy" class="btn-download" href="#" target="_blank">Download for Workflowy
+                            (.txt)</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="container">
+        <p>&copy; 2026 p2workflowy. Simple & Efficient.</p>
+    </footer>
+
+    <script src="/web/app.js"></script>
+</body>
+
+</html>

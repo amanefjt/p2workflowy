@@ -130,7 +130,27 @@ input:focus,
 textarea:focus {
     border-color: var(--primary-color);
     outline: none;
-    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+    box-shadow: 0 0 0 4px rgba(73, 186, 242, 0.1);
+}
+
+.api-note {
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    color: var(--text-muted);
+    background: #f1f5f9;
+    padding: 0.75rem;
+    border-radius: 0.5rem;
+}
+
+.api-note p:first-child {
+    margin-bottom: 0.5rem;
+}
+
+.api-note a {
+    color: var(--primary-color);
+    text-decoration: underline;
+    font-weight: 600;
 }
 
 .file-row {

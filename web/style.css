@@ -1,9 +1,9 @@
 :root {
-    --primary-color: #6366f1;
-    /* solid indigo */
-    --primary-hover: #4f46e5;
-    --accent-color: #be185d;
-    /* pink/maroon for logo/headers */
+    --primary-color: #49BAF2;
+    /* Workflowy Sky Blue */
+    --primary-hover: #3ca3d6;
+    --accent-color: #47525B;
+    /* Workflowy Bluish Gray */
     --bg-color: #f8fafc;
     /* slate-50 light background */
     --card-bg: #ffffff;
@@ -46,12 +46,12 @@ header {
     font-family: 'Outfit', sans-serif;
     font-size: 2.5rem;
     font-weight: 700;
-    color: var(--text-color);
+    color: var(--accent-color);
     letter-spacing: -0.02em;
 }
 
 .logo span {
-    color: var(--accent-color);
+    color: var(--primary-color);
 }
 
 /* Main Card */

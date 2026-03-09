@@ -30,6 +30,13 @@ async def index():
         return JSONResponse({"error": "index.html not found. Please wait while it's being created."}, status_code=503)
     return FileResponse(index_path)
 
+@app.get("/ronbun")
+async def ronbun_page():
+    ronbun_path = web_dir / "ronbun.html"
+    if not ronbun_path.exists():
+        return JSONResponse({"error": "ronbun.html not found."}, status_code=404)
+    return FileResponse(ronbun_path)
+
 @app.post("/api/process")
 async def process(
     text: str = Form(...),
@@ -117,8 +124,12 @@ async def download(task_id: str, file_type: str):
         
     if file_type == "markdown":
         files = list(session_dir.glob("*.md"))
+        # ronbun.md を除外（p2.md のみを対象にしたい場合。あるいは両方含めても良いが、ここでは区別する）
+        files = [f for f in files if not f.name.endswith("_ronbun.md")]
     elif file_type == "workflowy":
-        files = list(session_dir.glob("*_workflowy.txt"))
+        files = list(session_dir.glob("*_p2.txt"))
+    elif file_type == "ronbun":
+        files = list(session_dir.glob("*_ronbun.md"))
     else:
         raise HTTPException(status_code=400, detail="Invalid file type")
         

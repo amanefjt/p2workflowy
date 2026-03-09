@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>p2workflowy - Academic Text to Workflowy</title>
+    <title>RonbunNihongo - Academic Text to Japanese Markdown</title>
     <link rel="stylesheet" href="style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -14,14 +14,14 @@
 
 <body>
     <header class="container">
-        <h1 class="logo">p2<span>workflowy</span></h1>
+        <h1 class="logo">ronbun<span>nihongo</span></h1>
     </header>
 
     <main class="container">
 
         <div class="main-card">
             <section class="overview">
-                <p>学術論文のテキストを、Workflowyに最適な構造化された日本語アウトラインへ変換します。</p>
+                <p>RonbunNihongoは、学術論文を日本語で深く読むための翻訳専用ツールです。複雑なアウトライン構造を排し、純粋な日本語のMarkdown出力に特化しています。</p>
             </section>
 
             <form id="process-form">
@@ -52,7 +52,7 @@
 
                     <!-- Glossary -->
                     <div class="setup-item">
-                        <h3>3. 用語集 (任意)</h3>
+                        <h3>2. 用語集 (任意)</h3>
                         <div class="file-row">
                             <input type="file" id="glossary_file" name="glossary" accept=".csv">
                             <a href="/api/glossary/sample" class="link-download">サンプルCSVをダウンロード</a>
@@ -61,10 +61,9 @@
 
                     <!-- Input -->
                     <div class="setup-item">
-                        <h3>4. 論文の内容</h3>
+                        <h3>3. 論文の内容</h3>
                         <div class="important-note" style="margin-top: 0; margin-bottom: 1rem;">
-                            <strong>Note:</strong> PDFを直接読み込むことはできません。テキストをコピー＆ペーストしてください。<br>
-                            <small>※ PDFをMicrosoft Wordで一度開いてからコピーすると、テキストが比較的綺麗に抜き出せるため推奨されます。</small>
+                            <strong>Note:</strong> PDFを直接読み込むことはできません。テキストをコピー＆ペーストしてください。
                         </div>
                         <div class="form-group">
                             <label>論文タイトル（任意）</label>
@@ -78,7 +77,7 @@
                     </div>
                 </div>
 
-                <button type="submit" id="submit-btn" class="btn-submit">変換を開始する</button>
+                <button type="submit" id="submit-btn" class="btn-submit">翻訳を開始する</button>
             </form>
 
             <!-- Status Container -->
@@ -94,9 +93,8 @@
                     <div id="log-viewer" class="log-mini"></div>
 
                     <div id="download-links" class="results-area hidden">
-                        <a id="dl-markdown" class="btn-download" href="#" target="_blank">日本語 + 英語原文 (.md) をダウンロード</a>
-                        <a id="dl-workflowy" class="btn-download" href="#" target="_blank">Workflowy用テキスト (.txt)
-                            をダウンロード</a>
+                        <a id="dl-ronbun" class="btn-download btn-primary" href="#" target="_blank"
+                            style="font-size: 1.2rem; padding: 1.2rem;">Download RonbunNihongo (.md)</a>
                     </div>
                 </div>
             </div>
@@ -104,10 +102,10 @@
     </main>
 
     <footer class="container">
-        <p>&copy; 2026 p2workflowy. Simple & Efficient.</p>
+        <p>&copy; 2026 RonbunNihongo. For Better Reading.</p>
     </footer>
 
-    <script src="app.js"></script>
+    <script src="app_ronbun.js"></script>
 </body>
 
 </html>

@@ -75,10 +75,11 @@ def run_pipeline(
     # --- Phase 5: Export ---
     if start_phase <= 5:
         print_log("--- Phase 5: Export ---")
-        md_path, wf_path = run_phase5(input_path, title, state.phase2, state.phase3_structure, state.phase4)
+        md_path, wf_path, rn_path = run_phase5(input_path, title, state.phase2, state.phase3_structure, state.phase4)
         print_log(f"  完了: 出力ファイル作成済\n")
         print_log(f"    Markdown: {md_path}")
         print_log(f"    Workflowy: {wf_path}")
+        print_log(f"    RonbunNihongo: {rn_path}")
         print_log()
 
     print_log("=== Pipeline 完了 ===")

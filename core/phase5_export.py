@@ -74,15 +74,33 @@ def generate_markdown_output(
         "",
         "## English text",
         "",
-        tree_to_markdown(english_tree, base_level=2), # Changed base_level from 3 to 2
+        tree_to_markdown(english_tree, base_level=2),
         "",
         "## 日本語テキスト",
         "",
-        tree_to_markdown(japanese_tree, base_level=2) # Changed base_level from 3 to 2
+        tree_to_markdown(japanese_tree, base_level=2)
     ]
 
     raw_md = "\n".join(parts)
     # 3つ以上連続する改行を2つに圧縮して可読性を向上
+    clean_md = re.sub(r'\n{3,}', '\n\n', raw_md)
+    return clean_md.strip() + "\n"
+
+
+def generate_ronbun_nihongo_output(
+    title: str,
+    japanese_tree: List[TreeNode],
+) -> str:
+    """日本語訳のみのMarkdown(RonbunNihongo)を生成する。"""
+    parts: List[str] = [
+        f"# {title}",
+        "",
+        "## 日本語訳",
+        "",
+        tree_to_markdown(japanese_tree, base_level=2)
+    ]
+
+    raw_md = "\n".join(parts)
     clean_md = re.sub(r'\n{3,}', '\n\n', raw_md)
     return clean_md.strip() + "\n"
 
@@ -189,7 +207,7 @@ def run_phase5(
     phase2_state_path: str | Path,
     structure_state_path: str | Path,
     phase4_state_path: str | Path,
-) -> Tuple[Path, Path]:
+) -> Tuple[Path, Path, Path]:
     """
     Phase 5 メイン処理。
     中間状態ファイルを読み込み、最終ファイルを出力する。
@@ -224,6 +242,7 @@ def run_phase5(
     output_dir = input_path.parent
     md_path = output_dir / f"{stem}_p2.md"
     wf_path = output_dir / f"{stem}_p2.txt"
+    rn_path = output_dir / f"{stem}_ronbun.md" # RonbunNihongo 出力
 
     print_log(f"  [Phase 5] ファイル出力開始: {stem}")
 
@@ -239,4 +258,10 @@ def run_phase5(
         f.write(wf_content)
     print_log(f"  [Phase 5] Workflowy (txt) 保存完了: {wf_path.name}")
 
-    return md_path, wf_path
+    # RonbunNihongo 生成と保存
+    rn_content = generate_ronbun_nihongo_output(title, japanese_tree)
+    with open(rn_path, "w", encoding="utf-8") as f:
+        f.write(rn_content)
+    print_log(f"  [Phase 5] RonbunNihongo 保存完了: {rn_path.name}")
+
+    return md_path, wf_path, rn_path

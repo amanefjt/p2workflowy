@@ -20,16 +20,17 @@ form.addEventListener('submit', async (e) => {
 
     const formData = new FormData(form);
     const apiKey = document.getElementById('api_key').value;
-    const expertise = document.getElementById('expertise').value || '文化人類学';
+    const expertise = document.getElementById('expertise').value;
 
-    // Save to localStorage
-    if (apiKey) localStorage.setItem('p2w_api_key', apiKey);
-    localStorage.setItem('p2w_expertise', expertise);
+    // 設定の保存（空入力でも上書き保存を許可）
+    localStorage.setItem('p2workflowy_api_key', apiKey);
+    localStorage.setItem('p2workflowy_expertise', expertise);
 
     if (apiKey) {
         formData.set('api_key', apiKey);
     }
     formData.append('expertise', expertise);
+    formData.append('export_mode', 'ronbunnihongo');
 
     // UI Update
     submitBtn.disabled = true;

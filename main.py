@@ -40,6 +40,11 @@ def main():
         choices=[1, 2, 3, 4, 5],
         help="再開するフェーズ番号（1-5）",
     )
+    parser.add_argument(
+        "--ronbun",
+        action="store_true",
+        help="RonbunNihongo モードで実行（日本語訳のみのMarkdownを出力）",
+    )
 
     args = parser.parse_args()
 
@@ -96,11 +101,13 @@ def main():
 
         print(f"\n[{i}/{len(input_files)}] --- 処理を開始します: {p.name} ---")
         try:
+            export_mode = "ronbunnihongo" if args.ronbun else "p2workflowy"
             run_pipeline(
                 input_path=str(p),
                 glossary_path=args.glossary,
                 title=args.title if len(input_files) == 1 else None, # titleは単一ファイル処理時のみ有効
                 resume_from=args.resume,
+                export_mode=export_mode,
             )
         except Exception as e:
             print(f"[{i}/{len(input_files)}] エラー発生: {e}")

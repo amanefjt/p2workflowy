@@ -25,6 +25,7 @@ def run_pipeline(
     api_key: str | None = None,
     session_id: str | None = None,
     expertise: str = "文化人類学",
+    export_mode: str = "p2workflowy", 
 ) -> None:
     """
     パイプライン全体を実行する。
@@ -75,11 +76,10 @@ def run_pipeline(
     # --- Phase 5: Export ---
     if start_phase <= 5:
         print_log("--- Phase 5: Export ---")
-        md_path, wf_path, rn_path = run_phase5(input_path, title, state.phase2, state.phase3_structure, state.phase4)
-        print_log(f"  完了: 出力ファイル作成済\n")
-        print_log(f"    Markdown: {md_path}")
-        print_log(f"    Workflowy: {wf_path}")
-        print_log(f"    RonbunNihongo: {rn_path}")
+        output_paths = run_phase5(input_path, title, state.phase2, state.phase3_structure, state.phase4, export_mode=export_mode)
+        print_log(f"  完了: 出力ファイル作成済 (計 {len(output_paths)} 件)\n")
+        for p in output_paths:
+            print_log(f"    - {p}")
         print_log()
 
     print_log("=== Pipeline 完了 ===")

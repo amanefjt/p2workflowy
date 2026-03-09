@@ -11,12 +11,15 @@ from typing import List, Tuple
 from .config import print_log
 from .models import TreeNode
 
+# デフォルトの見出しレベル
+DEFAULT_SECTION_LEVEL = 2
+
 
 # =============================================================================
 # Markdown 出力
 # =============================================================================
 
-def tree_to_markdown(nodes: List[TreeNode], base_level: int = 2) -> str:
+def tree_to_markdown(nodes: List[TreeNode], base_level: int = DEFAULT_SECTION_LEVEL) -> str:
     """TreeNodeリストをMarkdown形式に再帰的に変換する。"""
     lines: List[str] = []
 
@@ -64,7 +67,7 @@ def generate_markdown_output(
     english_tree: List[TreeNode],
     japanese_tree: List[TreeNode],
 ) -> str:
-    """3部構成のMarkdown出力を生成し、不要な改行をクリーンアップする。"""
+    """3部構成のMarkdown出力を生成する（ideal_mdstructure.md 準拠）。"""
     parts: List[str] = [
         f"# {title}",
         "",
@@ -74,10 +77,11 @@ def generate_markdown_output(
         "",
         "## English text",
         "",
-        tree_to_markdown(english_tree, base_level=2),
+        tree_to_markdown(english_tree, base_level=3),
         "",
-        "## 日本語テキスト",
+        "## 日本語本文",
         "",
+        # "## 日本語テキスト" などのラッパーを削除し、直接セクションを展開
         tree_to_markdown(japanese_tree, base_level=2)
     ]
 
@@ -91,12 +95,11 @@ def generate_ronbun_nihongo_output(
     title: str,
     japanese_tree: List[TreeNode],
 ) -> str:
-    """日本語訳のみのMarkdown(RonbunNihongo)を生成する。"""
+    """日本語訳のみのMarkdown(RonbunNihongo)を生成する（ideal_ronbunmdstructure.md 準拠）。"""
     parts: List[str] = [
         f"# {title}",
         "",
-        "## 日本語訳",
-        "",
+        # "## 日本語訳" などのラッパーを削除
         tree_to_markdown(japanese_tree, base_level=2)
     ]
 
@@ -175,7 +178,7 @@ def generate_workflowy_output(
     english_tree: List[TreeNode],
     japanese_tree: List[TreeNode],
 ) -> str:
-    """3部構成のWorkflowy出力を生成する (ideal_structure.txt 準拠)。"""
+    """3部構成のWorkflowy出力を生成する (ideal_wfstructure.txt 準拠)。"""
     lines: List[str] = []
 
     # 1. 論文タイトル (Top Level)
@@ -187,11 +190,12 @@ def generate_workflowy_output(
 
     # 3. English text [Level 1]
     lines.append("- English text")
-    # 文書内の各セクション（Abstract等）をタイトルの直下（Level 1）にするため base_depth=0
-    lines.append(tree_to_workflowy(english_tree, base_depth=0))
+    # 各部分をタイトルの直下（Level 1）にするため base_depth=1
+    lines.append(tree_to_workflowy(english_tree, base_depth=1))
 
     # 4. 日本語テキスト [Level 1]
-    lines.append("- 日本語テキスト") 
+    lines.append("- 日本語本文")
+    # 各部分をタイトルの直下（Level 1）にするため base_depth=0
     lines.append(tree_to_workflowy(japanese_tree, base_depth=0))
 
     return "\n".join(lines)
@@ -207,7 +211,8 @@ def run_phase5(
     phase2_state_path: str | Path,
     structure_state_path: str | Path,
     phase4_state_path: str | Path,
-) -> Tuple[Path, Path, Path]:
+    export_mode: str = "p2workflowy", # "p2workflowy" or "ronbunnihongo"
+) -> List[Path]:
     """
     Phase 5 メイン処理。
     中間状態ファイルを読み込み、最終ファイルを出力する。
@@ -240,28 +245,36 @@ def run_phase5(
     # 出力パスの設定
     stem = input_path.stem
     output_dir = input_path.parent
-    md_path = output_dir / f"{stem}_p2.md"
-    wf_path = output_dir / f"{stem}_p2.txt"
-    rn_path = output_dir / f"{stem}_ronbun.md" # RonbunNihongo 出力
+    
+    output_paths = []
 
-    print_log(f"  [Phase 5] ファイル出力開始: {stem}")
+    print_log(f"  [Phase 5] ファイル出力開始: {stem} (Mode: {export_mode})")
 
-    # Markdown 生成と保存
-    md_content = generate_markdown_output(title, resume_content, english_tree, japanese_tree)
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(md_content)
-    print_log(f"  [Phase 5] Markdown 保存完了: {md_path.name}")
+    if export_mode == "p2workflowy":
+        md_path = output_dir / f"{stem}_p2.md"
+        wf_path = output_dir / f"{stem}_p2.txt"
 
-    # Workflowy 生成と保存
-    wf_content = generate_workflowy_output(title, resume_content, english_tree, japanese_tree)
-    with open(wf_path, "w", encoding="utf-8") as f:
-        f.write(wf_content)
-    print_log(f"  [Phase 5] Workflowy (txt) 保存完了: {wf_path.name}")
+        # Markdown 生成と保存
+        md_content = generate_markdown_output(title, resume_content, english_tree, japanese_tree)
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(md_content)
+        print_log(f"  [Phase 5] Markdown 保存完了: {md_path.name}")
+        output_paths.append(md_path)
 
-    # RonbunNihongo 生成と保存
-    rn_content = generate_ronbun_nihongo_output(title, japanese_tree)
-    with open(rn_path, "w", encoding="utf-8") as f:
-        f.write(rn_content)
-    print_log(f"  [Phase 5] RonbunNihongo 保存完了: {rn_path.name}")
+        # Workflowy 生成と保存
+        wf_content = generate_workflowy_output(title, resume_content, english_tree, japanese_tree)
+        with open(wf_path, "w", encoding="utf-8") as f:
+            f.write(wf_content)
+        print_log(f"  [Phase 5] Workflowy (txt) 保存完了: {wf_path.name}")
+        output_paths.append(wf_path)
 
-    return md_path, wf_path, rn_path
+    elif export_mode == "ronbunnihongo":
+        rn_path = output_dir / f"{stem}_ronbun.md"
+        # RonbunNihongo 生成と保存
+        rn_content = generate_ronbun_nihongo_output(title, japanese_tree)
+        with open(rn_path, "w", encoding="utf-8") as f:
+            f.write(rn_content)
+        print_log(f"  [Phase 5] RonbunNihongo 保存完了: {rn_path.name}")
+        output_paths.append(rn_path)
+
+    return output_paths

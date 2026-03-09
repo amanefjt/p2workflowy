@@ -13,29 +13,20 @@ from core.config import DATA_DIR, STATE_DIR, PROJECT_ROOT
 
 app = FastAPI(title="p2workflowy Web")
 
-# ワークスペース内の web ディレクトリをマウント
-# 静的ファイル（CSS, JS, 画像）用
-# index.html はルートで返すため、StaticFiles ではなく FileResponse を使う
+# ワークスペース内の web ディレクトリのパス
 web_dir = PROJECT_ROOT / "web"
 web_dir.mkdir(exist_ok=True)
-app.mount("/web", StaticFiles(directory=str(web_dir)), name="web")
 
 # タスク管理（簡易版）
 task_status: Dict[str, dict] = {}
 
 @app.get("/")
 async def index():
-    index_path = web_dir / "index.html"
-    if not index_path.exists():
-        return JSONResponse({"error": "index.html not found. Please wait while it's being created."}, status_code=503)
-    return FileResponse(index_path)
+    return FileResponse(web_dir / "index.html")
 
 @app.get("/ronbun")
 async def ronbun_page():
-    ronbun_path = web_dir / "ronbun.html"
-    if not ronbun_path.exists():
-        return JSONResponse({"error": "ronbun.html not found."}, status_code=404)
-    return FileResponse(ronbun_path)
+    return FileResponse(web_dir / "ronbun.html")
 
 @app.post("/api/process")
 async def process(
@@ -44,6 +35,7 @@ async def process(
     api_key: Optional[str] = Form(None),
     expertise: str = Form("文化人類学"),
     glossary: Optional[UploadFile] = File(None),
+    export_mode: str = Form("p2workflowy"),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     task_id = str(uuid.uuid4())
@@ -73,12 +65,12 @@ async def process(
     }
     
     background_tasks.add_task(
-        run_task, task_id, str(input_path), str(glossary_path) if glossary_path else None, title, api_key, expertise
+        run_task, task_id, str(input_path), str(glossary_path) if glossary_path else None, title, api_key, expertise, export_mode
     )
     
     return {"task_id": task_id}
 
-def run_task(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str):
+def run_task(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str, export_mode: str):
     try:
         # パイプライン実行
         run_pipeline(
@@ -87,7 +79,8 @@ def run_task(task_id: str, input_path: str, glossary_path: Optional[str], title:
             title=title,
             api_key=api_key,
             session_id=task_id,
-            expertise=expertise
+            expertise=expertise,
+            export_mode=export_mode
         )
         task_status[task_id]["status"] = "completed"
     except Exception as e:
@@ -106,12 +99,14 @@ async def get_status(task_id: str):
     if task_status[task_id]["status"] == "processing":
         session_dir = STATE_DIR / task_id
         if (session_dir / "phase4_translation.json").exists():
-            task_status[task_id]["progress"] = "Phase 4: Translating..."
+            task_status[task_id]["progress"] = "Phase 5: Exporting..."
         elif (session_dir / "phase3_structure.json").exists():
-            task_status[task_id]["progress"] = "Phase 3: Structuring..."
+            task_status[task_id]["progress"] = "Phase 4: Translating..."
         elif (session_dir / "phase2_meta.json").exists():
-            task_status[task_id]["progress"] = "Phase 2: Analyzing..."
+            task_status[task_id]["progress"] = "Phase 3: Structuring..."
         elif (session_dir / "phase1_clean.json").exists():
+            task_status[task_id]["progress"] = "Phase 2: Analyzing..."
+        else:
             task_status[task_id]["progress"] = "Phase 1: Preprocessing..."
             
     return task_status[task_id]
@@ -149,6 +144,9 @@ async def get_sample_glossary():
         with open(sample_path, "w", encoding="utf-8") as f:
             f.write("Term,Translation\nLLM,大規模言語モデル\n")
     return FileResponse(sample_path, filename="glossary_sample.csv")
+
+# 静的ファイルをルートで配信（他のルート定義の後で行う必要がある）
+app.mount("/", StaticFiles(directory=str(web_dir), html=True), name="web")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -13,9 +13,9 @@ from .llm_client import call_gemini
 
 
 # サンプリング閾値
-MAX_INPUT_CHARS = 300_000   # これ以上の場合はサンプリング
-HEAD_CHARS = 40_000         # サンプリング時の冒頭文字数
-TAIL_CHARS = 20_000         # サンプリング時の末尾文字数
+MAX_INPUT_CHARS = 5_000_000  # これ以上の場合はサンプリング（Gemini 1.5 Pro/Flashのコンテキストを考慮）
+HEAD_CHARS = 500_000        # 大幅に拡大
+TAIL_CHARS = 200_000        # 大幅に拡大
 
 
 def _build_full_text(chunks_path: str | Path) -> str:

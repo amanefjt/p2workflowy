@@ -74,29 +74,22 @@ async function pollStatus(taskId) {
 
             const data = await response.json();
 
-            statusText.innerText = data.progress || 'Processing...';
+            statusText.innerText = getFriendlyStatus(data.progress);
 
-            // 簡易的な進捗表示 (サーバー側の実装に合わせて調整が必要)
             if (data.status === 'processing') {
-                if (data.progress.includes('Phase 1')) updateProgress(20);
-                else if (data.progress.includes('Phase 2')) updateProgress(40);
-                else if (data.progress.includes('Phase 3')) updateProgress(60);
-                else if (data.progress.includes('Phase 4')) updateProgress(80);
+                const progress = calculateProgress(data.progress);
+                updateProgress(progress);
             }
 
             if (data.status === 'completed') {
                 clearInterval(interval);
                 updateProgress(100);
-                statusText.innerText = 'Completed';
+                statusText.innerText = '完了！';
                 showDownloads(taskId);
-                logViewer.innerHTML += '<br><strong style="color: #4ade80">Success: Workflowy output generated.</strong>';
-                logViewer.scrollTop = logViewer.scrollHeight;
                 resetButton();
             } else if (data.status === 'failed') {
                 clearInterval(interval);
-                statusText.innerText = 'Failed';
-                logViewer.innerHTML += `<br><span style="color: #ef4444">Error: ${data.error}</span>`;
-                logViewer.scrollTop = logViewer.scrollHeight;
+                statusText.innerText = 'エラーが発生しました';
                 resetButton();
             }
         } catch (err) {
@@ -116,4 +109,22 @@ function showDownloads(taskId) {
     downloadLinks.classList.remove('hidden');
     // Scroll to download section
     downloadLinks.scrollIntoView({ behavior: 'smooth' });
+}
+
+function getFriendlyStatus(progressMsg) {
+    if (!progressMsg) return '準備中...';
+    if (progressMsg.includes('Phase 1')) return 'テキスト分析中...';
+    if (progressMsg.includes('Phase 2') || progressMsg.includes('Phase 3')) return '構造解析中...';
+    if (progressMsg.includes('Phase 4')) return '翻訳中...';
+    if (progressMsg.includes('Phase 5')) return '仕上げ中...';
+    return '処理中...';
+}
+
+function calculateProgress(progressMsg) {
+    if (!progressMsg) return 5;
+    if (progressMsg.includes('Phase 1')) return 25;
+    if (progressMsg.includes('Phase 2') || progressMsg.includes('Phase 3')) return 50;
+    if (progressMsg.includes('Phase 4')) return 75;
+    if (progressMsg.includes('Phase 5')) return 90;
+    return 10;
 }

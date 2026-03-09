@@ -68,17 +68,17 @@ def generate_markdown_output(
     parts: List[str] = [
         f"# {title}",
         "",
-        "## レジュメ (Resume)",
+        "## レジュメ",
         "",
         format_resume_markdown(resume_content),
         "",
         "## English text",
         "",
-        tree_to_markdown(english_tree, base_level=3),
+        tree_to_markdown(english_tree, base_level=2), # Changed base_level from 3 to 2
         "",
-        "## 日本語テキスト (Japanese Text)",
+        "## 日本語テキスト",
         "",
-        tree_to_markdown(japanese_tree, base_level=3)
+        tree_to_markdown(japanese_tree, base_level=2) # Changed base_level from 3 to 2
     ]
 
     raw_md = "\n".join(parts)
@@ -157,19 +157,24 @@ def generate_workflowy_output(
     english_tree: List[TreeNode],
     japanese_tree: List[TreeNode],
 ) -> str:
-    """3部構成のWorkflowy出力を生成する。"""
+    """3部構成のWorkflowy出力を生成する (ideal_structure.txt 準拠)。"""
     lines: List[str] = []
 
+    # 1. 論文タイトル (Top Level)
     lines.append(f"{title}")
 
-    lines.append("- レジュメ (Resume)")
+    # 2. レジュメ (Resume) [Level 1]
+    lines.append("- レジュメ")
     lines.append(resume_to_workflowy(resume_content, base_depth=1))
 
+    # 3. English text [Level 1]
     lines.append("- English text")
-    lines.append(tree_to_workflowy(english_tree, base_depth=1))
+    # 文書内の各セクション（Abstract等）をタイトルの直下（Level 1）にするため base_depth=0
+    lines.append(tree_to_workflowy(english_tree, base_depth=0))
 
-    lines.append("- 日本語テキスト (Japanese Text)")
-    lines.append(tree_to_workflowy(japanese_tree, base_depth=1))
+    # 4. 日本語テキスト [Level 1]
+    lines.append("- 日本語テキスト") 
+    lines.append(tree_to_workflowy(japanese_tree, base_depth=0))
 
     return "\n".join(lines)
 

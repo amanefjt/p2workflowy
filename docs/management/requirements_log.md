@@ -188,10 +188,12 @@
     - `core/phase2_meta.py` にモデル名の判定ロジックを追加し、Gemini 2.0 Flash 検知時に自動で専用プロンプトへ切り替える仕組みを実装。
 - **結果**: `Arbitrarysample_p2.txt` での検証により、セクションが正しく分割され、構造が維持されることを確認。
 
-## 2026-03-11: Web 版のデフォルトモデルを Gemini 3.1 Flash Lite に変更
+## 2026-03-11: Web 版のデフォルトモデルを Gemini 3.1 Flash Lite (Preview) に変更
 - **背景**: Google AI Studio の無料枠において、Gemini 2.5 Flash / Gemini 3 Flash の制限が「1日20リクエスト (20 RPD)」と極めて厳しくなっていることが判明。論文翻訳のように数十〜百回のリクエストを要する用途では、一回の実行で上限に達してしまう。
-- **解決策**: 無料枠で「1日500リクエスト (500 RPD)」の余裕がある **Gemini 3.1 Flash Lite** を Web 版のデフォルトモデルに採用。
+- **解決策**: 無料枠で「1日500リクエスト (500 RPD)」の余裕がある **Gemini 3.1 Flash Lite (Preview)** を Web 版のデフォルトモデルに採用。
 - **実装**:
-    - `server.py` の `run_task` 内で `model="gemini-3.1-flash-lite"` を指定。
-    - `core/phase2_meta.py` のプロンプト切り替え条件を拡張し、`gemini-3.1-flash` シリーズでも構造重視プロンプト (`SUMMARY_PROMPT_ronbun`) が適用されるように修正。
-- **結果**: 1日の翻訳可能回数が大幅に増加し、実用的な Web サービスとしての運用が可能になった。
+    - `server.py` のデフォルトモデルを `gemini-3.1-flash-lite-preview` に変更。
+    - `core/llm_client.py` に `thinking_level="high"` 引数を追加し、3.1 系のモデルでは論理崩壊を防ぐためデフォルトで「高」設定を適用。
+    - `core/phase2_meta.py` のプロンプト出し分けを精緻化。`gemini-3-flash-preview` は安定しているため標準プロンプト (`SUMMARY_PROMPT`) を使い、それ以外の Flash 系（2.0, 2.5, 3.1 Lite）には構造重視プロンプト (`SUMMARY_PROMPT_ronbun`) を適用。
+    - `core/coreprompts.json` の `SUMMARY_PROMPT_ronbun` に「日本の学会誌で使える格調高い『だ・である』調」の指示を追加。
+- **結果**: 1日の翻訳可能回数が大幅に増加し、Lite 版でも思考レベル「高」と専用プロンプトの併用により、高い構造解析精度と翻訳品質を両立できた。

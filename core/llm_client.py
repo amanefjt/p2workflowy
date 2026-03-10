@@ -54,6 +54,7 @@ def call_gemini(
     temperature: float = 0.3,
     response_mime_type: str | None = None,
     response_schema: Any = None,
+    thinking_level: str | None = None,
     max_retries: int = 3,
     retry_delay: float = 5.0,
 ) -> str:
@@ -81,6 +82,13 @@ def call_gemini(
         config_kwargs["response_mime_type"] = response_mime_type
     if response_schema:
         config_kwargs["response_schema"] = response_schema
+
+    # Gemini 3.1 などのThinkingモデル向けパラメータ
+    if thinking_level:
+        config_kwargs["thinking_level"] = thinking_level
+    elif model and "gemini-3.1" in model.lower():
+        # 学術論文翻訳の品質を保つため、3.1系はデフォルトで high に設定
+        config_kwargs["thinking_level"] = "high"
 
     safety_settings = [
         types.SafetySetting(category=cat, threshold="BLOCK_NONE")
@@ -166,6 +174,7 @@ async def call_gemini_async(
     temperature: float = 0.3,
     response_mime_type: str | None = None,
     response_schema: Any = None,
+    thinking_level: str | None = None,
     max_retries: int = 3,
     retry_delay: float = 5.0,
     **kwargs,
@@ -188,6 +197,12 @@ async def call_gemini_async(
         config_kwargs["response_mime_type"] = response_mime_type
     if response_schema:
         config_kwargs["response_schema"] = response_schema
+
+    # Gemini 3.1 などのThinkingモデル向けパラメータ
+    if thinking_level:
+        config_kwargs["thinking_level"] = thinking_level
+    elif model and "gemini-3.1" in model.lower():
+        config_kwargs["thinking_level"] = "high"
 
     safety_settings = [
         types.SafetySetting(category=cat, threshold="BLOCK_NONE")

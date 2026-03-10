@@ -10,7 +10,7 @@ const submitBtn = document.getElementById('submit-btn');
 // APIのベースURL設定: Cloudflare Pages 上では外部のバックエンドURLを指定
 const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
     ? '' 
-    : 'https://p2workflowy-api.onrender.com'; // 仮のURL。デプロイ後に確定版へ差し替えます。
+    : 'https://p2workflowy.onrender.com';
 
 // Load saved values from localStorage
 document.addEventListener('DOMContentLoaded', () => {

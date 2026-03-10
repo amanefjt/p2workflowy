@@ -45,6 +45,11 @@ def main():
         action="store_true",
         help="RonbunNihongo モードで実行（日本語訳のみのMarkdownを出力）",
     )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="使用する LLM モデル名 (例: gemini-2.0-flash)",
+    )
 
     args = parser.parse_args()
 
@@ -108,6 +113,7 @@ def main():
                 title=args.title if len(input_files) == 1 else None, # titleは単一ファイル処理時のみ有効
                 resume_from=args.resume,
                 export_mode=export_mode,
+                model=args.model,
             )
         except Exception as e:
             print(f"[{i}/{len(input_files)}] エラー発生: {e}")

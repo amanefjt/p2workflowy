@@ -48,7 +48,13 @@ def generate_resume(text: str, api_key: str | None = None, expertise: str = "文
         str: 生成されたレジュメ（Markdown）
     """
     prompts = load_coreprompts()
-    prompt_tpl = prompts["SUMMARY_PROMPT"]
+    
+    # モデルに応じてプロンプトテンプレートを切り替え
+    if model and "gemini-2.0-flash" in model.lower():
+        prompt_tpl = prompts.get("SUMMARY_PROMPT_ronbun", prompts["SUMMARY_PROMPT"])
+        print_log(f"  [Phase 2] Gemini 2.0 Flash 検知: 専用の構造重視プロンプトを使用します。")
+    else:
+        prompt_tpl = prompts["SUMMARY_PROMPT"]
 
     # プロンプト構築
     prompt = prompt_tpl.replace("{expertise}", expertise).replace("{context_guide}", "").replace("{text}", text)

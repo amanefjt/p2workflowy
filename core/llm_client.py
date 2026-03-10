@@ -138,9 +138,23 @@ def call_gemini(
             
         except Exception as e:
             last_error = e
-            print_log(f"  [LLM] リトライ {attempt}/{max_retries}: {type(e).__name__}: {e}")
+            msg = str(e)
+            print_log(f"  [LLM] リトライ {attempt}/{max_retries}: {type(e).__name__}: {msg}")
+            
             if attempt < max_retries:
-                time.sleep(retry_delay * attempt)
+                wait_time = retry_delay * attempt
+                # 429 (Rate Limit) の場合は待機時間を調整
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    import re
+                    # "Please retry in 40.669259345s" のような形式を抽出
+                    match = re.search(r"retry in ([\d\.]+)s", msg)
+                    if match:
+                        wait_time = float(match.group(1)) + 1.0 # 余裕を持って +1秒
+                    else:
+                        wait_time = 30.0 * attempt # デフォルトで長めに待機
+                    print_log(f"  [LLM] 429 レート制限を検知。{wait_time:.1f}秒待機します...")
+                
+                time.sleep(wait_time)
     raise RuntimeError(f"Gemini API 呼び出し失敗: {last_error}")
 
 
@@ -266,8 +280,21 @@ async def call_gemini_async(
             
         except Exception as e:
             last_error = e
-            print_log(f"  [LLM async] リトライ {attempt}/{max_retries}: {type(e).__name__}: {e}")
+            msg = str(e)
+            print_log(f"  [LLM async] リトライ {attempt}/{max_retries}: {type(e).__name__}: {msg}")
+            
             if attempt < max_retries:
-                await asyncio.sleep(retry_delay * attempt)
+                wait_time = retry_delay * attempt
+                # 429 (Rate Limit) の場合は待機時間を調整
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    import re
+                    match = re.search(r"retry in ([\d\.]+)s", msg)
+                    if match:
+                        wait_time = float(match.group(1)) + 1.0
+                    else:
+                        wait_time = 30.0 * attempt
+                    print_log(f"  [LLM async] 429 レート制限を検知。{wait_time:.1f}秒待機します...")
+                
+                await asyncio.sleep(wait_time)
 
     raise RuntimeError(f"Gemini API 非同期呼び出し失敗: {last_error}")

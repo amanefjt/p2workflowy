@@ -90,7 +90,8 @@ def run_task(task_id: str, input_path: str, glossary_path: Optional[str], title:
             api_key=api_key,
             session_id=task_id,
             expertise=expertise,
-            export_mode=export_mode
+            export_mode=export_mode,
+            model="gemini-2.5-flash"
         )
         task_status[task_id]["status"] = "completed"
     except Exception as e:

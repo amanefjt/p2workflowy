@@ -123,18 +123,24 @@ async def get_status(task_id: str):
 
 @app.get("/api/download/{task_id}/{file_type}")
 async def download(task_id: str, file_type: str):
-    session_dir = STATE_DIR / task_id
-    if not session_dir.exists():
+    # まず uploads ディレクトリを確認（Web版の標準保存先）
+    task_dir = DATA_DIR / "uploads" / task_id
+    
+    # もしなければ従来の STATE_DIR を確認
+    if not task_dir.exists():
+        task_dir = STATE_DIR / task_id
+        
+    if not task_dir.exists():
         raise HTTPException(status_code=404, detail="Result directory not found")
         
     if file_type == "markdown":
-        files = list(session_dir.glob("*.md"))
-        # ronbun.md を除外（p2.md のみを対象にしたい場合。あるいは両方含めても良いが、ここでは区別する）
+        files = list(task_dir.glob("*.md"))
+        # ronbun.md を除外
         files = [f for f in files if not f.name.endswith("_ronbun.md")]
     elif file_type == "workflowy":
-        files = list(session_dir.glob("*_p2.txt"))
+        files = list(task_dir.glob("*_p2.txt"))
     elif file_type == "ronbun":
-        files = list(session_dir.glob("*_ronbun.md"))
+        files = list(task_dir.glob("*_ronbun.md"))
     else:
         raise HTTPException(status_code=400, detail="Invalid file type")
         

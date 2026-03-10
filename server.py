@@ -158,7 +158,7 @@ async def get_sample_glossary():
     sample_path = DATA_DIR / "sample" / "glossary_sample.csv"
     if not sample_path.exists():
         sample_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(sample_path, "w", encoding="utf-8") as f:
+        with open(sample_path, "w", encoding="utf-8-sig") as f:
             f.write("Term,Translation\nLLM,大規模言語モデル\n")
     return FileResponse(sample_path, filename="glossary_sample.csv")
 

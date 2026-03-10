@@ -64,7 +64,7 @@ def load_glossary_csv(glossary_path: str | None = None) -> dict[str, str]:
             csv_path = PROJECT_ROOT / csv_path
 
     glossary = {}
-    with open(csv_path, "r", encoding="utf-8") as f:
+    with open(csv_path, "r", encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
             if not line or "," not in line:

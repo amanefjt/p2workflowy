@@ -18,6 +18,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const savedExpertise = localStorage.getItem('p2workflowy_expertise');
     if (savedApiKey) document.getElementById('api_key').value = savedApiKey;
     if (savedExpertise) document.getElementById('expertise').value = savedExpertise;
+
+    // Set sample glossary link
+    const glossaryLink = document.getElementById('sample-glossary-link');
+    if (glossaryLink) {
+        glossaryLink.href = `${API_BASE}/api/glossary/sample`;
+    }
 });
 
 form.addEventListener('submit', async (e) => {

@@ -112,6 +112,32 @@ label {
     color: var(--text-muted);
 }
 
+.radio-group {
+    display: flex;
+    gap: 1.5rem;
+    margin-top: 0.5rem;
+    background: var(--bg-color);
+    padding: 0.75rem 1rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--border-color);
+}
+
+.radio-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 500;
+    cursor: pointer;
+    color: var(--text-color);
+    margin-bottom: 0 !important;
+}
+
+.radio-label input {
+    width: 1.2rem;
+    height: 1.2rem;
+    cursor: pointer;
+}
+
 input[type="text"],
 input[type="password"],
 textarea {

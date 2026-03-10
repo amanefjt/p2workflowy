@@ -75,35 +75,47 @@ def pre_scan(chunks: List[RawChunk], scan_limit: int = 30) -> dict:
 
 def extract_headings_from_resume(resume_content: str) -> List[str]:
     """
-    レジュメから英語見出しを抽出する。
-    ルール: # 1つ + 英大文字始まりの行のみ。## や ### は除外。
-    角括弧囲み形式 `# [Heading]` にも対応。
+    レジュメの内容からセクション見出し（英語）の一覧を抽出する。
+    Gemini 3.1 Flash Lite 等のモデルがネストしたヘッダー（####）や
+    角括弧の省略を行う場合があるため、柔軟に対応する。
     """
     headings = []
-    for line in resume_content.split("\n"):
+    lines = resume_content.split("\n")
+
+    for line in lines:
         stripped = line.strip()
-
-        # ## や ### は除外
-        if stripped.startswith("## ") or stripped.startswith("### "):
+        if not stripped:
             continue
 
-        # パターン 1: # [English Heading] 形式
-        match_bracket = re.match(r"^#\s+\[([A-Z][^\]]+)\]$", stripped)
-        if match_bracket:
-            heading = match_bracket.group(1).strip()
-            heading_clean = re.sub(r"^\d+\.\s*", "", heading)
-            headings.append(heading_clean)
+        # ヘッダー記号 (#) と内容を分離。任意の数の # を許容する。
+        match = re.match(r"^(#+)\s*(.*)$", stripped)
+        if not match:
+            continue
+        
+        content = match.group(2).strip()
+        if not content:
             continue
 
-        # パターン 2: # English Heading 形式（角括弧なし）
-        match_plain = re.match(r"^#\s+([A-Z][^\n]+)$", stripped)
-        if match_plain:
-            heading = match_plain.group(1).strip()
-            # 日本語文字を含む行は除外（日本語のセクション見出しは不要）
-            if re.search(r"[\u3000-\u9fff]", heading):
-                continue
-            heading_clean = re.sub(r"^\d+\.\s*", "", heading)
-            headings.append(heading_clean)
+        # オプションの角括弧 [ ] を除去
+        bracket_match = re.match(r"^\[(.*)\]$", content)
+        if bracket_match:
+            content = bracket_match.group(1).strip()
+
+        # 日本語が含まれている場合はスキップ（レジュメのタイトルや日本語説明文を除外）
+        if re.search(r"[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uff9f\u4e00-\u9faf]", content):
+            continue
+
+        # 特定の構成用メタ見出しをスキップ
+        if content.lower() in ["リサーチ・クエスチョン", "核心的主張", "各セクションの展開"]:
+            continue
+
+        # 数値プレフィックス（"1. ", "1) "等）があれば除去して正規化
+        content_clean = re.sub(r"^\d+[\.\s\)]+", "", content).strip()
+        
+        if content_clean and content_clean not in headings:
+            # 短すぎるものは見出しとして不適切（誤検知）の可能性が高いためスキップ
+            if len(content_clean) > 3:
+                headings.append(content_clean)
 
     print_log(f"  [Phase 3] レジュメから見出し {len(headings)} 件抽出: {headings}")
     return headings

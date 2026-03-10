@@ -69,6 +69,7 @@ async def translate_batch(
     api_key: str | None = None,
     expertise: str = "文化人類学",
     model: str | None = None,
+    thinking_level: str = "High",
 ) -> List[TreeNode]:
     """
     動的バッチ（Trial C: 最大6000文字/20チャンク）を一度の API コールで翻訳する。
@@ -150,7 +151,8 @@ async def translate_batch(
                     # response_schema=response_schema,
                     max_retries=1,
                     metrics_metadata=metrics_metadata,
-                    model=model
+                    model=model,
+                    thinking_level=thinking_level,
                 )
             
             # response_schema を解除したため、Markdown 形式 (```json ... ```) への耐性を高める
@@ -220,6 +222,7 @@ async def process_section(
     api_key: str | None = None,
     expertise: str = "文化人類学",
     model: str | None = None,
+    thinking_level: str = "High",
 ) -> tuple[str, List[TreeNode]]:
     """
     セクション内のチャンクを動的にバッチ化して翻訳を進める。
@@ -266,6 +269,7 @@ async def process_section(
                 api_key=api_key,
                 expertise=expertise,
                 model=model,
+                thinking_level=thinking_level,
             )
             
             translated_nodes.extend(batch_translated_nodes)
@@ -339,6 +343,7 @@ async def _run_phase4_async(
     save_state: bool,
     expertise: str = "文化人類学",
     model: str | None = None,
+    thinking_level: str = "High",
 ) -> List[TreeNode]:
     """非同期メイン実行処理"""
     phase2_state_path = Path(phase2_state_path)
@@ -407,7 +412,7 @@ async def _run_phase4_async(
             semaphore=semaphore,
             api_key=api_key,
             expertise=expertise,
-            model=model,
+            model=model, thinking_level=thinking_level,
         ))
     
     results = await asyncio.gather(*tasks)
@@ -440,6 +445,7 @@ def run_phase4(
     save_state: bool = True,
     expertise: str = "文化人類学",
     model: str | None = None,
+    thinking_level: str = "High",
 ) -> List[TreeNode]:
     """
     Phase 4 メイン処理（同期ラッパー）
@@ -453,5 +459,5 @@ def run_phase4(
     return loop.run_until_complete(_run_phase4_async(
         phase2_state_path, structure_state_path, sections_state_path, 
         phase4_state_path, glossary_path, api_key, save_state,
-        expertise=expertise, model=model
+        expertise=expertise, model=model, thinking_level=thinking_level
     ))

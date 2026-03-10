@@ -35,7 +35,7 @@ def _sample_text(full_text: str) -> str:
     return head + "\n\n[...中略...]\n\n" + tail
 
 
-def generate_resume(text: str, api_key: str | None = None, expertise: str = "文化人類学", model: str | None = None) -> str:
+def generate_resume(text: str, api_key: str | None = None, expertise: str = "文化人類学", model: str | None = None, thinking_level: str = "High") -> str:
     """
     SUMMARY_PROMPT を使ってレジュメ（構造化要約）を生成する。
 
@@ -64,13 +64,13 @@ def generate_resume(text: str, api_key: str | None = None, expertise: str = "文
     prompt = prompt_tpl.replace("{expertise}", expertise).replace("{context_guide}", "").replace("{text}", text)
 
     print_log(f"  [Phase 2] レジュメ生成中... (入力: {len(text)} 文字)")
-    resume = call_gemini(prompt, api_key=api_key, temperature=0.3, model=model)
+    resume = call_gemini(prompt, api_key=api_key, temperature=0.3, model=model, thinking_level=thinking_level)
     print_log(f"  [Phase 2] レジュメ生成完了 ({len(resume)} 文字)")
 
     return resume
 
 
-def extract_keywords(text: str, api_key: str | None = None, expertise: str = "文化人類学", model: str | None = None) -> list[dict]:
+def extract_keywords(text: str, api_key: str | None = None, expertise: str = "文化人類学", model: str | None = None, thinking_level: str = "High") -> list[dict]:
     """
     KEYWORD_EXTRACTION_PROMPT を使ってキーワードを抽出する。
 
@@ -95,6 +95,7 @@ def extract_keywords(text: str, api_key: str | None = None, expertise: str = "�
         temperature=0.2,
         response_mime_type="application/json",
         model=model,
+        thinking_level=thinking_level,
     )
 
     # JSON パース
@@ -171,6 +172,7 @@ def run_phase2(
     save_state: bool = True,
     expertise: str = "文化人類学",
     model: str | None = None,
+    thinking_level: str = "High",
 ) -> dict:
     """
     Phase 2 メイン処理: レジュメ生成 → キーワード抽出 → Glossary マージ。
@@ -200,10 +202,10 @@ def run_phase2(
     text_for_llm = _sample_text(full_text)
 
     # 1. レジュメ生成
-    resume_content = generate_resume(text_for_llm, api_key=api_key, expertise=expertise, model=model)
+    resume_content = generate_resume(text_for_llm, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level)
 
     # 2. キーワード抽出
-    keywords = extract_keywords(text_for_llm, api_key=api_key, expertise=expertise, model=model)
+    keywords = extract_keywords(text_for_llm, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level)
 
     # 3. Glossary マージ
     keywords_data = merge_with_glossary(keywords, glossary_path)

@@ -50,6 +50,12 @@ def main():
         default=None,
         help="使用する LLM モデル名 (例: gemini-2.0-flash)",
     )
+    parser.add_argument(
+        "--thinking",
+        default="High",
+        choices=["Low", "High"],
+        help="Gemini 3.x モデルの Thinking Level (Low, High)",
+    )
 
     args = parser.parse_args()
 
@@ -114,6 +120,7 @@ def main():
                 resume_from=args.resume,
                 export_mode=export_mode,
                 model=args.model,
+                thinking_level=args.thinking,
             )
         except Exception as e:
             print(f"[{i}/{len(input_files)}] エラー発生: {e}")

@@ -27,6 +27,7 @@ def run_pipeline(
     expertise: str = "文化人類学",
     export_mode: str = "p2workflowy",
     model: str | None = None,
+    thinking_level: str = "High",
 ) -> None:
     """
     パイプライン全体を実行する。
@@ -59,7 +60,7 @@ def run_pipeline(
     # --- Phase 2: Meta-Generation ---
     if start_phase <= 2:
         print_log("--- Phase 2: Meta-Generation ---")
-        meta = run_phase2(state.phase1, state.phase2, glossary_path, api_key=api_key, expertise=expertise, model=model)
+        meta = run_phase2(state.phase1, state.phase2, glossary_path, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level)
         print_log(f"  完了: レジュメ {len(meta['resume_content'])} 文字, キーワード {len(meta['keywords_data'])} 件\n")
 
     # --- Phase 3: Structuring & Clipping ---
@@ -71,7 +72,7 @@ def run_pipeline(
     # --- Phase 4: Sliding-Window Translation ---
     if start_phase <= 4:
         print_log("--- Phase 4: Sliding-Window Translation ---")
-        japanese_tree = run_phase4(state.phase2, state.phase3_structure, state.phase3_sections, state.phase4, glossary_path, api_key=api_key, expertise=expertise, model=model)
+        japanese_tree = run_phase4(state.phase2, state.phase3_structure, state.phase3_sections, state.phase4, glossary_path, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level)
         print_log(f"  完了: {len(japanese_tree)} セクション翻訳完了\n")
 
     # --- Phase 5: Export ---

@@ -83,9 +83,9 @@ def call_gemini(
     if response_schema:
         config_kwargs["response_schema"] = response_schema
 
-    # Gemini 3.1 などのThinkingモデル向けパラメータ
-    if thinking_level or (model and "gemini-3.1-flash" in model.lower()):
-        level = thinking_level or "high"
+    # Gemini 3.x などのThinkingモデル向けパラメータ
+    if thinking_level or (model and "gemini-3" in model.lower()):
+        level = thinking_level or "High"
         config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=level.upper())
 
     safety_settings = [
@@ -104,7 +104,7 @@ def call_gemini(
             full_response_text = ""
             start_time = time.time()
             ttft = 0.0
-            first_token_time = start_time
+            first_token_time = 0.0
             
             print_log(f"  [LLM] API Request: {model} (Input: {len(prompt)} chars, attempt: {attempt})")
             
@@ -117,7 +117,7 @@ def call_gemini(
             
             chunk = None
             for chunk in response_stream:
-                if ttft is None:
+                if ttft == 0.0:
                     first_token_time = time.time()
                     ttft = first_token_time - start_time
                 if hasattr(chunk, 'text') and chunk.text:
@@ -130,7 +130,7 @@ def call_gemini(
             duration = end_time - start_time
             
             # TTFT と TPS の計算 (None チェック)
-            gen_duration = (end_time - first_token_time) if first_token_time is not None else 0
+            gen_duration = (end_time - first_token_time) if first_token_time > 0 else 0
             
             # メタデータ取得 (最後のチャンクから)
             usage = getattr(chunk, 'usage_metadata', None)
@@ -138,7 +138,7 @@ def call_gemini(
             c_tokens = usage.candidates_token_count if usage else 0
             tps = c_tokens / gen_duration if gen_duration > 0 else 0
             
-            ttft_val = ttft if ttft is not None else 0
+            ttft_val = ttft
             print_log(f"  [LLM] Success: Duration {duration:.1f}s (TTFT: {ttft_val:.1f}s, TPS: {tps:.1f}, Prompt: {p_tokens}tk, Output: {c_tokens}tk)")
             return full_response_text
             
@@ -196,9 +196,9 @@ async def call_gemini_async(
     if response_schema:
         config_kwargs["response_schema"] = response_schema
 
-    # Gemini 3.1 などのThinkingモデル向けパラメータ
-    if thinking_level or (model and "gemini-3.1-flash" in model.lower()):
-        level = thinking_level or "high"
+    # Gemini 3.x などのThinkingモデル向けパラメータ
+    if thinking_level or (model and "gemini-3" in model.lower()):
+        level = thinking_level or "High"
         config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=level.upper())
 
     safety_settings = [
@@ -224,8 +224,8 @@ async def call_gemini_async(
         try:
             full_response_text = ""
             start_time = time.time()
-            ttft = None
-            first_token_time = None
+            ttft = 0.0
+            first_token_time = 0.0
             
             print_log(f"  [LLM async] API Request: {model} (Input: {len(prompt)} chars, attempt: {attempt})")
             
@@ -238,7 +238,7 @@ async def call_gemini_async(
             
             chunk = None
             async for chunk in stream_gen:
-                if ttft is None:
+                if ttft == 0.0:
                     first_token_time = time.time()
                     ttft = first_token_time - start_time
                 if hasattr(chunk, 'text') and chunk.text:
@@ -249,14 +249,14 @@ async def call_gemini_async(
 
             end_time = time.time()
             duration = end_time - start_time
-            gen_duration = (end_time - first_token_time) if first_token_time is not None else 0
+            gen_duration = (end_time - first_token_time) if first_token_time > 0 else 0
             
             usage = getattr(chunk, 'usage_metadata', None)
             p_tokens = usage.prompt_token_count if usage else 0
             c_tokens = usage.candidates_token_count if usage else 0
             tps = c_tokens / gen_duration if gen_duration > 0 else 0
             
-            ttft_val = ttft if ttft is not None else 0
+            ttft_val = ttft
             print_log(f"  [LLM async] Success: Duration {duration:.1f}s (TTFT: {ttft_val:.1f}s, TPS: {tps:.1f}, Prompt: {p_tokens}tk, Output: {c_tokens}tk)")
             
             # --- メトリクスを CSV に記録 ---

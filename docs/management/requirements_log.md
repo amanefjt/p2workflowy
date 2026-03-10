@@ -187,3 +187,11 @@
     - Gemini 2.0 Flash 専用のプロンプト `SUMMARY_PROMPT_ronbun` を導入。書式の厳密な遵守（シャープ1つ、角括弧の使用、前置きの禁止）を最優先で指示。
     - `core/phase2_meta.py` にモデル名の判定ロジックを追加し、Gemini 2.0 Flash 検知時に自動で専用プロンプトへ切り替える仕組みを実装。
 - **結果**: `Arbitrarysample_p2.txt` での検証により、セクションが正しく分割され、構造が維持されることを確認。
+
+## 2026-03-11: Web 版のデフォルトモデルを Gemini 3.1 Flash Lite に変更
+- **背景**: Google AI Studio の無料枠において、Gemini 2.5 Flash / Gemini 3 Flash の制限が「1日20リクエスト (20 RPD)」と極めて厳しくなっていることが判明。論文翻訳のように数十〜百回のリクエストを要する用途では、一回の実行で上限に達してしまう。
+- **解決策**: 無料枠で「1日500リクエスト (500 RPD)」の余裕がある **Gemini 3.1 Flash Lite** を Web 版のデフォルトモデルに採用。
+- **実装**:
+    - `server.py` の `run_task` 内で `model="gemini-3.1-flash-lite"` を指定。
+    - `core/phase2_meta.py` のプロンプト切り替え条件を拡張し、`gemini-3.1-flash` シリーズでも構造重視プロンプト (`SUMMARY_PROMPT_ronbun`) が適用されるように修正。
+- **結果**: 1日の翻訳可能回数が大幅に増加し、実用的な Web サービスとしての運用が可能になった。

@@ -86,8 +86,8 @@ def call_gemini(
     # Gemini 3.1 などのThinkingモデル向けパラメータ
     if thinking_level:
         config_kwargs["thinking_level"] = thinking_level
-    elif model and "gemini-3.1" in model.lower():
-        # 学術論文翻訳の品質を保つため、3.1系はデフォルトで high に設定
+    elif model and "gemini-3.1-flash" in model.lower():
+        # 学術論文翻訳の品質を保つため、3.1-flash系はデフォルトで high に設定
         config_kwargs["thinking_level"] = "high"
 
     safety_settings = [
@@ -201,7 +201,7 @@ async def call_gemini_async(
     # Gemini 3.1 などのThinkingモデル向けパラメータ
     if thinking_level:
         config_kwargs["thinking_level"] = thinking_level
-    elif model and "gemini-3.1" in model.lower():
+    elif model and "gemini-3.1-flash" in model.lower():
         config_kwargs["thinking_level"] = "high"
 
     safety_settings = [

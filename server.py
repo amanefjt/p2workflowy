@@ -2,6 +2,7 @@ import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import uuid
 import shutil
 import os
@@ -12,6 +13,15 @@ from core.pipeline import run_pipeline
 from core.config import DATA_DIR, STATE_DIR, PROJECT_ROOT
 
 app = FastAPI(title="p2workflowy Web")
+
+# CORS 設定: Cloudflare Pages からの通信を許可
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://p2workflowy.pages.dev", "http://localhost:8000", "http://127.0.0.1:8000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ワークスペース内の web ディレクトリのパス
 web_dir = PROJECT_ROOT / "web"
@@ -149,4 +159,6 @@ async def get_sample_glossary():
 app.mount("/", StaticFiles(directory=str(web_dir), html=True), name="web")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import os
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

@@ -7,10 +7,15 @@ const percentText = document.getElementById('percent-text');
 const downloadLinks = document.getElementById('download-links');
 const submitBtn = document.getElementById('submit-btn');
 
+// APIのベースURL設定: Cloudflare Pages 上では外部のバックエンドURLを指定
+const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+    ? '' 
+    : 'https://p2workflowy-api.onrender.com'; // 仮のURL。デポロイ後に確定版へ差し替えます。
+
 // Load saved values from localStorage
 document.addEventListener('DOMContentLoaded', () => {
-    const savedApiKey = localStorage.getItem('p2w_api_key');
-    const savedExpertise = localStorage.getItem('p2w_expertise');
+    const savedApiKey = localStorage.getItem('p2workflowy_api_key');
+    const savedExpertise = localStorage.getItem('p2workflowy_expertise');
     if (savedApiKey) document.getElementById('api_key').value = savedApiKey;
     if (savedExpertise) document.getElementById('expertise').value = savedExpertise;
 });
@@ -42,22 +47,27 @@ form.addEventListener('submit', async (e) => {
     percentText.innerText = '5%';
 
     try {
-        const response = await fetch('/api/process', {
+        const response = await fetch(`${API_BASE}/api/process`, {
             method: 'POST',
             body: formData
         });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Server returned ${response.status}: ${errorText}`);
+        }
 
         const data = await response.json();
         if (data.task_id) {
             logViewer.innerHTML += `Task ID: ${data.task_id}<br>Pipeline started...<br>`;
             pollStatus(data.task_id);
         } else {
-            alert('Failed to start process');
+            alert('Failed to start process: No task ID received');
             resetButton();
         }
     } catch (err) {
         console.error(err);
-        alert('Error communicating with server');
+        alert(`Error communicating with server: ${err.message}`);
         resetButton();
     }
 });
@@ -70,7 +80,7 @@ function resetButton() {
 async function pollStatus(taskId) {
     const interval = setInterval(async () => {
         try {
-            const response = await fetch(`/api/status/${taskId}`);
+            const response = await fetch(`${API_BASE}/api/status/${taskId}`);
             if (!response.ok) return;
 
             const data = await response.json();
@@ -105,8 +115,8 @@ function updateProgress(percent) {
 }
 
 function showDownloads(taskId) {
-    document.getElementById('dl-markdown').href = `/api/download/${taskId}/markdown`;
-    document.getElementById('dl-workflowy').href = `/api/download/${taskId}/workflowy`;
+    document.getElementById('dl-markdown').href = `${API_BASE}/api/download/${taskId}/markdown`;
+    document.getElementById('dl-workflowy').href = `${API_BASE}/api/download/${taskId}/workflowy`;
     downloadLinks.classList.remove('hidden');
     // Scroll to download section
     downloadLinks.scrollIntoView({ behavior: 'smooth' });

@@ -274,14 +274,15 @@ textarea:focus {
     color: #fff;
 }
 
+.speed-note {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin-top: 1rem !important;
+    font-style: italic;
+}
+
 .server-note {
-    background: #e0f2fe;
-    border: 1px solid #bae6fd;
-    color: #0369a1;
-    padding: 1rem;
-    border-radius: 0.75rem;
-    font-size: 0.85rem;
-    margin-bottom: 1.5rem;
+    display: none;
 }
 
 /* Utilities */

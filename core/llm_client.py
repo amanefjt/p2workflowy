@@ -84,11 +84,9 @@ def call_gemini(
         config_kwargs["response_schema"] = response_schema
 
     # Gemini 3.1 などのThinkingモデル向けパラメータ
-    if thinking_level:
-        config_kwargs["thinking_level"] = thinking_level
-    elif model and "gemini-3.1-flash" in model.lower():
-        # 学術論文翻訳の品質を保つため、3.1-flash系はデフォルトで high に設定
-        config_kwargs["thinking_level"] = "high"
+    if thinking_level or (model and "gemini-3.1-flash" in model.lower()):
+        level = thinking_level or "high"
+        config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=level.upper())
 
     safety_settings = [
         types.SafetySetting(category=cat, threshold="BLOCK_NONE")
@@ -105,8 +103,8 @@ def call_gemini(
         try:
             full_response_text = ""
             start_time = time.time()
-            ttft = None
-            first_token_time = None
+            ttft = 0.0
+            first_token_time = start_time
             
             print_log(f"  [LLM] API Request: {model} (Input: {len(prompt)} chars, attempt: {attempt})")
             
@@ -199,10 +197,9 @@ async def call_gemini_async(
         config_kwargs["response_schema"] = response_schema
 
     # Gemini 3.1 などのThinkingモデル向けパラメータ
-    if thinking_level:
-        config_kwargs["thinking_level"] = thinking_level
-    elif model and "gemini-3.1-flash" in model.lower():
-        config_kwargs["thinking_level"] = "high"
+    if thinking_level or (model and "gemini-3.1-flash" in model.lower()):
+        level = thinking_level or "high"
+        config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=level.upper())
 
     safety_settings = [
         types.SafetySetting(category=cat, threshold="BLOCK_NONE")

@@ -50,11 +50,11 @@ def generate_resume(text: str, api_key: str | None = None, expertise: str = "文
     prompts = load_coreprompts()
     
     # モデルに応じてプロンプトテンプレートを切り替え
-    # gemini-3-flash-preview は安定しているため標準プロンプトを使用
-    # それ以外の Gemini 2.0/2.5 や Gemini 3.1 系の Flash モデルは構造解析が不安定な傾向があるため、専用プロンプトを使用する
-    if model and "gemini-3-flash-preview" in model.lower():
+    # Gemini 3.x 系 (3-flash, 3.1-flash) は Thinking Level 活用により安定するため標準プロンプトを使用
+    # Gemini 2.x 系の Flash モデルは構造解析が不安定な傾向があるため、専用プロンプトを引き続き使用する
+    if model and any(m in model.lower() for m in ["gemini-3.0-flash", "gemini-3-flash", "gemini-3.1-flash"]):
         prompt_tpl = prompts["SUMMARY_PROMPT"]
-    elif model and any(m in model.lower() for m in ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-3.1-flash"]):
+    elif model and any(m in model.lower() for m in ["gemini-2.0-flash", "gemini-2.5-flash"]):
         prompt_tpl = prompts.get("SUMMARY_PROMPT_ronbun", prompts["SUMMARY_PROMPT"])
         print_log(f"  [Phase 2] {model} 検知: 専用の構造重視プロンプトを使用します。")
     else:

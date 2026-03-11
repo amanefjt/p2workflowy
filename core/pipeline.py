@@ -1,6 +1,6 @@
 """
 p2workflowy V2: パイプライン・オーケストレーター
-各フェーズを順次実行し、state/ に中間データを保存する。
+各フェーズ（Ingest, Meta, Structure, Translate, Export）を順次実行し、state/ に中間データを保存する。
 """
 
 from pathlib import Path

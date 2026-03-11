@@ -283,7 +283,7 @@ async def process_section(
             if state:
                 # 70% から 90% の間で進捗を表示
                 percent = 70 + int((curr / total) * 20)
-                state.update_status(f"Phase 4: Translating ({curr}/{total} chunks)...", percent)
+                state.update_status(f"本文を翻訳中...", percent)
 
     return section_name, translated_nodes
 

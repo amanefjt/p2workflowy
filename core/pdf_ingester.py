@@ -59,7 +59,7 @@ async def process_pdf_page(
             if state:
                 # Page 1 -> 5%, Page Last -> 15% 程度とする
                 current_percent = 5 + int((page_num + 1) / total_pages * 10)
-                state.update_status(f"Phase 0: Extracting page {page_num+1}/{total_pages}...", current_percent)
+                state.update_status(f"PDF解析中...", current_percent)
 
             # 明示的に画像を破棄
             del img
@@ -76,7 +76,7 @@ async def process_pdf_page(
 async def run_pdf_ingestion_async(pdf_path: str, api_key: str | None = None, state: "SessionState" = None) -> str:
     """PDFを画像化し、非同期でGeminiに渡してテキスト化する"""
     if state:
-        state.update_status("Phase 0: Reading PDF...", 5)
+        state.update_status("PDF解析中...", 5)
     print_log(f"  [PDF Ingester] PDF読み込み開始: {pdf_path}")
     doc = fitz.open(pdf_path)
     total_pages = len(doc)

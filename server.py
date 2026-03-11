@@ -79,7 +79,7 @@ async def process(
     task_status[task_id] = {
         "status": "processing",
         "title": title,
-        "progress": "Preparing pipeline...",
+        "progress": "処理を開始します...",
         "percentage": 5,
         "error": None
     }
@@ -135,19 +135,19 @@ async def get_status(task_id: str):
         
         # 2. ファイル存在によるバックアップ判定（status.json が詳細を更新していない場合用）
         elif (session_dir / "phase4_translation.json").exists():
-            task_status[task_id]["progress"] = "Phase 5: Exporting..."
-            task_status[task_id]["percentage"] = 90
+            task_status[task_id]["progress"] = "最終書き出し中..."
+            task_status[task_id]["percentage"] = 95
         elif (session_dir / "phase3_structure.json").exists():
-            task_status[task_id]["progress"] = "Phase 4: Translating..."
-            task_status[task_id]["percentage"] = 60
+            task_status[task_id]["progress"] = "本文翻訳中..."
+            task_status[task_id]["percentage"] = 70
         elif (session_dir / "phase2_meta.json").exists():
-            task_status[task_id]["progress"] = "Phase 3: Structuring..."
-            task_status[task_id]["percentage"] = 40
+            task_status[task_id]["progress"] = "本文構造の構築中..."
+            task_status[task_id]["percentage"] = 50
         elif (session_dir / "phase1_clean.json").exists():
-            task_status[task_id]["progress"] = "Phase 2: Analyzing..."
-            task_status[task_id]["percentage"] = 20
+            task_status[task_id]["progress"] = "内容の分析中..."
+            task_status[task_id]["percentage"] = 30
         elif (session_dir / "extracted_from_pdf.txt").exists():
-            task_status[task_id]["progress"] = "Phase 1: Preprocessing..."
+            task_status[task_id]["progress"] = "テキストの準備中..."
             task_status[task_id]["percentage"] = 10
             
     return task_status[task_id]

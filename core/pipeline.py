@@ -63,35 +63,35 @@ def run_pipeline(
 
     # --- Phase 1: Ingest & Preprocess ---
     if start_phase <= 1:
-        state.update_status("Phase 1: Preprocessing text...", 20)
+        state.update_status("テキストの準備中...", 20)
         print_log("--- Phase 1: Ingest & Preprocess ---")
         chunks = run_phase1(input_path, state.phase1, glossary_path)
         print_log(f"  完了: {len(chunks)} チャンクを処理\n")
 
     # --- Phase 2: Meta-Generation ---
     if start_phase <= 2:
-        state.update_status("Phase 2: Analyzing paper content...", 40)
+        state.update_status("内容を分析中...", 40)
         print_log("--- Phase 2: Meta-Generation ---")
         meta = run_phase2(state.phase1, state.phase2, glossary_path, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level)
         print_log(f"  完了: レジュメ {len(meta['resume_content'])} 文字, キーワード {len(meta['keywords_data'])} 件\n")
 
     # --- Phase 3: Structuring & Clipping ---
     if start_phase <= 3:
-        state.update_status("Phase 3: Building section structure...", 60)
+        state.update_status("本文構造を構築中...", 60)
         print_log("--- Phase 3: Structuring & Clipping ---")
         tree, sections = run_phase3(state.phase1, state.phase2, state.phase3_structure, state.phase3_sections)
         print_log(f"  完了: {len(tree)} セクション\n")
 
     # --- Phase 4: Sliding-Window Translation ---
     if start_phase <= 4:
-        state.update_status("Phase 4: Translating to Japanese...", 70)
+        state.update_status("本文を翻訳中...", 70)
         print_log("--- Phase 4: Sliding-Window Translation ---")
         japanese_tree = run_phase4(state.phase2, state.phase3_structure, state.phase3_sections, state.phase4, glossary_path, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level)
         print_log(f"  完了: {len(japanese_tree)} セクション翻訳完了\n")
 
     # --- Phase 5: Export ---
     if start_phase <= 5:
-        state.update_status("Phase 5: Exporting final files...", 95)
+        state.update_status("最終ファイルを作成中...", 95)
         print_log("--- Phase 5: Export ---")
         output_paths = run_phase5(input_path, title, state.phase2, state.phase3_structure, state.phase4, export_mode=export_mode)
         print_log(f"  完了: 出力ファイル作成済 (計 {len(output_paths)} 件)\n")

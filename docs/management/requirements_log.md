@@ -187,3 +187,10 @@
     - CLI (`main.py`) に `--thinking [Low|Medium|High]` 引数を追加し、パイプライン全編に伝搬。
     - 見出し抽出ロジック (`core/phase3_structure.py`) を刷新。`####` や `[1. Introduction]` 形式を確実に拾う頑健な正規表現を採用。
 - **結果**: `Thinking: High` を活用することで、複雑な論文構造を完璧に維持した高品質な翻訳が可能になった。
+
+## 2026-03-11: 【マイルストーン】 Web 安定版 (V3 Stable Release) 完了
+- **概要**: Gemini 3.1 Flash Lite と Thinking Level "High" の連携により、すべての機能要件と非機能要件（レートリミット回避・処理速度向上）を満たす安定版が完成。
+- **最終対応**:
+    - Web UI (`index.html`, `ronbun.html`) およびコアロジックからモデル選択/Thinking Level 選択の余地を排除し、内部で強制的に `gemini-3.1-flash-lite-preview` ＋ `Thinking: High` をバインド。
+    - プロジェクトのミッションを「Web安定版・保守フェーズ」へ移行。
+- **結論**: 無料枠ユーザーが API 制限を全く気にせず、長文論文でも 2分前後で構造化された高品質な翻訳結果を得られる、当初の目標を完全に達成した。

@@ -407,7 +407,8 @@ def run_phase3(
     phase2_state_path: str | Path,
     structure_state_path: str | Path,
     sections_state_path: str | Path,
-    save_state: bool = True
+    save_state: bool = True,
+    state: "Any" = None,
 ) -> tuple[List[TreeNode], Dict[str, List[dict]]]:
     """
     Phase 3 メイン処理: Pre-scan → 見出し抽出 → Fuzzy Matching → Tree 構築。

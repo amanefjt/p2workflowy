@@ -173,6 +173,7 @@ def run_phase2(
     expertise: str = "文化人類学",
     model: str | None = None,
     thinking_level: str = "High",
+    state: "Any" = None,
 ) -> dict:
     """
     Phase 2 メイン処理: レジュメ生成 → キーワード抽出 → Glossary マージ。

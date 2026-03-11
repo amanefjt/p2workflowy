@@ -65,28 +65,28 @@ def run_pipeline(
     if start_phase <= 1:
         state.update_status("テキストの準備中...", 20)
         print_log("--- Phase 1: Ingest & Preprocess ---")
-        chunks = run_phase1(input_path, state.phase1, glossary_path)
+        chunks = run_phase1(input_path, state.phase1, glossary_path, state=state)
         print_log(f"  完了: {len(chunks)} チャンクを処理\n")
 
     # --- Phase 2: Meta-Generation ---
     if start_phase <= 2:
         state.update_status("内容を分析中...", 40)
         print_log("--- Phase 2: Meta-Generation ---")
-        meta = run_phase2(state.phase1, state.phase2, glossary_path, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level)
+        meta = run_phase2(state.phase1, state.phase2, glossary_path, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level, state=state)
         print_log(f"  完了: レジュメ {len(meta['resume_content'])} 文字, キーワード {len(meta['keywords_data'])} 件\n")
 
     # --- Phase 3: Structuring & Clipping ---
     if start_phase <= 3:
         state.update_status("本文構造を構築中...", 60)
         print_log("--- Phase 3: Structuring & Clipping ---")
-        tree, sections = run_phase3(state.phase1, state.phase2, state.phase3_structure, state.phase3_sections)
+        tree, sections = run_phase3(state.phase1, state.phase2, state.phase3_structure, state.phase3_sections, state=state)
         print_log(f"  完了: {len(tree)} セクション\n")
 
     # --- Phase 4: Sliding-Window Translation ---
     if start_phase <= 4:
         state.update_status("本文を翻訳中...", 70)
         print_log("--- Phase 4: Sliding-Window Translation ---")
-        japanese_tree = run_phase4(state.phase2, state.phase3_structure, state.phase3_sections, state.phase4, glossary_path, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level)
+        japanese_tree = run_phase4(state.phase2, state.phase3_structure, state.phase3_sections, state.phase4, glossary_path, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level, state=state)
         print_log(f"  完了: {len(japanese_tree)} セクション翻訳完了\n")
 
     # --- Phase 5: Export ---

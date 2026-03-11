@@ -245,6 +245,7 @@ def run_phase1(
     state_path: str | Path,
     glossary_path: str | None = None,
     save_state: bool = True,
+    state: "Any" = None,
 ) -> List[RawChunk]:
     """
     Phase 1 メイン処理: テキストファイルを読み込み、ノイズ除去・整形を行う。

@@ -28,6 +28,7 @@ def run_pipeline(
     export_mode: str = "p2workflowy",
     model: str | None = None,
     thinking_level: str = "High",
+    pdf_mode: str = "full_vlm",
 ) -> None:
     """
     パイプライン全体を実行する。
@@ -51,15 +52,34 @@ def run_pipeline(
     print_log(f"  Stateディレクトリ: {state.session_dir}")
     print_log()
 
-    # --- Phase 0: PDF Ingestion (VLM OCR) ---
+    # --- Phase 0: Document Ingestion (PDF / Docx) ---
     if input_path.lower().endswith(".pdf"):
-        from .pdf_ingester import run_pdf_ingestion
-        pdf_text = run_pdf_ingestion(input_path, api_key=api_key, state=state)
+        from .pdf_ingester import run_pdf_ingestion_async
+        import asyncio
+        pdf_text = asyncio.run(run_pdf_ingestion_async(input_path, api_key=api_key, state=state, pdf_mode=pdf_mode))
         
         extracted_path = state.session_dir / "extracted_from_pdf.txt"
         extracted_path.write_text(pdf_text, encoding="utf-8")
         input_path = str(extracted_path)
         print_log(f"  完了: PDFから {len(pdf_text)} 文字を抽出。入力を {input_path} に切り替えます。\n")
+    elif input_path.lower().endswith(".docx"):
+        try:
+            import docx
+            print_log(f"  [Phase 0] Wordファイル (.docx) を読み込み中...")
+            doc = docx.Document(input_path)
+            # 全段落のテキストを結合
+            docx_text = "\n".join([para.text for para in doc.paragraphs])
+            
+            extracted_path = state.session_dir / "extracted_from_docx.txt"
+            extracted_path.write_text(docx_text, encoding="utf-8")
+            input_path = str(extracted_path)
+            print_log(f"  完了: docxから {len(docx_text)} 文字を抽出。入力を {input_path} に切り替えます。\n")
+        except ImportError:
+            print_log("  エラー: .docx ファイルを処理するには 'python-docx' ライブラリが必要です。")
+            raise Exception("python-docx not installed")
+        except Exception as e:
+            print_log(f"  エラー: Wordファイルの読み込み中にエラーが発生しました: {e}")
+            raise e
 
     # --- Phase 1: Ingest & Preprocess ---
     if start_phase <= 1:

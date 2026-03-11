@@ -44,17 +44,17 @@
                         </div>
                     </div>
 
-                    <!-- Expertise -->
                     <div class="setup-item">
                         <h3>2. 翻訳の専門設定</h3>
                         <div class="form-group">
                             <label>専門分野（例：文化人類学、社会学、心理学...）</label>
                             <input type="text" id="expertise" name="expertise" value="文化人類学" placeholder="専門分野名を入力...">
                         </div>
+                    </div>
 
                     <!-- Glossary -->
                     <div class="setup-item">
-                        <h3>2. 用語集 (任意)</h3>
+                        <h3>3. 用語集 (任意)</h3>
                         <div class="file-row">
                             <input type="file" id="glossary_file" name="glossary" accept=".csv">
                             <a id="sample-glossary-link" href="/api/glossary/sample" class="link-download">サンプルCSVをダウンロード</a>
@@ -63,14 +63,14 @@
 
                     <!-- Input -->
                     <div class="setup-item">
-                        <h3>3. 論文の内容</h3>
+                        <h3>4. 論文の内容</h3>
                         <div class="form-group">
                             <label>論文タイトル（任意）</label>
                             <input type="text" id="title" name="title" placeholder="論文のタイトルを入力してください...">
                         </div>
                         <div class="important-note" style="margin-top: 0; margin-bottom: 1rem;">
                             <strong>Note:</strong> 論文のPDFから抜き取ったテキスト、または論文のPDFをアップロードしてください。<br>
-                            <small>（※PDFの処理はBeta機能です。PDFをMicrosoft Wordで一度開いてからコピーすると、テキストが比較的綺麗に抜き出せるため推奨されます。）</small>
+                            <small>（※PDFの処理はBeta機能で、かなり不安定です。PDFをMicrosoft Wordで一度開いてからコピーすると、テキストが比較的綺麗に抜き出せるため推奨されます。）</small>
                         </div>
                         <div class="form-group">
                             <label>本文テキスト</label>

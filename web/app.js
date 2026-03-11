@@ -47,8 +47,8 @@ form.addEventListener('submit', async (e) => {
     if (apiKey) {
         formData.set('api_key', apiKey);
     }
-    formData.append('expertise', expertise);
-    formData.append('export_mode', 'p2workflowy');
+    formData.set('expertise', expertise); // name属性で既に入っている場合があるためsetで上書き
+    formData.set('export_mode', 'p2workflowy');
 
     // UI Update
     submitBtn.disabled = true;
@@ -60,6 +60,7 @@ form.addEventListener('submit', async (e) => {
     percentText.innerText = '5%';
 
     try {
+        console.log("Submitting form data:", Object.fromEntries(formData.entries()));
         const response = await fetch(`${API_BASE}/api/process`, {
             method: 'POST',
             body: formData
@@ -71,15 +72,17 @@ form.addEventListener('submit', async (e) => {
         }
 
         const data = await response.json();
+        console.log("Server response:", data);
         if (data.task_id) {
             logViewer.innerHTML += `Task ID: ${data.task_id}<br>Pipeline started...<br>`;
             pollStatus(data.task_id);
         } else {
-            alert('Failed to start process: No task ID received');
-            resetButton();
+            throw new Error('Failed to start process: No task ID received');
         }
     } catch (err) {
-        console.error(err);
+        console.error("Form submission error:", err);
+        statusText.innerText = 'リクエストに失敗しました';
+        logViewer.innerHTML += `<span style="color:var(--text-danger)">Error: ${err.message}</span><br>`;
         alert(`Error communicating with server: ${err.message}`);
         resetButton();
     }
@@ -101,8 +104,7 @@ async function pollStatus(taskId) {
             statusText.innerText = getFriendlyStatus(data.progress);
 
             if (data.status === 'processing') {
-                const progress = calculateProgress(data.progress);
-                updateProgress(progress);
+                updateProgress(data.percentage || 0);
             }
 
             if (data.status === 'completed') {

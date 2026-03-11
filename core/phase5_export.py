@@ -243,7 +243,16 @@ def run_phase5(
         japanese_tree = [TreeNode.from_dict(d) for d in japanese_tree_data]
 
     # 出力パスの設定
-    stem = input_path.stem
+    # タイトルからファイル名を生成（不適切な文字を置換）
+    safe_title = re.sub(r'[\\/*?:"<>|]', "_", title)
+    if not safe_title or safe_title == "Untitled":
+        safe_title = input_path.stem
+        if safe_title == "extracted_from_pdf":
+            # もし一時的な名前なら、可能なら元のファイル名を使いたいが、
+            # ここでは確実なタイトルを使う
+            safe_title = "ronbun_result"
+            
+    stem = safe_title
     output_dir = input_path.parent
     
     output_paths = []

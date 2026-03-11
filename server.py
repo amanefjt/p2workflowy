@@ -49,19 +49,27 @@ async def process(
     export_mode: str = Form("p2workflowy"),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
+    # テスト時のダミーキーがブラウザの localStorage に残ってしまうケースの対策
+    if api_key and api_key.strip() in ["DUMMY_KEY", ""]:
+        api_key = None
+        
     task_id = str(uuid.uuid4())
     
     # アップロード用の一時ディレクトリ
     upload_dir = DATA_DIR / "uploads" / task_id
     upload_dir.mkdir(parents=True, exist_ok=True)
     
+    # ファイルの保存
     input_path = None
     if pdf_file and pdf_file.filename:
         input_path = upload_dir / pdf_file.filename
+        print(f"Saving PDF to {input_path}")
+        content = await pdf_file.read()
         with open(input_path, "wb") as f:
-            shutil.copyfileobj(pdf_file.file, f)
+            f.write(content)
     elif text:
         input_path = upload_dir / "input.txt"
+        print(f"Saving text input to {input_path}")
         with open(input_path, "w", encoding="utf-8") as f:
             f.write(text)
     else:
@@ -69,9 +77,11 @@ async def process(
     
     glossary_path = None
     if glossary and glossary.filename:
-        glossary_path = upload_dir / "glossary.csv"
+        glossary_path = upload_dir / glossary.filename
+        print(f"Saving Glossary to {glossary_path}")
+        content = await glossary.read()
         with open(glossary_path, "wb") as f:
-            shutil.copyfileobj(glossary.file, f)
+            f.write(content)
             
     print(f"Starting task {task_id} for input: {input_path} (Expertise: {expertise})")
     
@@ -101,7 +111,8 @@ def run_task(task_id: str, input_path: str, glossary_path: Optional[str], title:
             session_id=task_id,
             expertise=expertise,
             export_mode=export_mode,
-            model="gemini-3.1-flash-lite-preview"
+            model="gemini-3.1-flash-lite-preview",
+            pdf_mode="hybrid"
         )
         task_status[task_id]["status"] = "completed"
     except Exception as e:
@@ -154,33 +165,44 @@ async def get_status(task_id: str):
 
 @app.get("/api/download/{task_id}/{file_type}")
 async def download(task_id: str, file_type: str):
-    # まず uploads ディレクトリを確認（Web版の標準保存先）
-    task_dir = DATA_DIR / "uploads" / task_id
+    # uploads（アップロード先）と state（成果物保存先）の両方を確認
+    search_dirs = [DATA_DIR / "uploads" / task_id, STATE_DIR / task_id]
     
-    # もしなければ従来の STATE_DIR を確認
-    if not task_dir.exists():
-        task_dir = STATE_DIR / task_id
-        
-    if not task_dir.exists():
-        raise HTTPException(status_code=404, detail="Result directory not found")
-        
-    if file_type == "markdown":
-        files = list(task_dir.glob("*.md"))
-        # ronbun.md を除外
-        files = [f for f in files if not f.name.endswith("_ronbun.md")]
-    elif file_type == "workflowy":
-        files = list(task_dir.glob("*_p2.txt"))
-    elif file_type == "ronbun":
-        files = list(task_dir.glob("*_ronbun.md"))
-    else:
-        raise HTTPException(status_code=400, detail="Invalid file type")
-        
+    files = []
+    for task_dir in search_dirs:
+        if not task_dir.exists():
+            continue
+            
+        if file_type == "markdown":
+            found = list(task_dir.glob("*.md"))
+            files.extend([f for f in found if not f.name.endswith("_ronbun.md")])
+        elif file_type == "workflowy":
+            files.extend(list(task_dir.glob("*_p2.txt")))
+        elif file_type == "ronbun":
+            files.extend(list(task_dir.glob("*_ronbun.md")))
+        else:
+            raise HTTPException(status_code=400, detail="Invalid file type")
+            
     if not files:
         raise HTTPException(status_code=404, detail="Result file not found")
         
     # 最新のファイルを選択
     files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-    return FileResponse(files[0], filename=files[0].name)
+    target_file = files[0]
+    
+    # media_type の推定
+    media_type = "application/octet-stream"
+    if target_file.suffix == ".md":
+        media_type = "text/markdown"
+    elif target_file.suffix == ".txt":
+        media_type = "text/plain"
+        
+    return FileResponse(
+        target_file, 
+        filename=target_file.name, 
+        media_type=media_type,
+        content_disposition_type="attachment"
+    )
 
 @app.get("/api/glossary/sample")
 async def get_sample_glossary():
@@ -189,8 +211,15 @@ async def get_sample_glossary():
     if not sample_path.exists():
         sample_path.parent.mkdir(parents=True, exist_ok=True)
         with open(sample_path, "w", encoding="utf-8-sig") as f:
-            f.write("Term,Translation\nLLM,大規模言語モデル\n")
-    return FileResponse(sample_path, filename="glossary_sample.csv")
+            f.write("Term,Translation\nLLM,大規模言語モデル\nAI,人工知能\n")
+    
+    # ユーザーが安心できるよう、拡張子と名称を非常に明示的にする
+    return FileResponse(
+        sample_path, 
+        filename="p2workflowy_glossary_sample.csv",
+        media_type="text/csv",
+        content_disposition_type="attachment"
+    )
 
 # 静的ファイルをルートで配信（他のルート定義の後で行う必要がある）
 app.mount("/", StaticFiles(directory=str(web_dir), html=True), name="web")

@@ -56,6 +56,11 @@ def main():
         choices=["Low", "High"],
         help="Gemini 3.x モデルの Thinking Level (Low, High)",
     )
+    parser.add_argument(
+        "--hybrid-pdf",
+        action="store_true",
+        help="PDF処理をハイブリッドモード（高速・精度中）で実行します。指定しない場合は完全VLMモード（低速・高精度）になります。",
+    )
 
     args = parser.parse_args()
 
@@ -113,6 +118,7 @@ def main():
         print(f"\n[{i}/{len(input_files)}] --- 処理を開始します: {p.name} ---")
         try:
             export_mode = "ronbunnihongo" if args.ronbun else "p2workflowy"
+            pdf_mode = "hybrid" if args.hybrid_pdf else "full_vlm"
             run_pipeline(
                 input_path=str(p),
                 glossary_path=args.glossary,
@@ -121,6 +127,7 @@ def main():
                 export_mode=export_mode,
                 model=args.model,
                 thinking_level=args.thinking,
+                pdf_mode=pdf_mode,
             )
         except Exception as e:
             print(f"[{i}/{len(input_files)}] エラー発生: {e}")

@@ -155,6 +155,12 @@ class SessionState:
         }
         with open(self.status_json, "w", encoding="utf-8") as f:
             json.dump(status_data, f, ensure_ascii=False, indent=4)
+        
+        # CLI版でも進捗が見えるように標準出力にも出す
+        if percentage is not None:
+            print_log(f"  [Progress] {progress} ({percentage}%)")
+        else:
+            print_log(f"  [Progress] {progress}")
 
     def read_status(self) -> dict:
         """status.json から現在の進捗状況を読み取る。"""

@@ -261,7 +261,10 @@ def run_phase1(
     """
     # テキスト読み込み
     path = Path(input_path)
-    raw_text = path.read_text(encoding="utf-8")
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise Exception(f"ファイルを UTF-8 テキストとして読み込めませんでした: {input_path}。バイナリファイル（Word, PDF等）の場合は拡張子が正しく付いているか確認してください。")
 
     # 1. 初期クレンジング
     text = normalize_line_endings(raw_text)

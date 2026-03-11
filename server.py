@@ -40,11 +40,12 @@ async def ronbun_page():
 
 @app.post("/api/process")
 async def process(
-    text: str = Form(...),
+    text: Optional[str] = Form(None),
     title: str = Form("Untitled"),
     api_key: Optional[str] = Form(None),
     expertise: str = Form("文化人類学"),
     glossary: Optional[UploadFile] = File(None),
+    pdf_file: Optional[UploadFile] = File(None),
     export_mode: str = Form("p2workflowy"),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
@@ -54,9 +55,17 @@ async def process(
     upload_dir = DATA_DIR / "uploads" / task_id
     upload_dir.mkdir(parents=True, exist_ok=True)
     
-    input_path = upload_dir / "input.txt"
-    with open(input_path, "w", encoding="utf-8") as f:
-        f.write(text)
+    input_path = None
+    if pdf_file and pdf_file.filename:
+        input_path = upload_dir / pdf_file.filename
+        with open(input_path, "wb") as f:
+            shutil.copyfileobj(pdf_file.file, f)
+    elif text:
+        input_path = upload_dir / "input.txt"
+        with open(input_path, "w", encoding="utf-8") as f:
+            f.write(text)
+    else:
+        raise HTTPException(status_code=400, detail="テキストの入力、またはPDFファイルのアップロードが必要です。")
     
     glossary_path = None
     if glossary and glossary.filename:

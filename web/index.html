@@ -21,8 +21,9 @@
 
         <div class="main-card">
             <section class="overview">
-                <p>学術論文のテキストを、Workflowyに最適な構造化された日本語アウトラインへ変換します。</p>
-                <p>質を追求しているため、翻訳はゆっくりです（通常数分程度）。<br><small>※しばらく使われていなかったときに使うと、黒い画面に「Render」と表示されて立ち上げに数十秒かかります。</small></p>
+                <p>学術論文をWorkflowyに最適な構造化された日本語アウトラインへ変換します。</p>
+                <p>質を追求しているため、翻訳はゆっくりです（通常数分程度）。<br><small>※しばらく使われていなかったときに使うと、黒い画面に「Render」と表示されて立ち上げに数十秒かかります。</small>
+                </p>
             </section>
 
             <form id="process-form">
@@ -52,35 +53,40 @@
                             <input type="text" id="expertise" name="expertise" value="文化人類学" placeholder="専門分野名を入力...">
                         </div>
 
-                    <!-- Glossary -->
-                    <div class="setup-item">
-                        <h3>3. 用語集 (任意)</h3>
-                        <div class="file-row">
-                            <input type="file" id="glossary_file" name="glossary" accept=".csv">
-                            <a id="sample-glossary-link" href="/api/glossary/sample" class="link-download">サンプルCSVをダウンロード</a>
+                        <!-- Glossary -->
+                        <div class="setup-item">
+                            <h3>3. 用語集 (任意)</h3>
+                            <div class="file-row">
+                                <input type="file" id="glossary_file" name="glossary" accept=".csv">
+                                <a id="sample-glossary-link" href="/api/glossary/sample"
+                                    class="link-download">サンプルCSVをダウンロード</a>
+                            </div>
+                        </div>
+
+                        <!-- Input -->
+                        <div class="setup-item">
+                            <h3>4. 論文の内容</h3>
+                            <div class="important-note" style="margin-top: 0; margin-bottom: 1rem;">
+                                <strong>Note:</strong> 論文のPDF、または、論文から抜き取ったテキストをアップロードしてください。<br>
+                                <small>（※PDFの処理はBeta機能です。PDFをMicrosoft
+                                    Wordで一度開いてからコピーすると、テキストが比較的綺麗に抜き出せるため推奨されます。）</small>
+                            </div>
+                            <div class="form-group">
+                                <label>論文タイトル（任意）</label>
+                                <input type="text" id="title" name="title" placeholder="論文のタイトルを入力してください...">
+                            </div>
+                            <div class="form-group">
+                                <label>PDFファイルをアップロード (Beta)</label>
+                                <input type="file" id="pdf_file" name="pdf_file" accept=".pdf" style="margin-bottom: 1rem;">
+                            </div>
+                            <div class="form-group">
+                                <label>または、本文テキスト</label>
+                                <textarea id="text" name="text" rows="8" placeholder="PDF等からコピーした内容をここに貼り付けてください..."></textarea>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- Input -->
-                    <div class="setup-item">
-                        <h3>4. 論文の内容</h3>
-                        <div class="important-note" style="margin-top: 0; margin-bottom: 1rem;">
-                            <strong>Note:</strong> PDFを直接読み込むことはできません。テキストをコピー＆ペーストしてください。<br>
-                            <small>※ PDFをMicrosoft Wordで一度開いてからコピーすると、テキストが比較的綺麗に抜き出せるため推奨されます。</small>
-                        </div>
-                        <div class="form-group">
-                            <label>論文タイトル（任意）</label>
-                            <input type="text" id="title" name="title" placeholder="論文のタイトルを入力してください...">
-                        </div>
-                        <div class="form-group">
-                            <label>本文</label>
-                            <textarea id="text" name="text" rows="10" placeholder="PDF等からコピーした内容をここに貼り付けてください..."
-                                required></textarea>
-                        </div>
-                    </div>
-                </div>
-
-                <button type="submit" id="submit-btn" class="btn-submit">変換を開始する</button>
+                    <button type="submit" id="submit-btn" class="btn-submit">変換を開始する</button>
             </form>
 
             <!-- Status Container -->

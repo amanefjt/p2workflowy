@@ -47,7 +47,7 @@ def _get_client(api_key: str | None = None) -> genai.Client:
 
 
 def call_gemini(
-    prompt: str,
+    prompt: str | list,
     model: str | None = None,
     api_key: str | None = None,
     max_output_tokens: int = 65536,
@@ -70,7 +70,7 @@ def call_gemini(
     try:
         debug_path = STATE_DIR / "debug_prompt.txt"
         with open(debug_path, "w", encoding="utf-8") as f:
-            f.write(prompt)
+            f.write(str(prompt))
     except:
         pass
 
@@ -106,7 +106,8 @@ def call_gemini(
             ttft = 0.0
             first_token_time = 0.0
             
-            print_log(f"  [LLM] API Request: {model} (Input: {len(prompt)} chars, attempt: {attempt})")
+            prompt_len = len(prompt) if isinstance(prompt, str) else len(str(prompt))
+            print_log(f"  [LLM] API Request: {model} (Input: {prompt_len} chars, attempt: {attempt})")
             
             # ストリーミングによる計測
             response_stream = client.models.generate_content_stream(
@@ -165,7 +166,7 @@ def call_gemini(
 
 
 async def call_gemini_async(
-    prompt: str,
+    prompt: str | list,
     model: str | None = None,
     api_key: str | None = None,
     max_output_tokens: int = 65536,
@@ -215,7 +216,7 @@ async def call_gemini_async(
     try:
         debug_path = STATE_DIR / "debug_prompt.txt"
         with open(debug_path, "w", encoding="utf-8") as f:
-            f.write(prompt)
+            f.write(str(prompt))
     except:
         pass
 
@@ -227,7 +228,8 @@ async def call_gemini_async(
             ttft = 0.0
             first_token_time = 0.0
             
-            print_log(f"  [LLM async] API Request: {model} (Input: {len(prompt)} chars, attempt: {attempt})")
+            prompt_len = len(prompt) if isinstance(prompt, str) else len(str(prompt))
+            print_log(f"  [LLM async] API Request: {model} (Input: {prompt_len} chars, attempt: {attempt})")
             
             # 非同期ストリーミング
             stream_gen = await client.aio.models.generate_content_stream(
@@ -277,7 +279,7 @@ async def call_gemini_async(
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         section,
                         batch_id,
-                        len(prompt),
+                        prompt_len,
                         p_tokens,
                         c_tokens,
                         f"{ttft_val:.3f}",

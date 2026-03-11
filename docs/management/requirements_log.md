@@ -194,3 +194,16 @@
     - Web UI (`index.html`, `ronbun.html`) およびコアロジックからモデル選択/Thinking Level 選択の余地を排除し、内部で強制的に `gemini-3.1-flash-lite-preview` ＋ `Thinking: High` をバインド。
     - プロジェクトのミッションを「Web安定版・保守フェーズ」へ移行。
 - **結論**: 無料枠ユーザーが API 制限を全く気にせず、長文論文でも 2分前後で構造化された高品質な翻訳結果を得られる、当初の目標を完全に達成した。
+
+## 2026-03-11: p2workflowy V2 - Phase 0 (PDF Ingestion) の再構築 (VLM OCR)
+- **要望**: 最新モデル (Gemini 3.1 Flash Lite) のVLM能力を用い、PDFからクリーンなテキストを抽出したい。
+- **背景**: 以前のバージョンでのPythonによる座標計算やヒューリスティックなノイズ除去処理ではなく、AIに指示してノイズを除去し段落結合を行わせるアプローチに切り替える。
+- **制約**: 既存の `core/phase1_preprocess.py` の `smart_unwrap` ロジックは一切変更せず共存させること。
+
+## 2026-03-11: Web UI の PDF アップロード (Beta) 対応とUIの不一致解消
+- **要望**: PDF直接読み込み機能をWeb UIからも使えるようにし、かつBeta版であることをユーザーに明示したい。また、変数の不整合をデバッグして完全に動作するようにしたい。
+- **実施内容**:
+    - `web/index.html` および `web/ronbun.html` に `<input type="file" id="pdf_file" accept=".pdf">` を追加し、`textarea` の `required` 属性を外した。
+    - `web/app.js`, `web/app_ronbun.js` にて、テキストとPDFのどちらかが必須となるカスタムバリデーションを実装。
+    - `server.py` のエンドポイントで、`pdf_file` を受け取り適切に一時ファイルに保存する分岐を追加。
+- **結果**: ユーザーはブラウザから直接PDFをアップロードできるようになり、テキストとの二者択一入力が正常にバックエンドへ送信されるようになった。

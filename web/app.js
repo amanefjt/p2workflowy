@@ -32,6 +32,13 @@ form.addEventListener('submit', async (e) => {
     const formData = new FormData(form);
     const apiKey = document.getElementById('api_key').value;
     const expertise = document.getElementById('expertise').value;
+    const textVal = document.getElementById('text').value.trim();
+    const pdfFile = document.getElementById('pdf_file').files[0];
+
+    if (!textVal && !pdfFile) {
+        alert("テキストを入力するか、PDFファイルをアップロードしてください。");
+        return;
+    }
 
     // 設定の保存（空入力でも上書き保存を許可）
     localStorage.setItem('p2workflowy_api_key', apiKey);

@@ -291,8 +291,14 @@ def build_tree(
             if is_excluded_heading(first_line, exclude_keywords):
                 # 前のセクションを保存してからクリッピング
                 if current_node is not None and not excluded:
+                    unique_heading = current_heading
+                    counter = 1
+                    while unique_heading in sections_dict:
+                        unique_heading = f"{current_heading} ({counter})"
+                        counter += 1
+                    current_node.text = unique_heading
                     tree.append(current_node)
-                    sections_dict[current_heading] = current_section_chunks
+                    sections_dict[unique_heading] = current_section_chunks
                 print_log(f"  [Phase 3] 除外セクション検出（先頭行一致）: '{first_line}' → 以降をクリッピング")
                 excluded = True
                 break
@@ -306,8 +312,14 @@ def build_tree(
             if matched_heading != current_heading:
                 # 前のセクションを保存
                 if current_node is not None and not excluded:
+                    unique_heading = current_heading
+                    counter = 1
+                    while unique_heading in sections_dict:
+                        unique_heading = f"{current_heading} ({counter})"
+                        counter += 1
+                    current_node.text = unique_heading
                     tree.append(current_node)
-                    sections_dict[current_heading] = current_section_chunks
+                    sections_dict[unique_heading] = current_section_chunks
 
                 # 除外チェック
                 excluded = is_excluded_heading(matched_heading, exclude_keywords)
@@ -374,8 +386,14 @@ def build_tree(
 
     # 最後のセクションを保存
     if current_node is not None and not excluded:
+        unique_heading = current_heading
+        counter = 1
+        while unique_heading in sections_dict:
+            unique_heading = f"{current_heading} ({counter})"
+            counter += 1
+        current_node.text = unique_heading
         tree.append(current_node)
-        sections_dict[current_heading] = current_section_chunks
+        sections_dict[unique_heading] = current_section_chunks
 
     return tree, sections_dict
 

@@ -51,6 +51,17 @@ def run_pipeline(
     print_log(f"  Stateディレクトリ: {state.session_dir}")
     print_log()
 
+    # --- Phase 0: PDF Ingestion (VLM OCR) ---
+    if input_path.lower().endswith(".pdf"):
+        print_log("--- Phase 0: PDF Ingestion (VLM OCR) ---")
+        from .pdf_ingester import run_pdf_ingestion
+        pdf_text = run_pdf_ingestion(input_path, api_key=api_key)
+        
+        extracted_path = state.session_dir / "extracted_from_pdf.txt"
+        extracted_path.write_text(pdf_text, encoding="utf-8")
+        input_path = str(extracted_path)
+        print_log(f"  完了: PDFから {len(pdf_text)} 文字を抽出。入力を {input_path} に切り替えます。\n")
+
     # --- Phase 1: Ingest & Preprocess ---
     if start_phase <= 1:
         print_log("--- Phase 1: Ingest & Preprocess ---")

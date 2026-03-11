@@ -27,17 +27,24 @@ CRITICAL INSTRUCTIONS:
 """
 
 async def process_pdf_page(
+    pdf_path: str,
     page_num: int,
-    image: Image.Image,
     api_key: str | None,
     semaphore: asyncio.Semaphore,
 ) -> tuple[int, str]:
     """1ページをGeminiで処理し、(ページ番号, 抽出テキスト)を返す"""
     async with semaphore:
-        prompt = [image, OCR_PROMPT]
+        # メモリ節約：必要な時だけページを画像に変換する
+        doc = fitz.open(pdf_path)
+        page = doc[page_num]
         
-        # モデルは gemini-3.1-flash-lite-preview 指定
-        # temperature = 0.0 指定
+        # 200 DPI は Gemini の視覚認識には十分かつメモリ消費を大幅に抑えられる
+        pix = page.get_pixmap(dpi=200)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        doc.close()
+
+        prompt = [img, OCR_PROMPT]
+        
         try:
             result = await call_gemini_async(
                 prompt=prompt,
@@ -47,6 +54,10 @@ async def process_pdf_page(
                 max_retries=3,
                 retry_delay=5.0,
             )
+            # 明示的に画像を破棄
+            del img
+            del pix
+
             # Markdown Code Block の除去
             result = re.sub(r"^```[a-zA-Z]*\n", "", result)
             result = re.sub(r"\n```$", "", result)
@@ -61,16 +72,15 @@ async def run_pdf_ingestion_async(pdf_path: str, api_key: str | None = None) -> 
     doc = fitz.open(pdf_path)
     total_pages = len(doc)
     print_log(f"  [PDF Ingester] 総ページ数: {total_pages}")
+    doc.close()
     
     tasks = []
-    # ユーザー指示: レートリミット考慮のため Semaphore(4) 程度で実行
-    semaphore = asyncio.Semaphore(4)
+    # Render 無料枠 (512MB RAM) のため、同時実行数を抑え、メモリ負荷を下げる
+    semaphore = asyncio.Semaphore(2)
     
     for i in range(total_pages):
-        page = doc[i]
-        pix = page.get_pixmap(dpi=300)
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        tasks.append(process_pdf_page(i, img, api_key, semaphore))
+        # 画像をここで作らず、パスとインデックスだけを渡す
+        tasks.append(process_pdf_page(pdf_path, i, api_key, semaphore))
         
     print_log(f"  [PDF Ingester] 全 {total_pages} ページの非同期抽出を開始...")
     results_with_idx = await asyncio.gather(*tasks)

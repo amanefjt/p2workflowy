@@ -61,6 +61,11 @@ def main():
         action="store_true",
         help="PDF処理をハイブリッドモード（高速・精度中）で実行します。指定しない場合は完全VLMモード（低速・高精度）になります。",
     )
+    parser.add_argument(
+        "--free",
+        action="store_true",
+        help="無料版ティアとして実行します（並列数を制限し、レート制限に配慮します）。",
+    )
 
     args = parser.parse_args()
 
@@ -119,6 +124,8 @@ def main():
         try:
             export_mode = "ronbunnihongo" if args.ronbun else "p2workflowy"
             pdf_mode = "hybrid" if args.hybrid_pdf else "full_vlm"
+            tier = "free" if args.free else "paid"
+            
             run_pipeline(
                 input_path=str(p),
                 glossary_path=args.glossary,
@@ -128,6 +135,7 @@ def main():
                 model=args.model,
                 thinking_level=args.thinking,
                 pdf_mode=pdf_mode,
+                tier=tier,
             )
         except Exception as e:
             print(f"[{i}/{len(input_files)}] エラー発生: {e}")

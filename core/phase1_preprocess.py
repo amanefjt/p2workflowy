@@ -220,7 +220,7 @@ def glossary_aware_word_split(text: str, glossary_keys: List[str]) -> str:
     def _split_long_word(match: re.Match) -> str:
         word = match.group(0)
         # プレースホルダーの一部なら無視
-        if word.startswith("GLOS") or word.endswith("GLOS"):
+        if "__GLOS" in word or word.startswith("GLOS") or word.endswith("GLOS"):
             return word
         split_result = wordninja.split(word)
         if len(split_result) > 1:

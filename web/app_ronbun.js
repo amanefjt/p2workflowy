@@ -137,18 +137,14 @@ function showDownloads(taskId) {
 
 function getFriendlyStatus(progressMsg) {
     if (!progressMsg) return '準備中...';
-    if (progressMsg.includes('Phase 1')) return 'テキスト分析中...';
-    if (progressMsg.includes('Phase 2') || progressMsg.includes('Phase 3')) return '構造解析中...';
-    if (progressMsg.includes('Phase 4')) return '翻訳中...';
-    if (progressMsg.includes('Phase 5')) return '仕上げ中...';
-    return '処理中...';
+    return progressMsg;
 }
 
 function calculateProgress(progressMsg) {
     if (!progressMsg) return 5;
-    if (progressMsg.includes('Phase 1')) return 25;
-    if (progressMsg.includes('Phase 2') || progressMsg.includes('Phase 3')) return 50;
-    if (progressMsg.includes('Phase 4')) return 75;
-    if (progressMsg.includes('Phase 5')) return 90;
+    if (progressMsg.includes('準備中') || progressMsg.includes('テキスト')) return 25;
+    if (progressMsg.includes('要約') || progressMsg.includes('メタデータ') || progressMsg.includes('論理構造')) return 50;
+    if (progressMsg.includes('翻訳')) return 75;
+    if (progressMsg.includes('ファイル')) return 90;
     return 10;
 }

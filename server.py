@@ -28,7 +28,18 @@ web_dir = PROJECT_ROOT / "web"
 web_dir.mkdir(exist_ok=True)
 
 # タスク管理（簡易版）
+MAX_TASK_STATUS_ENTRIES = 50
 task_status: Dict[str, dict] = {}
+
+def _cleanup_task_status():
+    """完了済みタスクが多すぎる場合、古いエントリを削除する。"""
+    if len(task_status) <= MAX_TASK_STATUS_ENTRIES:
+        return
+    # 完了 or 失敗のタスクを古い順に削除
+    completed = [tid for tid, info in task_status.items() if info.get('status') in ('completed', 'failed')]
+    num_to_delete = len(task_status) - MAX_TASK_STATUS_ENTRIES
+    for tid in completed[:num_to_delete]:
+        del task_status[tid]
 
 @app.get("/")
 async def index():
@@ -98,6 +109,7 @@ async def process(
         run_task, task_id, str(input_path), str(glossary_path) if glossary_path else None, title, api_key, expertise, export_mode
     )
     
+    _cleanup_task_status()
     return {"task_id": task_id}
 
 def run_task(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str, export_mode: str):
@@ -112,7 +124,9 @@ def run_task(task_id: str, input_path: str, glossary_path: Optional[str], title:
             expertise=expertise,
             export_mode=export_mode,
             model="gemini-3.1-flash-lite-preview",
-            pdf_mode="hybrid"
+            thinking_level="High",
+            pdf_mode="hybrid",
+            tier="free"
         )
         task_status[task_id]["status"] = "completed"
     except Exception as e:

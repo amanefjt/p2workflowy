@@ -10,6 +10,7 @@ from typing import Any
 from google import genai
 from google.genai import types
 
+import enum
 from datetime import datetime
 from .config import GEMINI_API_KEY, STATE_DIR, load_coreprompts, print_log
 
@@ -27,6 +28,36 @@ def _get_prompts() -> dict:
 def get_default_model() -> str:
     """coreprompts.json から DEFAULT_MODEL を取得。"""
     return _get_prompts().get("DEFAULT_MODEL", "gemini-2.0-flash")
+
+
+class GeminiTier(enum.Enum):
+    PAID = "paid"
+    FREE = "free"
+    UNKNOWN = "unknown"
+
+class TierManager:
+    """APIキーのティア（有料/無料）状態を管理するシングルトン。"""
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance.current_tier = GeminiTier.UNKNOWN
+            cls._instance.was_downgraded = False
+        return cls._instance
+
+    def set_tier(self, tier: GeminiTier):
+        if self.current_tier != tier:
+            print_log(f"  [TierManager] Tier set to: {tier.value}")
+            self.current_tier = tier
+
+    def downgrade(self):
+        if not self.was_downgraded:
+            print_log("  [TierManager] !!! 429 RESOURCE_EXHAUSTED detected. Downgrading to FREE tier mode. !!!")
+            self.current_tier = GeminiTier.FREE
+            self.was_downgraded = True
+
+tier_manager = TierManager()
 
 
 # Gemini クライアントのシングルトン
@@ -57,6 +88,7 @@ def call_gemini(
     thinking_level: str | None = None,
     max_retries: int = 3,
     retry_delay: float = 5.0,
+    **kwargs,
 ) -> str:
     """
     Gemini API を同期ストリーミングで呼び出し、TTFT/TPS 等を計測する。
@@ -141,6 +173,36 @@ def call_gemini(
             
             ttft_val = ttft
             print_log(f"  [LLM] Success: Duration {duration:.1f}s (TTFT: {ttft_val:.1f}s, TPS: {tps:.1f}, Prompt: {p_tokens}tk, Output: {c_tokens}tk)")
+            
+            # --- メトリクスを CSV に記録 ---
+            try:
+                from .config import METRICS_CSV_PATH
+                import csv
+                from datetime import datetime
+                metadata = kwargs.get("metrics_metadata", {})
+                section = metadata.get("section", "N/A")
+                batch_id = metadata.get("batch_id", "N/A")
+                
+                # ファイルが存在しない場合はヘッダーを作成
+                file_exists = METRICS_CSV_PATH.exists()
+                with open(METRICS_CSV_PATH, "a", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f)
+                    if not file_exists:
+                        writer.writerow(["timestamp", "section", "batch_id", "input_chars", "p_tokens", "c_tokens", "ttft", "tps", "duration"])
+                    writer.writerow([
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        section,
+                        batch_id,
+                        prompt_len,
+                        p_tokens,
+                        c_tokens,
+                        f"{ttft_val:.3f}",
+                        f"{tps:.1f}",
+                        f"{duration:.2f}"
+                    ])
+            except Exception as e_log:
+                print_log(f"  [LLM] Metrics logging failed: {e_log}")
+                
             return full_response_text
             
         except Exception as e:
@@ -153,6 +215,9 @@ def call_gemini(
                 # 429 (Rate Limit) の場合は待機時間を調整
                 if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
                     import re
+                    # 429 を検知したら TierManager に通知（ダウンシフトのトリガー）
+                    tier_manager.downgrade()
+                    
                     # "Please retry in 40.669259345s" のような形式を抽出
                     match = re.search(r"retry in ([\d\.]+)s", msg)
                     if match:
@@ -302,6 +367,9 @@ async def call_gemini_async(
                 # 429 (Rate Limit) の場合は待機時間を調整
                 if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
                     import re
+                    # 429 を検知したら TierManager に通知
+                    tier_manager.downgrade()
+                    
                     match = re.search(r"retry in ([\d\.]+)s", msg)
                     if match:
                         wait_time = float(match.group(1)) + 1.0

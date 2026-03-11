@@ -183,12 +183,14 @@ async def process_page_vlm(
     """1ページをGemini VLM OCRで処理して抽出テキストを返す。"""
     async with semaphore:
         doc = fitz.open(pdf_path)
-        page = doc[page_num]
+        try:
+            page = doc[page_num]
 
-        # 200 DPI: Gemini の視覚認識に十分かつメモリ消費を抑える
-        pix = page.get_pixmap(dpi=200)
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        doc.close()
+            # 200 DPI: Gemini の視覚認識に十分かつメモリ消費を抑える
+            pix = page.get_pixmap(dpi=200)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        finally:
+            doc.close()
 
         prompt = [img, VLM_PROMPT]
 
@@ -201,19 +203,16 @@ async def process_page_vlm(
                 max_retries=3,
                 retry_delay=5.0,
             )
-            # 明示的にメモリ破棄
-            del img
-            del pix
-
             # Markdown Code Block の除去
             result = re.sub(r"^```[a-zA-Z]*\n", "", result)
             result = re.sub(r"\n```$", "", result)
             return result.strip()
         except Exception as e:
             print_log(f"  [PDF Ingester] ページ {page_num+1} のVLM処理に失敗: {e}")
+            return ""
+        finally:
             del img
             del pix
-            return ""
 
 
 # ===== メインオーケストレーター =====

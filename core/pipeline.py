@@ -29,6 +29,7 @@ def run_pipeline(
     model: str | None = None,
     thinking_level: str = "High",
     pdf_mode: str = "full_vlm",
+    tier: str = "paid",
 ) -> None:
     """
     パイプライン全体を実行する。
@@ -106,7 +107,12 @@ def run_pipeline(
     if start_phase <= 4:
         state.update_status("本文を翻訳中...", 70)
         print_log("--- Phase 4: Sliding-Window Translation ---")
-        japanese_tree = run_phase4(state.phase2, state.phase3_structure, state.phase3_sections, state.phase4, glossary_path, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level, state=state)
+        japanese_tree = run_phase4(
+            state.phase2, state.phase3_structure, state.phase3_sections, state.phase4, 
+            glossary_path, api_key=api_key, expertise=expertise, 
+            model=model, thinking_level=thinking_level, 
+            state=state, tier=tier
+        )
         print_log(f"  完了: {len(japanese_tree)} セクション翻訳完了\n")
 
     # --- Phase 5: Export ---

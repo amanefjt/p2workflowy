@@ -142,7 +142,7 @@ def match_heading(chunk_text: str, headings: List[str]) -> Optional[tuple[str, s
     for heading in headings:
         # 見出し内のスペースを \s+ に置換して正規表現パターンを作成
         escaped_heading = re.escape(heading)
-        pattern = re.sub(r'\\ ', r'\\s+', escaped_heading)
+        pattern = re.sub(r' ', r'\\s+', escaped_heading)
         # 先頭一致をチェック
         match = re.match(rf"^({pattern})", chunk_text, re.IGNORECASE | re.DOTALL)
         

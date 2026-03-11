@@ -37,7 +37,6 @@ data/test_batch/
 
 # --- エージェント・ドキュメント管理 関連 ---
 # 実装ログやエージェント固有の管理ファイル
-docs/management/
 .antigravity/
 .gemini/
 .agent/

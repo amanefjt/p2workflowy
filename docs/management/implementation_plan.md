@@ -1,48 +1,39 @@
-# 実装計画：論理的バグの修正と品質向上 (p2workflowy V2)
+# 実装計画：徹底的なデバッグと品質改善
 
-指示に基づき、localStorageの挙動修正、サーバーのステータス表示のズレの解消、Markdown出力の階層適正化、およびサンプリングロジックの改善を実施します。
+現在のコードベースに含まれる論理的なバグ（特に出力のネスト構造）および、静的解析で指摘される可能性のあるインポート不足や型ヒントの不備を修正します。
 
-## 修正内容の解説
+## 修正内容
 
-### 1. Markdownの見出しレベル不整合（例）
-**現状（不具合）**:
-```markdown
-## English text
-## Introduction  <-- Introductionが上位の "English text" と同じレベルになってしまう
-...内容...
-```
-**修正後**:
-```markdown
-## English text
-### Introduction <-- 正しくインデント（レベル3）され、English text の子要素になる
-...内容...
-```
-`phase5_export.py` の `base_level` 渡しの数値を調整することで、文書全体の親子関係を正しく復元します。
+### 1. 出力形式のネストレベル修正
+- **対象ファイル**: `core/phase5_export.py`
+- **問題**: 
+    - 以前の修正で「日本語本文」の子要素をネストさせてしまったが、P2の正しい仕様では「日本語本文」と各セクション見出し（一つ目の見出し等）は同レベル（Sibling）であるべき。
+    - Markdown期待値: `## 日本語本文` に対して各見出しも `##` (Level 2)。
+    - Workflowy期待値: `- 日本語本文` に対して各見出しも `base_depth=0`。
+- **修正**: `generate_markdown_output` および `generate_workflowy_output` 内の引数を修正。
 
-### 2. サンプリングの「捨てすぎ」問題
-**現状**:
-30万文字（文庫本約1/2冊分相当）を超えた瞬間、**中間部分を24万文字分まるごとカット**し、冒頭4万字と末尾2万字だけをLLMに渡しています。
-- **リスク**: 論文の核心である「論理の展開（中間部）」や「実験データ」が要約に一切含まれない。
-- **改善案**: カットする文字数を緩和し（例：10万文字程度に抑える）、かつ中間部分からも一定間隔で抽出する「分散サンプリング」への切り替え、または制限値自体の引き上げを検討します。
+### 2. インポート不足の修正 (typing)
+- **対象ファイル**: `core/phase1_preprocess.py`, `core/phase2_meta.py`
+- **問題**: シグネチャで `"Any"` (文字列) を使用しているが、`typing` から `Any` がインポートされていない。
+- **修正**: `from typing import List, Any` 等に変更。
 
-## Proposed Changes
+### 3. ID 比較の安定性向上
+- **対象ファイル**: `core/phase4_translate.py`
+- **内容**: `node.id` の比較時に `str()` 変換を挟むことで、`int` と `str` が混在した場合の `KeyError` や不一致を防止する。
 
-### 1. Web Frontend: localStorage & Logic Fixes
-- **[MODIFY] [app.js](file:///Users/shufujita/Antigravity/p2workflowy/web/app.js)** / **[app_ronbun.js](file:///Users/shufujita/Antigravity/p2workflowy/web/app_ronbun.js)**
-    - `localStorage.setItem` のガード条件を削除し、空文字でも保存（上書き）可能にする。
-    - `expertise` の `|| '文化人類学'` を削除し、ユーザーの意図した「空入力」や「カスタム入力」を尊重する。
+### 4. ドキュメントの更新
+- `docs/management/requirements_log.md` および `troubleshooting_log.md` に今回の修正内容を記録。
 
-### 2. Server: Progress Status Alignment
-- **[MODIFY] [server.py](file:///Users/shufujita/Antigravity/p2workflowy/server.py)**
-    - 進捗の判定ロジックを「ファイルが存在するか」ベースから、実行中のフラグや各フェーズの完了信号ベースに変更（または判定の閾値を「次のフェーズ」へ1つずらす）。
+## 実施手順
 
-### 3. Core: Export & Sampling Fixes
-- **[MODIFY] [phase5_export.py](file:///Users/shufujita/Antigravity/p2workflowy/core/phase5_export.py)**
-    - `tree_to_markdown` の `base_level` 引数を `3` に変更し、親階層より深く出力されるように修正。
-- **[MODIFY] [phase2_meta.py](file:///Users/shufujita/Antigravity/p2workflowy/core/phase2_meta.py)**
-    - `MAX_INPUT_CHARS` を引き上げ（Gemini 1.5 Pro/Flashの長いコンテキストに対応）、捨てられる情報を最小化する。
+1. `core/phase1_preprocess.py` のインポート修正。
+2. `core/phase2_meta.py` のインポート修正。
+3. `core/phase4_translate.py` の ID 比較ロジックの補強。
+4. `core/phase5_export.py` のネストレベル修正。
+5. 修正後のコードで `NSTsample.txt` または `Arbitrarysample.txt` を用いて、出力ファイルの構造（見出しレベルとインデント）を目視確認。
 
-## Verification Plan
-1. `app.js` の修正後、ブラウザの開発者ツールで `localStorage` が空文字で上書きされることを確認。
-2. 特大サイズのテキスト（30万文字以上）を投入し、`phase2_meta.py` のログでサンプリング範囲が改善されているか確認。
-3. 生成された `.md` ファイルをプレビューし、見出しの階層が正しいか確認。
+## 完了の定義 (DoD)
+- [ ] `core/` 配下の主なモジュールでインポートエラーや未定義変数エラーが発生しない。
+- [ ] 生成される `.md` ファイルの「日本語本文」に続くセクションが `##` (Level 2) で始まっている。
+- [ ] 生成される `.txt` ファイルの「日本語本文」に続くセクションがインデントなし（Level 0）で出力されている。
+- [ ] ログファイルが更新されている。

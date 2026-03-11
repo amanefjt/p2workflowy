@@ -7,7 +7,7 @@ import re
 import csv
 import statistics
 from pathlib import Path
-from typing import List
+from typing import List, Any
 
 import wordninja
 

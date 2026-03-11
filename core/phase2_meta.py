@@ -5,7 +5,7 @@ LLM を用いたレジュメ生成、キーワード抽出、glossary マージ�
 
 import json
 from pathlib import Path
-from typing import List
+from typing import List, Any
 
 from .config import load_coreprompts, load_glossary_csv, print_log
 from .models import load_chunks_from_json

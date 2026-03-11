@@ -81,7 +81,7 @@ def generate_markdown_output(
         "",
         "## 日本語本文",
         "",
-        # "## 日本語テキスト" などのラッパーを削除し、直接セクションを展開
+        # 日本語本文を H2 とし、その子要素（セクション）も H2 (base_level=2) に設定（P2仕様）
         tree_to_markdown(japanese_tree, base_level=2)
     ]
 
@@ -195,7 +195,7 @@ def generate_workflowy_output(
 
     # 4. 日本語テキスト [Level 1]
     lines.append("- 日本語本文")
-    # 各部分をタイトルの直下（Level 1）にするため base_depth=0
+    # 日本語本文の直下のセクションを最上位（Level 0）にするため base_depth=0
     lines.append(tree_to_workflowy(japanese_tree, base_depth=0))
 
     return "\n".join(lines)

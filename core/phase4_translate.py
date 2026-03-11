@@ -346,7 +346,7 @@ def rebuild_translated_tree(
         
         # 翻訳済みノードを ID で逆引きするためのマップを作成 (h2 セクション単位)
         translated_pool = translated_sections.get(section_name,[])
-        id_to_ja_node = {node.id: node for node in translated_pool}
+        id_to_ja_node = {str(node.id): node for node in translated_pool}
 
         def _recursive_rebuild(en_subnode: TreeNode) -> TreeNode:
             # 新しいノード（日本語版）を作成
@@ -391,6 +391,7 @@ async def _run_phase4_async(
     model: str | None = None,
     thinking_level: str = "High",
     state: Any = None,
+    tier: str = "paid",
 ) -> List[TreeNode]:
     """非同期メイン実行処理"""
     phase2_state_path = Path(phase2_state_path)
@@ -412,10 +413,15 @@ async def _run_phase4_async(
     master_glossary = load_glossary_csv(glossary_path)
 
     # ティアの初期設定
-    initial_tier = GeminiTier.PAID # CLI のデフォルト
-    if model and ("lite" in model.lower() or "gemini-2" in model.lower()):
-        # Lite モデルや古いモデルが指定されている場合は無料枠の可能性が高い
+    if tier.lower() == "free":
         initial_tier = GeminiTier.FREE
+    elif tier.lower() == "paid":
+        initial_tier = GeminiTier.PAID
+    else:
+        # 指定がない場合はモデル名から推測
+        initial_tier = GeminiTier.PAID # CLI のデフォルト
+        if model and ("lite" in model.lower() or "gemini-2" in model.lower()):
+            initial_tier = GeminiTier.FREE
     
     tier_manager.set_tier(initial_tier)
     apply_tier_settings(tier_manager.current_tier)
@@ -503,6 +509,7 @@ def run_phase4(
     model: str | None = None,
     thinking_level: str = "High",
     state: Any = None,
+    tier: str = "paid",
 ) -> List[TreeNode]:
     """
     Phase 4 メイン処理（同期ラッパー）
@@ -511,5 +518,5 @@ def run_phase4(
         phase2_state_path, structure_state_path, sections_state_path, 
         phase4_state_path, glossary_path, api_key, save_state,
         expertise=expertise, model=model, thinking_level=thinking_level,
-        state=state
+        state=state, tier=tier
     ))

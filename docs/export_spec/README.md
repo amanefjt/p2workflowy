@@ -10,7 +10,7 @@
   - 英語原文セクションは `###` (H3)、日本語訳セクションは `##` (H2) を使用します。
 - [ideal_wfstructure.txt](file:///Users/shufujita/Antigravity/p2workflowy/docs/export_spec/ideal_wfstructure.txt)
   - `p2workflowy` モードの Workflowy 用テキスト出力の理想的なインデント構造です。
-  - 余計な親ノード（「日本語テキスト」など）を排した形式になっています。
+  - **重要（非対称性）**: `English text` は子要素をネストしますが、`日本語本文` は子要素を見出し（Sibling）としてフラットに並べます。
 - [ideal_ronbunmdstructure.md](file:///Users/shufujita/Antigravity/p2workflowy/docs/export_spec/ideal_ronbunmdstructure.md)
   - `ronbunnihongo` モードの Markdown 出力用の理想的な構造です。
   - 日本語訳のみを抽出し、タイトルと H2 見出しで構成されます。

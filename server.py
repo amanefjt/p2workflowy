@@ -40,7 +40,7 @@ async def ronbun_page():
 
 @app.post("/api/process")
 async def process(
-    text: Optional[str] = Form(None),
+    text: str = Form(""),
     title: str = Form("Untitled"),
     api_key: Optional[str] = Form(None),
     expertise: str = Form("文化人類学"),

@@ -29,8 +29,10 @@ CRITICAL INSTRUCTIONS:
 async def process_pdf_page(
     pdf_path: str,
     page_num: int,
+    total_pages: int,
     api_key: str | None,
     semaphore: asyncio.Semaphore,
+    state: "SessionState" = None,
 ) -> tuple[int, str]:
     """1ページをGeminiで処理し、(ページ番号, 抽出テキスト)を返す"""
     async with semaphore:
@@ -54,6 +56,11 @@ async def process_pdf_page(
                 max_retries=3,
                 retry_delay=5.0,
             )
+            if state:
+                # Page 1 -> 5%, Page Last -> 15% 程度とする
+                current_percent = 5 + int((page_num + 1) / total_pages * 10)
+                state.update_status(f"Phase 0: Extracting page {page_num+1}/{total_pages}...", current_percent)
+
             # 明示的に画像を破棄
             del img
             del pix
@@ -66,8 +73,10 @@ async def process_pdf_page(
             print_log(f"  [PDF Ingester] ページ {page_num+1} の処理に失敗しました: {e}")
             return page_num, ""
 
-async def run_pdf_ingestion_async(pdf_path: str, api_key: str | None = None) -> str:
+async def run_pdf_ingestion_async(pdf_path: str, api_key: str | None = None, state: "SessionState" = None) -> str:
     """PDFを画像化し、非同期でGeminiに渡してテキスト化する"""
+    if state:
+        state.update_status("Phase 0: Reading PDF...", 5)
     print_log(f"  [PDF Ingester] PDF読み込み開始: {pdf_path}")
     doc = fitz.open(pdf_path)
     total_pages = len(doc)
@@ -80,7 +89,7 @@ async def run_pdf_ingestion_async(pdf_path: str, api_key: str | None = None) -> 
     
     for i in range(total_pages):
         # 画像をここで作らず、パスとインデックスだけを渡す
-        tasks.append(process_pdf_page(pdf_path, i, api_key, semaphore))
+        tasks.append(process_pdf_page(pdf_path, i, total_pages, api_key, semaphore, state))
         
     print_log(f"  [PDF Ingester] 全 {total_pages} ページの非同期抽出を開始...")
     results_with_idx = await asyncio.gather(*tasks)
@@ -108,6 +117,6 @@ async def run_pdf_ingestion_async(pdf_path: str, api_key: str | None = None) -> 
 
     return full_text
 
-def run_pdf_ingestion(pdf_path: str, api_key: str | None = None) -> str:
+def run_pdf_ingestion(pdf_path: str, api_key: str | None = None, state: "SessionState" = None) -> str:
     """同期呼び出しラッパー"""
-    return asyncio.run(run_pdf_ingestion_async(pdf_path, api_key))
+    return asyncio.run(run_pdf_ingestion_async(pdf_path, api_key, state))

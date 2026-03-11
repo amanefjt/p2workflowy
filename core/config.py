@@ -142,6 +142,30 @@ class SessionState:
     def metrics_csv(self) -> Path:
         return self.session_dir / "ttft_metrics.csv"
 
+    @property
+    def status_json(self) -> Path:
+        return self.session_dir / "status.json"
+
+    def update_status(self, progress: str, percentage: int | float | None = None):
+        """進捗状況（メッセージとパーセンテージ）を status.json に書き込む。"""
+        status_data = {
+            "progress_message": progress,
+            "percentage": percentage,
+            "timestamp": datetime.now().isoformat()
+        }
+        with open(self.status_json, "w", encoding="utf-8") as f:
+            json.dump(status_data, f, ensure_ascii=False, indent=4)
+
+    def read_status(self) -> dict:
+        """status.json から現在の進捗状況を読み取る。"""
+        if not self.status_json.exists():
+            return {"progress_message": "Initializing...", "percentage": 0}
+        try:
+            with open(self.status_json, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {"progress_message": "Processing...", "percentage": 0}
+
 
 # --- メトリクス計測（継続運用） ---
 METRICS_CSV_PATH = STATE_DIR / "ttft_metrics.csv"

@@ -79,7 +79,8 @@ async def process(
     task_status[task_id] = {
         "status": "processing",
         "title": title,
-        "progress": "Pipeline started...",
+        "progress": "Preparing pipeline...",
+        "percentage": 5,
         "error": None
     }
     
@@ -115,19 +116,39 @@ async def get_status(task_id: str):
     if task_id not in task_status:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    # プログレスの動的更新（ファイル存在チェック）
+    # プログレスの動的更新（status.json およびファイル存在チェック）
     if task_status[task_id]["status"] == "processing":
-        session_dir = STATE_DIR / task_id
-        if (session_dir / "phase4_translation.json").exists():
+        session_id = task_id
+        session_dir = STATE_DIR / session_id
+        
+        # 1. status.json があればそれを優先
+        status_file = session_dir / "status.json"
+        if status_file.exists():
+            try:
+                with open(status_file, "r", encoding="utf-8") as f:
+                    import json
+                    data = json.load(f)
+                    task_status[task_id]["progress"] = data.get("progress_message", "Processing...")
+                    task_status[task_id]["percentage"] = data.get("percentage", 0)
+            except Exception:
+                pass
+        
+        # 2. ファイル存在によるバックアップ判定（status.json が詳細を更新していない場合用）
+        elif (session_dir / "phase4_translation.json").exists():
             task_status[task_id]["progress"] = "Phase 5: Exporting..."
+            task_status[task_id]["percentage"] = 90
         elif (session_dir / "phase3_structure.json").exists():
             task_status[task_id]["progress"] = "Phase 4: Translating..."
+            task_status[task_id]["percentage"] = 60
         elif (session_dir / "phase2_meta.json").exists():
             task_status[task_id]["progress"] = "Phase 3: Structuring..."
+            task_status[task_id]["percentage"] = 40
         elif (session_dir / "phase1_clean.json").exists():
             task_status[task_id]["progress"] = "Phase 2: Analyzing..."
-        else:
+            task_status[task_id]["percentage"] = 20
+        elif (session_dir / "extracted_from_pdf.txt").exists():
             task_status[task_id]["progress"] = "Phase 1: Preprocessing..."
+            task_status[task_id]["percentage"] = 10
             
     return task_status[task_id]
 

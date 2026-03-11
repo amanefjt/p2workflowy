@@ -223,6 +223,7 @@ async def process_section(
     expertise: str = "文化人類学",
     model: str | None = None,
     thinking_level: str = "High",
+    state: Any = None,
 ) -> tuple[str, List[TreeNode]]:
     """
     セクション内のチャンクを動的にバッチ化して翻訳を進める。
@@ -276,7 +277,13 @@ async def process_section(
                 
             # プログレス更新
             progress_state[0] += len(batch_chunks)
-            print_log(f"  [Phase 4] 翻訳進捗: {progress_state[0]}/{progress_state[1]} チャンク")
+            curr = progress_state[0]
+            total = progress_state[1]
+            print_log(f"  [Phase 4] 翻訳進捗: {curr}/{total} チャンク")
+            if state:
+                # 70% から 90% の間で進捗を表示
+                percent = 70 + int((curr / total) * 20)
+                state.update_status(f"Phase 4: Translating ({curr}/{total} chunks)...", percent)
 
     return section_name, translated_nodes
 
@@ -344,6 +351,7 @@ async def _run_phase4_async(
     expertise: str = "文化人類学",
     model: str | None = None,
     thinking_level: str = "High",
+    state: Any = None,
 ) -> List[TreeNode]:
     """非同期メイン実行処理"""
     phase2_state_path = Path(phase2_state_path)
@@ -413,6 +421,7 @@ async def _run_phase4_async(
             api_key=api_key,
             expertise=expertise,
             model=model, thinking_level=thinking_level,
+            state=state,
         ))
     
     results = await asyncio.gather(*tasks)
@@ -446,6 +455,7 @@ def run_phase4(
     expertise: str = "文化人類学",
     model: str | None = None,
     thinking_level: str = "High",
+    state: Any = None,
 ) -> List[TreeNode]:
     """
     Phase 4 メイン処理（同期ラッパー）
@@ -459,5 +469,6 @@ def run_phase4(
     return loop.run_until_complete(_run_phase4_async(
         phase2_state_path, structure_state_path, sections_state_path, 
         phase4_state_path, glossary_path, api_key, save_state,
-        expertise=expertise, model=model, thinking_level=thinking_level
+        expertise=expertise, model=model, thinking_level=thinking_level,
+        state=state
     ))

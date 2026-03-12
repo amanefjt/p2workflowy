@@ -99,11 +99,12 @@
     - [x] `from typing import Any` の欠落を各ファイルで修正。
     - [x] `phase4_translate.py` における ID 型（int/str）の混在による比較エラーを防止（str変換）。
     - [x] `app.js` の localStorage 保存ロジックの改善（空文字許可）。
-- **結果**: 生成される Markdown および Workflowy データの論理構造が完全になり、Workflowy 等の外部ツールへのインポート時の手直しが不要になった。
+    - [x] Render 本番環境へのデプロイ成功と動作確認の完了。
+- **結果**: 生成される Markdown および Workflowy データの論理構造が完全になり、Workflowy 等の外部ツールへのインポート時の手直しが不要になった。さらに、Render (https://p2workflowy.onrender.com) へのデプロイが成功し、ブラウザ検証により UI が正常に稼働していることを確認。
 
 ## 2026-03-09: リポジトリのクリーンアップと公開準備
 - **要望**:
-    - [x] GitHub への移行（既存リポジトリの置き換え）に向けた `.gitignore` の整備。
+    - [x] GitHub への移行（既存リポジリの置き換え）に向けた `.gitignore` の整備。
     - [x] 不要なサンプルデータ (`data/sample/`)、中間データ (`state/`)、秘匿情報 (`.env`) の除外。
 - **実施内容**:
     - プロジェクトルートに `.gitignore` を新規作成。個人情報や巨大な中間ファイルがリポジトリに含まれないよう設定。

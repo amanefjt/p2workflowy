@@ -29,12 +29,21 @@ Phase 3 (`build_tree`) と Phase 4 (`rebuild_translated_tree`) で、ノード�
 1. **テキストファイル**: `python main.py data/sample/old_tests/Arbitarylocations/Arbitrarysample.txt --free`
    - [x] 全 113 チャンクが日本語に翻訳されていることを確認。
    - [x] Markdown の見出しレベル (H2) が正しいことを確認。
-   - [x] Workflowy 用テキストのインデントがないことを確認。
+   - [x] Workflowy 用テキスト of インデントがないことを確認。
 
 2. **PDF ファイル**: `python main.py data/sample/PDF/ALpdf.pdf --free`
    - [ ] 18 ページの VLM 解析が正常に完了すること（現在実行中）。
    - [ ] 生成された `ALpdf_p2.md` の構造を確認。
 
+### Render 本番環境デプロイ
+1. **URL**: https://p2workflowy.onrender.com
+2. **検証項目**:
+   - [x] ページが正常に表示される（タイトル: `p2workflowy - Academic Text to Workflowy`）。
+   - [x] JavaScript エラーがないことを確認。
+   - [x] Gemini APIキー入力、専門設定、用語集、論文内容入力フォームが正しく表示されている。
+3. **結果**: 正常に稼働中。
+
 ### エビデンス
+- `deployment_success.png`: 本番環境のスクリーンショット。
 - `state/ttft_metrics.csv`: 非同期呼び出しのパフォーマンスログ。
 - `data/sample/old_tests/Arbitarylocations/Arbitrarysample_p2.md`: 最新の修正が反映された成果物。

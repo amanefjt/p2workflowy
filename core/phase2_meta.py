@@ -12,10 +12,10 @@ from .models import load_chunks_from_json
 from .llm_client import call_gemini
 
 
-# サンプリング閾値
-MAX_INPUT_CHARS = 5_000_000  # これ以上の場合はサンプリング（Gemini 1.5 Pro/Flashのコンテキストを考慮）
-HEAD_CHARS = 500_000        # 大幅に拡大
-TAIL_CHARS = 200_000        # 大幅に拡大
+# サンプリング閾値 (仕様書に基づき調整)
+MAX_INPUT_CHARS = 500_000   # これ以上の場合はサンプリング
+HEAD_CHARS = 100_000        # 冒頭部分
+TAIL_CHARS = 50_000         # 末尾部分
 
 
 def _build_full_text(chunks_path: str | Path) -> str:
@@ -61,7 +61,13 @@ def generate_resume(text: str, api_key: str | None = None, expertise: str = "文
         prompt_tpl = prompts["SUMMARY_PROMPT"]
 
     # プロンプト構築
-    prompt = prompt_tpl.replace("{expertise}", expertise).replace("{context_guide}", "").replace("{text}", text)
+    prompt = prompt_tpl.replace(
+        "{expertise}", expertise
+    ).replace(
+        "{context_guide}", "論文全体の構造、各セクションの論理構成を抽出してください。"
+    ).replace(
+        "{text}", text
+    )
 
     print_log(f"  [Phase 2] レジュメ生成中... (入力: {len(text)} 文字)")
     resume = call_gemini(prompt, api_key=api_key, temperature=0.3, model=model, thinking_level=thinking_level)

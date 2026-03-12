@@ -179,6 +179,7 @@ async def process_page_vlm(
     page_num: int,
     api_key: str | None,
     semaphore: asyncio.Semaphore,
+    model: str | None = None,
 ) -> str:
     """1ページをGemini VLM OCRで処理して抽出テキストを返す。"""
     async with semaphore:
@@ -197,7 +198,7 @@ async def process_page_vlm(
         try:
             result = await call_gemini_async(
                 prompt=prompt,
-                model="gemini-3.1-flash-lite-preview",
+                model=model or "gemini-3.1-flash-lite-preview",
                 api_key=api_key,
                 temperature=0.0,
                 max_retries=3,
@@ -222,6 +223,7 @@ async def run_pdf_ingestion_async(
     api_key: str | None = None,
     state: Any = None,
     pdf_mode: str = "full_vlm",
+    model: str | None = None,
 ) -> str:
     """PDFからテキストを抽出する。
 
@@ -273,7 +275,7 @@ async def run_pdf_ingestion_async(
         print_log(f"  [PDF Ingester] VLM対象 {len(vlm_page_nums)} ページの非同期抽出を開始...")
 
         async def _process_vlm_page(page_num: int) -> tuple[int, str]:
-            text = await process_page_vlm(pdf_path, page_num, api_key, semaphore)
+            text = await process_page_vlm(pdf_path, page_num, api_key, semaphore, model=model)
             return page_num, text
 
         tasks = [_process_vlm_page(pn) for pn in vlm_page_nums]

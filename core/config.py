@@ -64,6 +64,9 @@ def load_glossary_csv(glossary_path: str | None = None) -> dict[str, str]:
             csv_path = PROJECT_ROOT / csv_path
 
     glossary = {}
+    if not csv_path.exists():
+        return glossary
+        
     with open(csv_path, "r", encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
@@ -91,8 +94,10 @@ class SessionState:
             self.session_id = Path(input_path).stem
         self.session_dir = STATE_DIR / self.session_id
         self.session_dir.mkdir(parents=True, exist_ok=True)
-        
-        # ディレクトリ作成後にクリーンアップを実行
+        # self._cleanup_old_sessions() # コンストラクタでの自動実行は廃止
+
+    def cleanup_old_sessions(self):
+        """古いセッションディレクトリをクリーンアップする。"""
         self._cleanup_old_sessions()
 
     def _cleanup_old_sessions(self):

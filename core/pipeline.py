@@ -57,7 +57,7 @@ def run_pipeline(
     if input_path.lower().endswith(".pdf"):
         from .pdf_ingester import run_pdf_ingestion_async
         import asyncio
-        pdf_text = asyncio.run(run_pdf_ingestion_async(input_path, api_key=api_key, state=state, pdf_mode=pdf_mode))
+        pdf_text = asyncio.run(run_pdf_ingestion_async(input_path, api_key=api_key, state=state, pdf_mode=pdf_mode, model=model))
         
         extracted_path = state.session_dir / "extracted_from_pdf.txt"
         extracted_path.write_text(pdf_text, encoding="utf-8")
@@ -125,4 +125,6 @@ def run_pipeline(
             print_log(f"    - {p}")
         print_log()
 
+    # クリーンアップ（Race Condition 回避のため完了後に実行）
+    state.cleanup_old_sessions()
     print_log("=== Pipeline 完了 ===")

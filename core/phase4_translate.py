@@ -28,37 +28,33 @@ DEFAULT_MAX_BATCH_CHARS = 4000
 DEFAULT_SEMAPHORE_COUNT = 12
 DEFAULT_RPM_LIMIT = 500
 
-# 状態保持用 (ダウンシフト時に更新)
-current_settings = {
-    "max_batch_chunks": DEFAULT_MAX_BATCH_CHUNKS,
-    "max_batch_chars": DEFAULT_MAX_BATCH_CHARS,
-}
+# 流量制限のデフォルト値
+DEFAULT_MAX_BATCH_CHUNKS = 12
+DEFAULT_MAX_BATCH_CHARS = 4000
+DEFAULT_SEMAPHORE_COUNT = 12
+DEFAULT_RPM_LIMIT = 500
 
-# 流量制限オブジェクト (動的に再生成可能にするため、ここでは定義のみ)
-rate_limiter = AsyncLimiter(DEFAULT_RPM_LIMIT, 60)
-semaphore = asyncio.Semaphore(DEFAULT_SEMAPHORE_COUNT)
-
-def apply_tier_settings(tier: GeminiTier):
-    """ティアに応じた動作設定を適用する。すでに行われた処理には影響しない。"""
-    global rate_limiter, semaphore, current_settings
-
+def apply_tier_settings(tier: GeminiTier) -> tuple[AsyncLimiter, asyncio.Semaphore, dict]:
+    """ティアに応じた動作設定を生成して返す。"""
+    settings = {}
     if tier == GeminiTier.FREE:
         # 無料版設定 (安全運転)
         rpm = 15
         sem_count = 2
-        current_settings["max_batch_chunks"] = 20 # リクエスト回数節約
-        current_settings["max_batch_chars"] = 6000
+        settings["max_batch_chunks"] = 20 # リクエスト回数節約
+        settings["max_batch_chars"] = 6000
     else:
         # 有料版設定 (フルパワー)
         rpm = DEFAULT_RPM_LIMIT
         sem_count = DEFAULT_SEMAPHORE_COUNT
-        current_settings["max_batch_chunks"] = DEFAULT_MAX_BATCH_CHUNKS
-        current_settings["max_batch_chars"] = DEFAULT_MAX_BATCH_CHARS
+        settings["max_batch_chunks"] = DEFAULT_MAX_BATCH_CHUNKS
+        settings["max_batch_chars"] = DEFAULT_MAX_BATCH_CHARS
 
-    # オブジェクトの差し替え
-    rate_limiter = AsyncLimiter(rpm, 60)
-    semaphore = asyncio.Semaphore(sem_count)
-    print_log(f"  [Phase 4] Dynamic settings applied: Tier={tier.value}, Sem={sem_count}, RPM={rpm}, Batch={current_settings['max_batch_chunks']}")
+    # オブジェクトの生成
+    limiter = AsyncLimiter(rpm, 60)
+    sem = asyncio.Semaphore(sem_count)
+    print_log(f"  [Phase 4] Tier settings generated: Tier={tier.value}, Sem={sem_count}, RPM={rpm}")
+    return limiter, sem, settings
 
 
 # ============================================================
@@ -78,9 +74,10 @@ def format_previous_translation(previous_nodes: List[TreeNode]) -> str:
     直前の翻訳結果（Sliding Window用コンテキスト）を文字列化する。
     """
     if not previous_nodes:
-        return "なし（セクション先頭）"
+        return "なし（セクション内先頭）"
     
-    # 直前のバッチ（最大3チャンク）のテキストを取得して結合
+    # 直前 3 チャンクのテキストを取得して結合（品質重視）
+    # 注意: セクション間は並列処理のため、このコンテキストはセクション内限定。
     nodes_list = list(previous_nodes)
     recent_nodes = nodes_list[-3:] if len(nodes_list) >= 3 else nodes_list
     return "\n\n".join([node.text for node in recent_nodes])
@@ -101,7 +98,10 @@ async def translate_batch(
     expertise: str = "文化人類学",
     model: str | None = None,
     thinking_level: str = "High",
-) -> List[TreeNode]:
+    state: Any = None,
+    semaphore: asyncio.Semaphore = None, # type: ignore
+    rate_limiter: AsyncLimiter = None, # type: ignore
+) -> List[dict]:
     """
     動的バッチ（Trial C: 最大6000文字/20チャンク）を一度の API コールで翻訳する。
     """
@@ -113,11 +113,7 @@ async def translate_batch(
         # 置換ルール
         t = t.replace('\\"', '”')
         t = t.replace('"', '”')
-        t = t.replace("'", '’')
-        t = t.replace('[', '［')
-        t = t.replace(']', '］')
-        t = t.replace('(', '（')
-        t = t.replace(')', '）')
+        # 角括弧や丸括弧の全角変換は引用表記([1]等)を破壊するため廃止
         
         sanitized_chunks.append({
             "id": str(c_copy.get("id")),
@@ -129,7 +125,7 @@ async def translate_batch(
     prompt = prompt_template.replace(
         "{expertise}", expertise
     ).replace(
-        "{context_guide}", ""
+        "{context_guide}", "原文のニュアンスを維持しつつ、自然な日本語に翻訳してください。"
     ).replace(
         "{resume_content}", resume_content
     ).replace(
@@ -250,6 +246,8 @@ async def process_section(
     prompt_template: str,
     progress_state: List[int],
     semaphore: asyncio.Semaphore,
+    rate_limiter: AsyncLimiter,
+    settings: dict,
     api_key: str | None = None,
     expertise: str = "文化人類学",
     model: str | None = None,
@@ -273,8 +271,8 @@ async def process_section(
             batch_chars: int = 0
             
             # 1回あたりのバッチサイズ（現在の設定を使用）
-            max_chunks = current_settings["max_batch_chunks"]
-            max_chars = current_settings["max_batch_chars"]
+            max_chunks = settings.get("max_batch_chunks", DEFAULT_MAX_BATCH_CHUNKS)
+            max_chars = settings.get("max_batch_chars", DEFAULT_MAX_BATCH_CHARS)
             
             while i < len(chunk_list) and len(batch_chunks) < max_chunks:
                 next_chunk = chunk_list[i]
@@ -290,8 +288,8 @@ async def process_section(
             
             # API呼び出し前にダウンシフトが発生しているかチェック
             if tier_manager.was_downgraded and tier_manager.current_tier == GeminiTier.FREE:
-                # 設定を更新（次回のループや同時実行中のタスクに影響）
-                apply_tier_settings(GeminiTier.FREE)
+                # 設定を更新（現在のセクションの次回のループに影響）
+                rate_limiter, _, settings = apply_tier_settings(GeminiTier.FREE)
             
             # Sliding Window コンテキストを取得
             previous_translation = format_previous_translation(translated_nodes)
@@ -310,6 +308,9 @@ async def process_section(
                 expertise=expertise,
                 model=model,
                 thinking_level=thinking_level,
+                state=state,
+                semaphore=semaphore,
+                rate_limiter=rate_limiter,
             )
             
             translated_nodes.extend(batch_translated_nodes)
@@ -360,8 +361,9 @@ def rebuild_translated_tree(
 
             if en_subnode.role == "p":
                 # p ノードは翻訳済みのテキストに差し替え
-                if en_subnode.id in id_to_ja_node:
-                    ja_subnode.text = id_to_ja_node[en_subnode.id].text
+                str_id = str(en_subnode.id)
+                if str_id in id_to_ja_node:
+                    ja_subnode.text = id_to_ja_node[str_id].text
             
             # 子ノードを再帰的に処理
             if en_subnode.children:
@@ -424,7 +426,7 @@ async def _run_phase4_async(
             initial_tier = GeminiTier.FREE
     
     tier_manager.set_tier(initial_tier)
-    apply_tier_settings(tier_manager.current_tier)
+    rate_limiter, semaphore, settings = apply_tier_settings(tier_manager.current_tier)
 
     # 全チャンク数
     total_chunks = sum(len(chunks) for chunks in sections_dict.values())
@@ -432,10 +434,11 @@ async def _run_phase4_async(
 
     print_log(f"  [Phase 4] 翻訳対象セクション: {len(sections_dict)} 件")
     
-    # semaphore は apply_tier_settings 内で生成されたグローバルなものを使用するため、ここでは作成しない
+    # semaphore は apply_tier_settings 内で生成されたグローバルなものが更新されているが、
+    # _run_phase4_async 内で明示的にローカルのセマフォとして扱う（設計意図の反映）
     tasks = []
     
-    # 1. 語彙データの統合読み込み
+    # 1. 語彙データの統合読み込み（初期ロード）
     master_glossary = load_glossary_csv(glossary_path)
     
     # phase2_meta.json から AI 抽出語彙をマージ 
@@ -471,6 +474,8 @@ async def _run_phase4_async(
             prompt_template=prompt_template,
             progress_state=progress_state,
             semaphore=semaphore,
+            rate_limiter=rate_limiter,
+            settings=settings,
             api_key=api_key,
             expertise=expertise,
             model=model, thinking_level=thinking_level,

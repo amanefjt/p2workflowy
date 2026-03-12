@@ -112,10 +112,12 @@ async def process(
     _cleanup_task_status()
     return {"task_id": task_id}
 
-def run_task(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str, export_mode: str):
+async def run_task(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str, export_mode: str):
+    import asyncio
     try:
-        # パイプライン実行
-        run_pipeline(
+        # 同期関数である run_pipeline を別スレッドで実行してイベントループのブロックと競合を避ける
+        await asyncio.to_thread(
+            run_pipeline,
             input_path=input_path,
             glossary_path=glossary_path,
             title=title,

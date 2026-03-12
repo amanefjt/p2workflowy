@@ -39,7 +39,9 @@ List[TreeNode] (Phase 3b の骨格を維持し、text のみが日本語に置�
 
 セクション内処理: 同一セクション内のチャンク翻訳は、Sliding Window を適用するため直列に処理すること。
 
-キーのリネーム: プロンプトの仕様に合わせ、text キーを en にリネームして LLM に渡すこと。
+各セクションの翻訳結果 [{"id": ..., "ja": "..."}] を、id をキーとした検索用辞書にまとめる。
+
+プロンプト変数: プロンプト内の `{expertise}`, `{context_guide}`, `{resume_content}`, `{glossary_content}` などのプレースホルダーはコード側で適切に置換すること。
 
 Sliding Window 制約: previous_translation に渡すのは、**「直前 1 チャンク（最大 3 段落分）」**の翻訳結果のみとする。2 チャンク以上の蓄積はトークン爆発防止のため禁止する。
 

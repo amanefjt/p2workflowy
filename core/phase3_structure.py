@@ -236,24 +236,26 @@ def build_tree(
 
         for chunk in chunks:
             # abstract_start_id ～ introduction_start_id の直前
-            if chunk.id >= abstract_start_id and chunk.id < intro_start_id:
-                if chunk.id in metadata_ids:
-                    continue  # メタデータは除外
-                if chunk.id == anchors.get("keywords_id"):
-                    continue  # Keywords 行も除外
-                # Abstract のタイトル行自体を子に含めない
-                first_line = chunk.text.split("\n")[0].strip().lower()
-                if first_line == "abstract":
-                    continue
+            cid = int(chunk.id)
+            if abstract_start_id is not None and intro_start_id is not None:
+                if cid >= int(abstract_start_id) and cid < int(intro_start_id):
+                    if chunk.id in metadata_ids:
+                        continue  # メタデータは除外
+                    if anchors.get("keywords_id") is not None and cid == int(anchors.get("keywords_id")):
+                        continue  # Keywords 行も除外
+                    # Abstract のタイトル行自体を子に含めない
+                    first_line = chunk.text.split("\n")[0].strip().lower()
+                    if first_line == "abstract":
+                        continue
 
-                child = TreeNode(
-                    id=chunk.id,
-                    text=chunk.text,
-                    role="p",
-                    seq_index=chunk.seq_index,
-                )
-                abstract_node.children.append(child)
-                abstract_chunks.append(chunk.to_dict())
+                    child = TreeNode(
+                        id=chunk.id,
+                        text=chunk.text,
+                        role="p",
+                        seq_index=chunk.seq_index,
+                    )
+                    abstract_node.children.append(child)
+                    abstract_chunks.append(chunk.to_dict())
 
         if abstract_node.children:
             tree.append(abstract_node)
@@ -264,13 +266,13 @@ def build_tree(
     start_idx = 0
     if intro_start_id is not None:
         for i, chunk in enumerate(chunks):
-            if chunk.id == intro_start_id:
+            if int(chunk.id) == int(intro_start_id):
                 start_idx = i
                 break
     elif abstract_start_id is not None:
         # Introduction が見つからない場合、Abstract 以降のチャンクから
         for i, chunk in enumerate(chunks):
-            if chunk.id >= abstract_start_id:
+            if int(chunk.id) >= int(abstract_start_id):
                 start_idx = i
                 break
 

@@ -41,6 +41,13 @@ load_dotenv(_env_path)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
 APP_ADMIN_PASSCODE = os.getenv("APP_ADMIN_PASSCODE")
 
+# 起動時に設定状況を確認（セキュリティのためマスク）
+def _mask(s):
+    if not s: return "Empty/NotSet"
+    return s[0] + "..." if len(s) > 0 else "***"
+
+print_log(f"Config Check: GEMINI_API_KEY={_mask(GEMINI_API_KEY)}, APP_ADMIN_PASSCODE={_mask(APP_ADMIN_PASSCODE)}")
+
 # state ディレクトリの自動作成
 STATE_DIR.mkdir(exist_ok=True)
 

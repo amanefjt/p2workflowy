@@ -103,9 +103,15 @@ async def process(
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     # パスコード認証ロジック
-    if api_key and APP_ADMIN_PASSCODE and api_key.strip() == APP_ADMIN_PASSCODE:
-        print("Admin Passcode detected. Using server-side API key.")
+    clean_api_key = api_key.strip() if api_key else ""
+    clean_passcode = APP_ADMIN_PASSCODE.strip() if APP_ADMIN_PASSCODE else ""
+    
+    if clean_api_key and clean_passcode and clean_api_key == clean_passcode:
+        print(f"Admin Passcode detected for task {task_id}. Using server-side API key.")
         api_key = GEMINI_API_KEY
+    elif clean_api_key:
+        # 一致しない場合、念のため最初の数文字だけログに出して不一致を通知（デバッグ用）
+        print(f"Passcode/Key provided but did not match ADMIN_PASSCODE (Input: {clean_api_key[:4]}...)")
 
     # テスト時のダミーキーがブラウザの localStorage に残ってしまうケースの対策
     if api_key and api_key.strip() in ["DUMMY_KEY", ""]:

@@ -102,7 +102,9 @@ async def process(
     export_mode: str = Form("p2workflowy"),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
-    # パスコード認証ロジック (V3.2.7: 安全性強化)
+    task_id = str(uuid.uuid4())
+    
+    # パスコード認証ロジック (V3.2.8: task_id 順序修正)
     clean_api_key = str(api_key).strip() if api_key else ""
     clean_passcode = str(APP_ADMIN_PASSCODE).strip() if APP_ADMIN_PASSCODE else ""
     
@@ -117,8 +119,6 @@ async def process(
     if api_key and api_key.strip() in ["DUMMY_KEY", ""]:
         api_key = None
         
-    task_id = str(uuid.uuid4())
-    
     # アップロード用の一時ディレクトリ
     upload_dir = DATA_DIR / "uploads" / task_id
     upload_dir.mkdir(parents=True, exist_ok=True)

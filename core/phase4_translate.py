@@ -1,242 +1,41 @@
-"""
-p2workflowy V2 Phase 4: Sliding-Window Translation
-LLM を用いたセクション別の非同期サイトトランスレーション。
-"""
-
 import asyncio
 import json
 import random
 from pathlib import Path
-from typing import Any, List, Dict
-
+from typing import List, Dict, Any, Tuple
 from aiolimiter import AsyncLimiter
 
-from .config import (
-    load_coreprompts, load_glossary_csv,
-    print_log
-)
-from .models import TreeNode, save_tree_to_json
-from .llm_client import call_gemini_async, tier_manager, GeminiTier
+# 相対インポートに修正
+from .models import TreeNode
+from .config import load_coreprompts, load_glossary_csv, print_log, STATE_DIR
+from .llm_client import translate_batch, generate_section_resume, tier_manager, GeminiTier, apply_tier_settings
+from .phase3_structure import structure_nodes_by_headings, extract_headings_from_resume
+
+# デフォルト設定 (Tiers で上書きされる)
+DEFAULT_MAX_BATCH_CHUNKS = 5
+DEFAULT_MAX_BATCH_CHARS = 3000
 
 
-# ============================================================
-# グローバル設定
-# ============================================================
-# デフォルト設定 (Paid 想定)
-DEFAULT_MAX_BATCH_CHUNKS = 12
-DEFAULT_MAX_BATCH_CHARS = 4000
-DEFAULT_SEMAPHORE_COUNT = 12
-DEFAULT_RPM_LIMIT = 500
 
-# 流量制限のデフォルト値
-DEFAULT_MAX_BATCH_CHUNKS = 12
-DEFAULT_MAX_BATCH_CHARS = 4000
-DEFAULT_SEMAPHORE_COUNT = 12
-DEFAULT_RPM_LIMIT = 500
-
-def apply_tier_settings(tier: GeminiTier) -> tuple[AsyncLimiter, asyncio.Semaphore, dict]:
-    """ティアに応じた動作設定を生成して返す。"""
-    settings = {}
-    if tier == GeminiTier.FREE:
-        # 無料版設定 (安全運転)
-        rpm = 15
-        sem_count = 2
-        settings["max_batch_chunks"] = 20 # リクエスト回数節約
-        settings["max_batch_chars"] = 6000
-    else:
-        # 有料版設定 (フルパワー)
-        rpm = DEFAULT_RPM_LIMIT
-        sem_count = DEFAULT_SEMAPHORE_COUNT
-        settings["max_batch_chunks"] = DEFAULT_MAX_BATCH_CHUNKS
-        settings["max_batch_chars"] = DEFAULT_MAX_BATCH_CHARS
-
-    # オブジェクトの生成
-    limiter = AsyncLimiter(rpm, 60)
-    sem = asyncio.Semaphore(sem_count)
-    print_log(f"  [Phase 4] Tier settings generated: Tier={tier.value}, Sem={sem_count}, RPM={rpm}")
-    return limiter, sem, settings
-
-
-# ============================================================
-# テキスト構築ヘルパー
-# ============================================================
-
-def format_glossary(glossary: dict) -> str:
-    """用語集辞書をプロンプト埋め込み用の文字列に変換する。"""
+def format_glossary(glossary: Dict[str, str]) -> str:
+    """用語集をプロンプト用に整形"""
     if not glossary:
-        return "なし"
-    lines = [f"- {en}: {ja}" for en, ja in glossary.items()]
+        return ""
+    lines = ["以下はプロジェクト固有の用語集です。翻訳時に優先的に適用してください。"]
+    for en, ja in glossary.items():
+        lines.append(f"- {en}: {ja}")
     return "\n".join(lines)
 
-
-def format_previous_translation(previous_nodes: List[TreeNode]) -> str:
-    """
-    直前の翻訳結果（Sliding Window用コンテキスト）を文字列化する。
-    """
-    if not previous_nodes:
-        return "なし（セクション内先頭）"
-    
-    # 直前 3 チャンクのテキストを取得して結合（品質重視）
-    # 注意: セクション間は並列処理のため、このコンテキストはセクション内限定。
-    nodes_list = list(previous_nodes)
-    recent_nodes = nodes_list[-3:] if len(nodes_list) >= 3 else nodes_list
-    return "\n\n".join([node.text for node in recent_nodes])
-
-
-# ============================================================
-# 翻訳メインロジック (非同期)
-# ============================================================
-
-async def translate_batch(
-    chunks: List[dict],
-    glossary_content: str,
-    previous_translation: str,
-    prompt_template: str,
-    resume_content: str,
-    section_name: str = "Unknown",
-    api_key: str | None = None,
-    expertise: str = "文化人類学",
-    model: str | None = None,
-    thinking_level: str = "High",
-    state: Any = None,
-    semaphore: asyncio.Semaphore = None, # type: ignore
-    rate_limiter: AsyncLimiter = None, # type: ignore
-) -> List[dict]:
-    """
-    動的バッチ（Trial C: 最大6000文字/20チャンク）を一度の API コールで翻訳する。
-    """
-    # JSONコンフリクト文字のサニタイズ（Geminiの構文解析エラー防止）とIDベーススキーマ化
-    sanitized_chunks =[]
-    for chunk in chunks:
-        c_copy = chunk.copy()
-        t = c_copy.get("text", "")
-        # 置換ルール
-        t = t.replace('\\"', '”')
-        t = t.replace('"', '”')
-        # 角括弧や丸括弧の全角変換は引用表記([1]等)を破壊するため廃止
-        
-        sanitized_chunks.append({
-            "id": str(c_copy.get("id")),
-            "en": t
-        })
-
-    input_json = json.dumps(sanitized_chunks, ensure_ascii=False)
-
-    prompt = prompt_template.replace(
-        "{expertise}", expertise
-    ).replace(
-        "{context_guide}", "原文のニュアンスを維持しつつ、自然な日本語に翻訳してください。"
-    ).replace(
-        "{resume_content}", resume_content
-    ).replace(
-        "{glossary_content}", glossary_content
-    ).replace(
-        "{previous_translation}", previous_translation
-    ).replace(
-        "{chunk_json}", input_json
-    )
-
-    # ログ用チャンクID文字列
-    chunk_ids = [c.get("id") for c in chunks]
-    chunk_ids_str = f"{min(chunk_ids)}-{max(chunk_ids)}" if chunk_ids else "N/A"
-
-    # メトリクス用のメタデータ
-    metrics_metadata = {
-        "section": section_name,
-        "batch_id": chunk_ids_str
-    }
-
-    max_retries = 5
-    translated_dict = {}
-
-    response_schema = {
-        "type": "ARRAY",
-        "items": {
-            "type": "OBJECT",
-            "properties": {
-                "id": {"type": "STRING"},
-                "ja": {"type": "STRING"}
-            },
-            "required": ["id", "ja"]
-        }
-    }
-
-    for attempt in range(max_retries):
-        try:
-            # 流量制限 (AsyncLimiter)
-            async with rate_limiter:
-                input_chars = len(input_json)
-                print_log(f"  [Phase 4] API Request: {section_name} (Chunks: {chunk_ids_str}, JSON chars: {input_chars})")
-
-                # timeout は llm_client 側の設定に任せる
-                response_text = await call_gemini_async(
-                    prompt=prompt,
-                    api_key=api_key,
-                    temperature=0.3,
-                    response_mime_type="application/json",
-                    # 性能と安定性の向上のためスキーマ強制を解除（No Schema 戦略）
-                    # response_schema=response_schema,
-                    max_retries=1,
-                    metrics_metadata=metrics_metadata,
-                    model=model,
-                    thinking_level=thinking_level,
-                )
-            
-            # response_schema を解除したため、Markdown 形式 (```json ... ```) への耐性を高める
-            import re
-            json_match = re.search(r'(\[.*\])', response_text, re.DOTALL)
-            if json_match:
-                response_text = json_match.group(1)
-            
-            data = json.loads(response_text)
-            
-            if not isinstance(data, list):
-                raise ValueError("出力がJSON配列ではありません。")
-            
-            # IDによるバリデーションとマッピング
-            temp_dict = {str(item.get("id")): item.get("ja", "") for item in data if isinstance(item, dict)}
-            
-            missing_ids =[]
-            for c in chunks:
-                str_id = str(c.get("id"))
-                if str_id not in temp_dict:
-                    missing_ids.append(str_id)
-                    
-            if missing_ids:
-                raise ValueError(f"ID欠損: {missing_ids}")
-                
-            print_log(f"  [Phase 4] API Response: Success ({len(data)} items received, all IDs matched)")
-            translated_dict = temp_dict
-            break  # 成功
-
-        except Exception as e:
-            print_log(f"  [Phase 4] 翻訳/バリデーションエラー [{section_name} Chunks:{chunk_ids_str}] (試行 {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
-            if attempt < max_retries - 1:
-                wait_time = (2 ** attempt) + random.uniform(1.0, 3.0)
-                await asyncio.sleep(wait_time)
-
-    translated_nodes =[]
-    if translated_dict:
-        for chunk in chunks:
-            str_id = str(chunk.get("id"))
-            translated_nodes.append(TreeNode(
-                id=chunk.get("id"),
-                text=translated_dict.get(str_id, ""),
-                role="p",
-                seq_index=chunk.get("seq_index", 0.0)
-            ))
-    else:
-        # 最終的に失敗した場合（リトライ上限到達など）、エラーメッセージ付きで元のテキストを返す
-        for chunk in chunks:
-            translated_nodes.append(TreeNode(
-                id=chunk.get("id"),
-                text=f"【翻訳エラー: IDマッピング失敗/タイムアウト】\n{chunk.get('text', '')}",
-                role="p",
-                seq_index=chunk.get("seq_index", 0.0)
-            ))
-
-    return translated_nodes
-
+def format_previous_translation(nodes: List[TreeNode], max_nodes: int = 3) -> str:
+    """以前の翻訳結果をプロンプト用に整形する"""
+    if not nodes:
+        return ""
+    recent = nodes[-max_nodes:]
+    lines = []
+    for n in recent:
+        if n.role == "p":
+            lines.append(f"- {n.text}")
+    return "\n".join(lines)
 
 async def process_section(
     section_name: str,
@@ -253,133 +52,437 @@ async def process_section(
     model: str | None = None,
     thinking_level: str = "High",
     state: Any = None,
-) -> tuple[str, List[TreeNode]]:
+    resume_only: bool = False,
+    is_book: bool = False,
+) -> Tuple[str, Any, List[TreeNode], str] | Tuple[str, List[TreeNode], str]:
     """
     セクション内のチャンクを動的にバッチ化して翻訳を進める。
     """
-    translated_nodes: List[TreeNode] =[]
-    chunk_list = list(chunks)
-
+    translated_nodes: List[TreeNode] = []
+    
     # 用語集は常に全件プロンプトに注入する
     glossary_content = format_glossary(master_glossary)
 
     # セクション間並列のためのセマフォ
     async with semaphore:
-        i = 0
-        while i < len(chunk_list):
-            batch_chunks: List[dict] = []
-            batch_chars: int = 0
+        print_log(f"  >>> [Start Section] {section_name}")
+        # --- 要約生成 (書籍モードのみ) ---
+        resume_text = ""
+        if is_book:
+            # --- 修正: センチネル辞書の抽出と、chunksからの確実な除去 ---
+            # _run_phase4_async で先頭に挿入された {"existing_resume": ...} を取り出し、リストを純格化する
+            pre_existing_resume = None
+            if chunks and isinstance(chunks[0], dict) and "existing_resume" in chunks[0]:
+                pre_existing_resume = chunks[0]["existing_resume"]
+                chunks = chunks[1:]  # 異物を除去し、純粋なデータチャンクのみに戻す
+
+            # 既存の下流ロジック（resume_only の判定等）をそのまま活かすための変数代入
+            existing_resume = pre_existing_resume
+            # ------------------------------------------------------------
             
-            # 1回あたりのバッチサイズ（現在の設定を使用）
+            # [修正箇所]: キャッシュがあればそれを使用、なければ生成する
+            if existing_resume:
+                resume_text = existing_resume
+            else:
+                resume_text = await generate_section_resume(
+                    section_name=section_name,
+                    chunks=chunks,
+                    resume_content=resume_content,
+                    api_key=api_key,
+                    model=model,
+                    expertise=expertise,
+                    rate_limiter=rate_limiter,
+                    log_dir=state.logs_dir if state else None
+                )
+
+        # --- Resume Only モード ---
+        if resume_only:
+            # Book Mode の場合、resume_only でも構造化だけは行って返す（ユーザー要望）
+            if is_book:
+                chunk_nodes = [
+                    TreeNode(id=c["id"], text=c["text"], role="p", seq_index=c.get("seq_index", 0.0))
+                    for c in chunks
+                ]
+                ch_headings = extract_headings_from_resume(resume_text)
+                prompts_data = load_coreprompts()
+                exclude_keywords = prompts_data.get("EXCLUDE_SECTION_KEYWORDS", [])
+                result_tree, _ = structure_nodes_by_headings(chunk_nodes, ch_headings, exclude_keywords)
+                
+                if state:
+                    progress_state[0] += len(chunks)
+                    curr, total = progress_state
+                    state.update_status("構造化完了...", 70 + int((curr / max(total, 1)) * 20))
+                return section_name, result_tree, result_tree, resume_text
+            else:
+                result_nodes: List[TreeNode] = []
+                for chunk in chunks:
+                    result_nodes.append(TreeNode(
+                        id=chunk.get("id"),
+                        text=chunk.get("text", ""),
+                        role="p",
+                        seq_index=chunk.get("seq_index", 0.0),
+                    ))
+                progress_state[0] += len(chunks)
+                if state:
+                    curr, total = progress_state
+                    state.update_status("要約生成中...", 70 + int((curr / max(total, 1)) * 20))
+                return section_name, result_nodes, resume_text
+
+        # --- 本文翻訳ループ ---
+        if is_book:
+            # 1. チャンクをTreeNodeに変換し、レジュメ見出しで構造化
+            chunk_nodes = [
+                TreeNode(id=c["id"], text=c["text"], role="p", seq_index=c.get("seq_index", 0.0))
+                for c in chunks
+            ]
+            ch_headings = extract_headings_from_resume(resume_text)
+            
+            prompts_data = load_coreprompts()
+            exclude_keywords = prompts_data.get("EXCLUDE_SECTION_KEYWORDS", [])
+            
+            # 章内のツリー構造（見出しh3と段落pが混在した状態）を作成
+            ch_tree, _ = structure_nodes_by_headings(chunk_nodes, ch_headings, exclude_keywords)
+
+            # BUG-001 修正3: [Unlabeled Section] のクリーンアップ
+            # LLM が見出しを意訳した場合、match_heading が全て失敗し、全段落が
+            # 単一の [Unlabeled Section] に格納されてしまう。
+            # また、一部だけ Unlabeled になった場合も、直下に p があるなら不自然な階層を作らない。
+            new_ch_tree = []
+            for node in ch_tree:
+                if node.text == "[Unlabeled Section]" and node.children:
+                    # 中身が空でなければ、ラッパーを外して中身を昇格させる
+                    new_ch_tree.extend(node.children)
+                else:
+                    new_ch_tree.append(node)
+            ch_tree = new_ch_tree
+
+            # 2. 翻訳対象の抽出（Flatten）
+            # 見出しノード(h3)自体は翻訳せず英語のまま残す。
+            # その子ノード(p)と、見出しに属さない独立したpノードだけを抽出する。
+            flat_chunks: List[dict] = []
+            for node in ch_tree:
+                if node.role.startswith("h"):
+                    for child in node.children:
+                        flat_chunks.append({
+                            "id": child.id,
+                            "text": child.text,
+                            "seq_index": child.seq_index,
+                        })
+                else:
+                    flat_chunks.append({
+                        "id": node.id,
+                        "text": node.text,
+                        "seq_index": node.seq_index,
+                    })
+
+            # 3. Paper Modeと完全に同じロジックでの一括シーケンシャル翻訳（Translate）
+            all_translated: List[TreeNode] = []
+            i = 0
             max_chunks = settings.get("max_batch_chunks", DEFAULT_MAX_BATCH_CHUNKS)
             max_chars = settings.get("max_batch_chars", DEFAULT_MAX_BATCH_CHARS)
             
-            while i < len(chunk_list) and len(batch_chunks) < max_chunks:
-                next_chunk = chunk_list[i]
-                chunk_text = next_chunk.get("text", "")
-                chunk_len = len(chunk_text)
+            # [強化] バッチ総数の計算
+            total_batches = (len(flat_chunks) + max_chunks - 1) // max_chunks
+            batch_count = 0
+
+            while i < len(flat_chunks):
+                batch: List[dict] = []
+                batch_chars = 0
+                while i < len(flat_chunks) and len(batch) < max_chunks:
+                    c = flat_chunks[i]
+                    c_len = len(c.get("text", ""))
+                    if len(batch) > 0 and (batch_chars + c_len) > max_chars:
+                        break
+                    batch.append(c)
+                    batch_chars += c_len
+                    i += 1
+
+                batch_count += 1
+                if tier_manager.was_downgraded and tier_manager.current_tier == GeminiTier.FREE:
+                    rate_limiter, _, settings = apply_tier_settings(GeminiTier.FREE)
+
+                previous = format_previous_translation(all_translated)
+                # [強化] セクション内バッチ進捗の出力
+                print_log(f"  [Section: {section_name}] Processing Batch {batch_count}/{total_batches} ({len(batch)} chunks)")
+                await asyncio.sleep(random.uniform(0.5, 1.5))
                 
-                if len(batch_chunks) > 0 and (batch_chars + chunk_len) > max_chars:
-                    break
-                    
-                batch_chunks.append(next_chunk)
-                batch_chars += chunk_len
-                i += 1
-            
-            # API呼び出し前にダウンシフトが発生しているかチェック
-            if tier_manager.was_downgraded and tier_manager.current_tier == GeminiTier.FREE:
-                # 設定を更新（現在のセクションの次回のループに影響）
-                rate_limiter, _, settings = apply_tier_settings(GeminiTier.FREE)
-            
-            # Sliding Window コンテキストを取得
-            previous_translation = format_previous_translation(translated_nodes)
-            
-            # API側の渋滞を防ぐために微小ディレイを挟む（直列のため短縮）
-            await asyncio.sleep(random.uniform(0.5, 1.5))
-
-            batch_translated_nodes = await translate_batch(
-                chunks=batch_chunks,
-                glossary_content=glossary_content,
-                previous_translation=previous_translation,
-                prompt_template=prompt_template,
-                resume_content=resume_content,
-                section_name=section_name,
-                api_key=api_key,
-                expertise=expertise,
-                model=model,
-                thinking_level=thinking_level,
-                state=state,
-                semaphore=semaphore,
-                rate_limiter=rate_limiter,
-            )
-            
-            translated_nodes.extend(batch_translated_nodes)
+                try:
+                    batch_nodes = await translate_batch(
+                        chunks=batch,
+                        glossary_content=glossary_content,
+                        previous_translation=previous,
+                        prompt_template=prompt_template,
+                        resume_content=resume_text,
+                        section_name=section_name,
+                        api_key=api_key,
+                        expertise=expertise,
+                        model=model,
+                        thinking_level=thinking_level,
+                        state=state,
+                        rate_limiter=rate_limiter,
+                        log_dir=state.logs_dir if state else None
+                    )
+                except Exception as e:
+                    print_log(f"  [ERROR] translate_batch 失敗 ({i-len(batch)} to {i}): {e}")
+                    # 失敗した場合は原文を維持したフォールバックノードを作成
+                    batch_nodes = []
+                    for c in batch:
+                        batch_nodes.append(TreeNode(
+                            id=c["id"],
+                            text=f"[翻訳失敗] {c['text']}",
+                            role="p",
+                            seq_index=c.get("seq_index", 0.0)
+                        ))
+                all_translated.extend(batch_nodes)
                 
-            # プログレス更新
-            progress_state[0] += len(batch_chunks)
-            curr = progress_state[0]
-            total = progress_state[1]
-            print_log(f"  [Phase 4] 翻訳進捗: {curr}/{total} チャンク")
-            if state:
-                # 70% から 90% の間で進捗を表示
-                percent = 70 + int((curr / total) * 20)
-                state.update_status(f"本文を翻訳中...", percent)
+                # 進捗更新
+                if state:
+                    progress_state[0] += len(batch)
+                    curr, total = progress_state
+                    state.update_status("本文を翻訳中...", 70 + int((curr / max(total, 1)) * 20))
 
-    return section_name, translated_nodes
+            print_log(f"  <<< [End Section] {section_name}")
+            # 4. 翻訳結果の差し戻し（Unflatten）
+            # 翻訳されたノードをIDをキーにして辞書化
+            id_to_ja: dict[str, TreeNode] = {str(n.id): n for n in all_translated}
 
+            result_nodes: List[TreeNode] = []
+            for node in ch_tree:
+                if node.role.startswith("h"):
+                    # 見出しノードは新たに作り直して英語のまま保持
+                    new_h = TreeNode(
+                        id=node.id, text=node.text, role="h3",
+                        seq_index=node.seq_index, children=[]
+                    )
+                    # 子ノード（翻訳済み）を紐付け
+                    for child in node.children:
+                        ja_child = id_to_ja.get(str(child.id))
+                        if ja_child:
+                            new_h.children.append(ja_child)
+                        else:
+                            # 翻訳欠落時のフォールバック
+                            new_h.children.append(TreeNode(
+                                id=child.id,
+                                text=f"[翻訳欠落] {child.text}",
+                                role="p",
+                                seq_index=child.seq_index
+                            ))
+                    result_nodes.append(new_h)
+                else:
+                    # 独立したpノード（翻訳済み）
+                    ja_node_p = id_to_ja.get(str(node.id))
+                    if ja_node_p:
+                        result_nodes.append(ja_node_p)
+                    else:
+                        # 翻訳欠落時のフォールバック
+                        result_nodes.append(TreeNode(
+                            id=node.id,
+                            text=f"[翻訳欠落] {node.text}",
+                            role="p",
+                            seq_index=node.seq_index
+                        ))
 
-# ============================================================
-# ツリー再構築
-# ============================================================
+            return section_name, ch_tree, result_nodes, resume_text
+
+        else:
+            # Paper Mode
+            i = 0
+            while i < len(chunks):
+                batch = []
+                batch_chars = 0
+                max_chunks = settings.get("max_batch_chunks", DEFAULT_MAX_BATCH_CHUNKS)
+                max_chars = settings.get("max_batch_chars", DEFAULT_MAX_BATCH_CHARS)
+                
+                while i < len(chunks) and len(batch) < max_chunks:
+                    c = chunks[i]
+                    c_text = c.get("text", "")
+                    c_len = len(c_text)
+                    if len(batch) > 0 and (batch_chars + c_len) > max_chars:
+                        break
+                    batch.append(c)
+                    batch_chars += c_len
+                    i += 1
+                
+                if tier_manager.was_downgraded and tier_manager.current_tier == GeminiTier.FREE:
+                    rate_limiter, _, settings = apply_tier_settings(GeminiTier.FREE)
+                
+                context_guide = "本文としての完結性を重視し、各段落を正確かつ論理的な日本語に翻訳してください。"
+                previous = format_previous_translation(translated_nodes)
+                await asyncio.sleep(random.uniform(0.5, 1.5))
+                batch_nodes = await translate_batch(
+                    chunks=batch,
+                    glossary_content=glossary_content,
+                    previous_translation=previous,
+                    prompt_template=prompt_template,
+                    resume_content=resume_content,
+                    section_name=section_name,
+                    api_key=api_key,
+                    expertise=expertise,
+                    model=model,
+                    thinking_level=thinking_level,
+                    state=state,
+                    rate_limiter=rate_limiter,
+                    context_guide=context_guide,
+                    log_dir=state.logs_dir if state else None
+                )
+                translated_nodes.extend(batch_nodes)
+                progress_state[0] += len(batch)
+                if state:
+                    curr, total = progress_state
+                    state.update_status(f"本文を翻訳中...", 70 + int((curr / max(total, 1)) * 20))
+
+            return section_name, translated_nodes, resume_text
+
 
 def rebuild_translated_tree(
     english_tree: List[TreeNode],
-    translated_sections: Dict[str, List[TreeNode]]
+    translated_sections: Dict[str, List[TreeNode]],
+    section_resumes: Dict[str, str] = {},
+    resume_only: bool = False,
+    is_book: bool = False,
 ) -> List[TreeNode]:
-    """
-    元の英語ツリー構造を維持したまま、子ノード（段落）を日本語翻訳済みのノードに差し替える。
-    再帰的に処理を行い、H3 などの階層を維持する。
-    """
-    japanese_tree: List[TreeNode] =[]
-
+    """元の英語ツリー構造を維持したまま、子ノード（段落）を日本語翻訳済みのノードに差し替える。"""
+    japanese_tree: List[TreeNode] = []
     for en_node in english_tree:
-        section_name = en_node.text
+        section_key = en_node.text
+        translated_pool = translated_sections.get(section_key)
         
-        # 翻訳済みノードを ID で逆引きするためのマップを作成 (h2 セクション単位)
-        translated_pool = translated_sections.get(section_name,[])
-        id_to_ja_node = {str(node.id): node for node in translated_pool}
+        # 1段階目のフォールバック: IDを用いた検索
+        if translated_pool is None:
+            node_id_str = str(en_node.id)
+            for k, pool in translated_sections.items():
+                if k.startswith(f"{node_id_str}|"):
+                    translated_pool = pool
+                    section_key = k
+                    break
+        # [修正箇所]: 翻訳失敗セクションを安全にスキップ
+        if translated_pool is None:
+            print_log(f"  [rebuild] 警告: 翻訳データなし（スキップ）: {en_node.text[:40]}")
+            continue
 
-        def _recursive_rebuild(en_subnode: TreeNode) -> TreeNode:
-            # 新しいノード（日本語版）を作成
-            ja_subnode = TreeNode(
-                id=en_subnode.id,
-                text=en_subnode.text,
-                role=en_subnode.role,
-                seq_index=en_subnode.seq_index,
-                children=[]
+        ch_resume = section_resumes.get(section_key, "")
+        ch_headings = extract_headings_from_resume(ch_resume) if is_book else []
+        safe_id_suffix = str(en_node.id)
+        
+        resume_nodes: List[TreeNode] = []
+        if resume_only or (is_book and ch_resume):
+            resume_text = ch_resume if is_book else ""
+            if not resume_text:
+                 resume_nodes = [n for n in translated_pool if str(n.id).startswith("resume_0_")]
+            else:
+                 resume_nodes = [TreeNode(
+                     id=f"resume_0_{safe_id_suffix}",
+                     text=resume_text,
+                     role="h3",
+                     seq_index=-1.0
+                 )]
+
+        if is_book:
+            ja_node = TreeNode(
+                id=en_node.id, text=en_node.text, role="h2", seq_index=en_node.seq_index,
+                children=[],
+                metadata={"summary": ch_resume}
             )
+            # ch_resume は metadata["summary"] に格納されるため、
+            # resume_nodes を ja_node.children に追加すると、
+            # Phase 5 の generate_resume_only_output 等で二重に出力されてしまう。
+            # したがって、ここでは children には追加しない。
 
-            if en_subnode.role == "p":
-                # p ノードは翻訳済みのテキストに差し替え
-                str_id = str(en_subnode.id)
-                if str_id in id_to_ja_node:
-                    ja_subnode.text = id_to_ja_node[str_id].text
-            
-            # 子ノードを再帰的に処理
-            if en_subnode.children:
-                for child in en_subnode.children:
-                    ja_subnode.children.append(_recursive_rebuild(child))
-            
-            return ja_subnode
+            if not resume_only:
+                # --- [修正箇所] 構造化済み英語ツリーを型紙にして日本語ツリーを再構築 ---
+                source_paragraphs = en_node.children  # すでに Phase 4 内で h3 構造化済み
+                
+                # 翻訳済みノードのプールから再帰的にpノードのIDマップを作成
+                # translated_pool が h3>p 構造の場合、フラットな内包表記では
+                # h3 の子である p ノードの ID を見落とす。再帰で全階層を収集する。
+                id_to_ja: Dict[str, TreeNode] = {}
+                def _collect_p_ids(nodes: List[TreeNode]) -> None:
+                    for n in nodes:
+                        if str(n.id).startswith("resume_0_"):
+                            continue
+                        if n.role == "p":
+                            id_to_ja[str(n.id)] = n
+                        if n.children:
+                            _collect_p_ids(n.children)
+                _collect_p_ids(translated_pool)
 
-        japanese_tree.append(_recursive_rebuild(en_node))
+                def _recursive_rebuild(en_sub: TreeNode) -> TreeNode:
+                    """英語のツリー構造(en_sub)を型紙にして、テキストを日本語に差し替えた新ノードを返す。"""
+                    # 基本情報をコピー（ID, role, seq_index）
+                    ja_sub = TreeNode(
+                        id=en_sub.id, 
+                        text=en_sub.text, 
+                        role=en_sub.role, 
+                        seq_index=en_sub.seq_index, 
+                        children=[],
+                        metadata=en_sub.metadata.copy() # メタデータを継承
+                    )
+                    
+                    # 段落(p)の場合は日本語テキストに差し替え（存在すれば）
+                    if en_sub.role == "p":
+                        str_id = str(en_sub.id)
+                        if str_id in id_to_ja:
+                            ja_sub.text = id_to_ja[str_id].text
+                    
+                    # 再帰的に子ノード（h3内部のpなど）を処理
+                    if en_sub.children:
+                        for child in en_sub.children:
+                            ja_sub.children.append(_recursive_rebuild(child))
+                    
+                    return ja_sub
+
+                # A. 英語側のラッパー構築 (h3 "English text")
+                # Phase 5 のエクスポート処理がこのラッパーを期待しているため。
+                english_wrapper = TreeNode(
+                    id=f"en_wrap_{en_node.id}",
+                    text="English text",
+                    role="h3",
+                    children=source_paragraphs,
+                    seq_index=en_node.seq_index - 0.1 # 翻訳より前に配置
+                )
+                ja_node.children.append(english_wrapper)
+
+                # B. 日本語ツリーの構築 (英語ツリーを型紙にして翻訳を流し込む)
+                ja_children_structured = [_recursive_rebuild(c) for c in source_paragraphs]
+                ja_node.children.extend(ja_children_structured)
+                # ----------------------------------------------------------------------
+            else:
+                # resume_only = True の場合
+                # 英語段落をラップして追加
+                english_wrapper = TreeNode(
+                    id=f"en_wrap_{en_node.id}",
+                    text="English text",
+                    role="h3",
+                    children=en_node.children,
+                    seq_index=en_node.seq_index - 0.1
+                )
+                ja_node.children.append(english_wrapper)
+
+            japanese_tree.append(ja_node)
+        else:
+            # Paper Mode
+            id_to_ja_node = {str(node.id): node for node in translated_pool if not str(node.id).startswith("resume_0_")}
+            def _recursive_rebuild(en_subnode: TreeNode) -> TreeNode:
+                ja_subnode = TreeNode(
+                    id=en_subnode.id, text=en_subnode.text, role=en_subnode.role,
+                    seq_index=en_subnode.seq_index, children=[]
+                )
+                if en_subnode.role == "p":
+                    str_id = str(en_subnode.id)
+                    if str_id in id_to_ja_node:
+                        ja_subnode.text = id_to_ja_node[str_id].text
+                if en_subnode.children:
+                    for child in en_subnode.children:
+                        ja_subnode.children.append(_recursive_rebuild(child))
+                return ja_subnode
+
+            ja_node = _recursive_rebuild(en_node)
+            if resume_only or (ch_resume):
+                ja_node.children = resume_nodes + ja_node.children
+                ja_node.metadata["summary"] = ch_resume
+            japanese_tree.append(ja_node)
 
     return japanese_tree
-
-
-# ============================================================
-# メイン実行関数
-# ============================================================
 
 async def _run_phase4_async(
     phase2_state_path: str | Path,
@@ -394,54 +497,51 @@ async def _run_phase4_async(
     thinking_level: str = "High",
     state: Any = None,
     tier: str = "paid",
+    resume_only: bool = False,
+    is_book: bool = False,
 ) -> List[TreeNode]:
     """非同期メイン実行処理"""
     phase2_state_path = Path(phase2_state_path)
     structure_state_path = Path(structure_state_path)
     sections_state_path = Path(sections_state_path)
-
-    if not sections_state_path.exists() or not structure_state_path.exists():
-        raise FileNotFoundError("Phase 3 の出力が見つかりません。")
     
     with open(sections_state_path, "r", encoding="utf-8") as f:
         sections_dict: Dict[str, List[dict]] = json.load(f)
-        
     with open(structure_state_path, "r", encoding="utf-8") as f:
         english_tree_data = json.load(f)
-        english_tree =[TreeNode.from_dict(d) for d in english_tree_data]
+        english_tree = [TreeNode.from_dict(d) for d in english_tree_data]
 
     prompts = load_coreprompts()
     prompt_template = prompts["TRANSLATION_PROMPT"]
     master_glossary = load_glossary_csv(glossary_path)
 
-    # ティアの初期設定
     if tier.lower() == "free":
         initial_tier = GeminiTier.FREE
-    elif tier.lower() == "paid":
-        initial_tier = GeminiTier.PAID
     else:
-        # 指定がない場合はモデル名から推測
-        initial_tier = GeminiTier.PAID # CLI のデフォルト
-        if model and ("lite" in model.lower() or "gemini-2" in model.lower()):
-            initial_tier = GeminiTier.FREE
+        initial_tier = GeminiTier.PAID
     
     tier_manager.set_tier(initial_tier)
     rate_limiter, semaphore, settings = apply_tier_settings(tier_manager.current_tier)
 
-    # 全チャンク数
-    total_chunks = sum(len(chunks) for chunks in sections_dict.values())
-    progress_state =[0, total_chunks]
+    # 既存の翻訳結果（特に書籍モードのセクション要約）があれば読み込む
+    existing_resumes: Dict[str, str] = {}
+    if phase4_state_path.exists():
+        try:
+            with open(phase4_state_path, "r", encoding="utf-8") as f:
+                old_data = json.load(f)
+                # old_data は TreeNode のリスト。章(h2)の metadata["summary"] を探す
+                for node_dict in old_data:
+                    if node_dict.get("role") == "h2" and "metadata" in node_dict:
+                        sum_val = node_dict["metadata"].get("summary")
+                        if sum_val:
+                            existing_resumes[node_dict.get("text", "")] = sum_val
+        except:
+            pass
 
-    print_log(f"  [Phase 4] 翻訳対象セクション: {len(sections_dict)} 件")
-    
-    # semaphore は apply_tier_settings 内で生成されたグローバルなものが更新されているが、
-    # _run_phase4_async 内で明示的にローカルのセマフォとして扱う（設計意図の反映）
-    tasks = []
-    
-    # 1. 語彙データの統合読み込み（初期ロード）
-    master_glossary = load_glossary_csv(glossary_path)
-    
-    # phase2_meta.json から AI 抽出語彙をマージ 
+    total_chunks = sum(len(chunks) for chunks in sections_dict.values())
+    progress_state = [0, total_chunks]
+
+    resume_content = ""
     if phase2_state_path.exists():
         with open(phase2_state_path, "r", encoding="utf-8") as f:
             phase2_data = json.load(f)
@@ -451,56 +551,77 @@ async def _run_phase4_async(
                 ja = kw.get("ja", "").strip()
                 if en and en not in master_glossary:
                     master_glossary[en] = ja
-        print_log(f"  [Phase 4] AI語彙をマージしました。合計語彙数: {len(master_glossary)}")
+            resume_content = phase2_data.get("resume_content", "")
 
-    # 2. 全体要約の読み込み
-    resume_content = ""
-    if phase2_state_path.exists():
-        with open(phase2_state_path, "r", encoding="utf-8") as f:
-            resume_data = json.load(f)
-            resume_content = resume_data.get("resume_content", "")
-
-
-    # 各セクションへのタスク作成
-    print_log("  [Phase 4] 翻訳処理実行中 (Parallel Execution)...")
+    tasks = []
     for section_name, chunks in sections_dict.items():
-        if not chunks:
-            continue
+        if not chunks: continue
+        
+        # 既存のレジュメがあればチャンクの先頭に忍び込ませる（簡易的な受け渡し）
+        # process_section の chunks は List[dict] なので破壊的変更を避けるためコピー
+        payload_chunks = chunks
+        if section_name in existing_resumes:
+            payload_chunks = [{"existing_resume": existing_resumes[section_name]}] + chunks
+        else:
+            title_part = section_name.split("|", 1)[1] if "|" in section_name else section_name
+            if title_part in existing_resumes:
+                payload_chunks = [{"existing_resume": existing_resumes[title_part]}] + chunks
+
         tasks.append(process_section(
-            section_name=section_name,
-            chunks=chunks,
-            resume_content=resume_content,
-            master_glossary=master_glossary,
-            prompt_template=prompt_template,
-            progress_state=progress_state,
-            semaphore=semaphore,
-            rate_limiter=rate_limiter,
-            settings=settings,
-            api_key=api_key,
-            expertise=expertise,
-            model=model, thinking_level=thinking_level,
-            state=state,
+            section_name=section_name, chunks=payload_chunks, resume_content=resume_content,
+            master_glossary=master_glossary, prompt_template=prompt_template,
+            progress_state=progress_state, semaphore=semaphore, rate_limiter=rate_limiter,
+            settings=settings, api_key=api_key, expertise=expertise, model=model,
+            thinking_level=thinking_level, state=state, resume_only=resume_only, is_book=is_book
         ))
     
-    results = await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    # 結果の集約
-    translated_sections: Dict[str, List[TreeNode]] = {}
-    total_translated_chunks = 0
-    for section_name, translated_nodes in results:
-        translated_sections[section_name] = translated_nodes
-        total_translated_chunks += len(translated_nodes)
-        print_log(f"  [Phase 4] セクション '{section_name}' 完了 ({len(translated_nodes)} チャンク)")
+    translated_sections = {}
+    section_resumes = {}
 
-    # 日本語ツリーの再構築
-    japanese_tree = rebuild_translated_tree(english_tree, translated_sections)
+    for res in results:
+        if isinstance(res, Exception):
+            print_log(f"  [Phase 4] セクション処理致命的失敗（スキップ）: {res}")
+            continue
+
+        if len(res) == 4:
+            # Book Mode: (section_name, en_structured_tree, ja_structured_tree, resume_text)
+            sec_name, en_structured_tree, ja_structured_tree, resume_text = res
+            
+            # sec_name ("ID|Title") から ID を抽出して安全に比較する
+            sec_id = sec_name.split("|")[0] if "|" in sec_name else None
+            
+            # 大元の english_tree の該当セクションの children を、構造化済みのツリーで上書きする
+            for en_sec in english_tree:
+                # IDが一致、またはタイトルが完全一致する場合に上書きする
+                title_in_sec = sec_name.split("|", 1)[1] if "|" in sec_name else sec_name
+                if (sec_id and str(en_sec.id) == sec_id) or (en_sec.text == title_in_sec):
+                    en_sec.children = en_structured_tree
+                    break
+        else:
+            # Paper Mode: (section_name, ja_structured_tree, resume_text)
+            sec_name, ja_structured_tree, resume_text = res
+
+        translated_sections[sec_name] = ja_structured_tree
+        section_resumes[sec_name] = resume_text
+
+    japanese_tree = rebuild_translated_tree(
+        english_tree, translated_sections, section_resumes, resume_only, is_book
+    )
 
     if save_state:
-        save_tree_to_json(japanese_tree, str(phase4_state_path))
-        print_log(f"  [Phase 4] 日本語ツリー保存: {phase4_state_path}")
+        # 1. 翻訳済み日本語ツリーの保存 (Phase 4 成果物)
+        with open(phase4_state_path, "w", encoding="utf-8") as f:
+            json.dump([n.to_dict() for n in japanese_tree], f, ensure_ascii=False, indent=2)
 
+        # 2. 構造化済み英語ツリーの保存 (Phase 3 キャッシュの上書き)
+        # Phase 5 がこのファイルから英語の階層情報を読み取れるようにする
+        phase3_path = Path(phase4_state_path).parent / "phase3_structure.json"
+        with open(phase3_path, "w", encoding="utf-8") as f:
+            json.dump([node.to_dict() for node in english_tree], f, ensure_ascii=False, indent=2)
+    
     return japanese_tree
-
 
 def run_phase4(
     phase2_state_path: str | Path,
@@ -515,13 +636,12 @@ def run_phase4(
     thinking_level: str = "High",
     state: Any = None,
     tier: str = "paid",
+    resume_only: bool = False,
+    is_book: bool = False,
 ) -> List[TreeNode]:
-    """
-    Phase 4 メイン処理（同期ラッパー）
-    """
-    return asyncio.run(_run_phase4_async(
-        phase2_state_path, structure_state_path, sections_state_path, 
-        phase4_state_path, glossary_path, api_key, save_state,
-        expertise=expertise, model=model, thinking_level=thinking_level,
-        state=state, tier=tier
+    from .llm_client import run_async
+    return run_async(_run_phase4_async(
+        phase2_state_path, structure_state_path, sections_state_path, phase4_state_path,
+        glossary_path, api_key, save_state, expertise, model, thinking_level, state, tier,
+        resume_only, is_book
     ))

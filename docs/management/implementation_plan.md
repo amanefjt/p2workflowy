@@ -1,39 +1,30 @@
-# 実装計画：徹底的なデバッグと品質改善
+# Renderにおけるメモリ制限超過（OOM）対策計画
 
-現在のコードベースに含まれる論理的なバグ（特に出力のネスト構造）および、静的解析で指摘される可能性のあるインポート不足や型ヒントの不備を修正します。
+## 現状分析
+Renderの通知によると、`p2workflowy` インスタンスがメモリ制限（通常512MB）を超え、自動再起動が発生しました。
+ログを確認したところ、巨大なPDFの処理や並列実行が重なった際にメモリ消費がスパイクした可能性が高いです。
 
-## 修正内容
+### 疑わしい箇所
+1. **アップロード処理**: `server.py` で `await file.read()` を使用しており、ファイル全体を一度メモリに載せている。
+2. **PDF解析 (PyMuPDF)**: `pdf_ingester.py` で `get_text("dict")` が1ページにつき複数回呼ばれており、巨大なデータの重複保持が発生している。
+3. **VLM並列実行**: `VLM_SEMAPHORE_LIMIT = 2` により、高解像度のピクセルデータが同時に複数メモリを専有している。
 
-### 1. 出力形式のネストレベル修正
-- **対象ファイル**: `core/phase5_export.py`
-- **問題**: 
-    - 以前の修正で「日本語本文」の子要素をネストさせてしまったが、P2の正しい仕様では「日本語本文」と各セクション見出し（一つ目の見出し等）は同レベル（Sibling）であるべき。
-    - Markdown期待値: `## 日本語本文` に対して各見出しも `##` (Level 2)。
-    - Workflowy期待値: `- 日本語本文` に対して各見出しも `base_depth=0`。
-- **修正**: `generate_markdown_output` および `generate_workflowy_output` 内の引数を修正。
+## 対策内容
 
-### 2. インポート不足の修正 (typing)
-- **対象ファイル**: `core/phase1_preprocess.py`, `core/phase2_meta.py`
-- **問題**: シグネチャで `"Any"` (文字列) を使用しているが、`typing` から `Any` がインポートされていない。
-- **修正**: `from typing import List, Any` 等に変更。
+### 1. サーバー側のメモリ効率化 (server.py)
+- **ストリーミングアップロード**: `await file.read()` を廃止し、`shutil.copyfileobj` 等を用いてディスクに直接ストリーミング保存する。
+- **インポートの最適化**: 関数内の `import` をトップレベルへ移動。
 
-### 3. ID 比較の安定性向上
-- **対象ファイル**: `core/phase4_translate.py`
-- **内容**: `node.id` の比較時に `str()` 変換を挟むことで、`int` と `str` が混在した場合の `KeyError` や不一致を防止する。
+### 2. PDF解析の最適化 (core/pdf_ingester.py)
+- **データの再利用**: `should_use_vlm` で取得した `text_dict` を `extract_text_fast` へ渡し、重複呼び出しを排除する。
+- **並列度の調整**: `VLM_SEMAPHORE_LIMIT` を `2` から `1` へ変更し、メモリピークを抑制する（Renderのような小規模インスタンス向け）。
+- **明示的なクリーンアップ**: ページ処理ごとに `gc.collect()` を行う。
 
-### 4. ドキュメントの更新
-- `docs/management/requirements_log.md` および `troubleshooting_log.md` に今回の修正内容を記録。
+### 3. ドキュメントへの記録
+- `docs/management/troubleshooting_log.md` に今回の事象と対策内容を記録する。
 
-## 実施手順
-
-1. `core/phase1_preprocess.py` のインポート修正。
-2. `core/phase2_meta.py` のインポート修正。
-3. `core/phase4_translate.py` の ID 比較ロジックの補強。
-4. `core/phase5_export.py` のネストレベル修正。
-5. 修正後のコードで `NSTsample.txt` または `Arbitrarysample.txt` を用いて、出力ファイルの構造（見出しレベルとインデント）を目視確認。
-
-## 完了の定義 (DoD)
-- [ ] `core/` 配下の主なモジュールでインポートエラーや未定義変数エラーが発生しない。
-- [ ] 生成される `.md` ファイルの「日本語本文」に続くセクションが `##` (Level 2) で始まっている。
-- [ ] 生成される `.txt` ファイルの「日本語本文」に続くセクションがインデントなし（Level 0）で出力されている。
-- [ ] ログファイルが更新されている。
+## 実施スケジュール
+1. `server.py` のアップロードロジック修正
+2. `core/pdf_ingester.py` の解析ロジック最適化
+3. 動作確認（ローカルでの物理メモリ使用量の抑制を確認）
+4. ドキュメント更新

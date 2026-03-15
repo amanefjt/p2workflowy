@@ -62,9 +62,24 @@ def main():
         help="PDF処理をハイブリッドモード（高速・精度中）で実行します。指定しない場合は完全VLMモード（低速・高精度）になります。",
     )
     parser.add_argument(
+        "--book",
+        action="store_true",
+        help="PDFをBook Mode（階層構造維持・目次抽出）で処理します。",
+    )
+    parser.add_argument(
         "--free",
         action="store_true",
         help="無料版ティアとして実行します（並列数を制限し、レート制限に配慮します）。",
+    )
+    parser.add_argument(
+        "--structure-only",
+        action="store_true",
+        help="Phase 3 (Structuring) までで処理を停止します。",
+    )
+    parser.add_argument(
+        "--resume-only",
+        action="store_true",
+        help="各章の最後に英語原文を、冒頭に日本語要約のみを出力（翻訳なし）",
     )
 
     args = parser.parse_args()
@@ -136,6 +151,9 @@ def main():
                 thinking_level=args.thinking,
                 pdf_mode=pdf_mode,
                 tier=tier,
+                is_book=args.book,
+                structure_only=args.structure_only,
+                resume_only=args.resume_only,
             )
         except Exception as e:
             print(f"[{i}/{len(input_files)}] エラー発生: {e}")

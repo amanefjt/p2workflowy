@@ -151,6 +151,13 @@ class SessionState:
     def status_json(self) -> Path:
         return self.session_dir / "status.json"
 
+    @property
+    def logs_dir(self) -> Path:
+        """デバッグログを格納するディレクトリ。"""
+        d = self.session_dir / "logs"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     def update_status(self, progress: str, percentage: int | float | None = None):
         """進捗状況（メッセージとパーセンテージ）を status.json に書き込む。"""
         status_data = {
@@ -176,16 +183,3 @@ class SessionState:
                 return json.load(f)
         except Exception:
             return {"progress_message": "Processing...", "percentage": 0}
-
-
-# --- メトリクス計測（継続運用） ---
-METRICS_CSV_PATH = STATE_DIR / "ttft_metrics.csv"
-
-
-# --- 互換性のための古い定義（削除予定だが一時的に残す場合は注意） ---
-# 今後は SessionState インスタンス経由でアクセスすることを推奨
-PHASE1_STATE_DEFAULT = STATE_DIR / "phase1_clean.json"
-PHASE2_STATE_DEFAULT = STATE_DIR / "phase2_meta.json"
-PHASE3_STRUCTURE_STATE_DEFAULT = STATE_DIR / "phase3_structure.json"
-PHASE3_SECTIONS_STATE_DEFAULT = STATE_DIR / "phase3_sections.json"
-PHASE4_STATE_DEFAULT = STATE_DIR / "phase4_translation.json"

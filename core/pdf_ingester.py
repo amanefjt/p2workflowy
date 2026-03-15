@@ -13,12 +13,12 @@ from typing import Any, List
 import fitz
 from PIL import Image
 
-from .llm_client import call_gemini_async
+from .llm_client import call_gemini_async, get_default_model
 from .config import print_log
 
 # ===== 設定値（調整しやすいよう外出し） =====
 FOOTNOTE_FONT_RATIO = 0.60      # 本文中央値の60%以下 → 脚注とみなす
-MIN_TEXT_CHARS = 100             # これ未満のテキスト量 → VLMフォールバック
+MIN_TEXT_CHARS = 100             # これ未満의 テキスト量 → VLMフォールバック
 HEADER_MARGIN_RATIO = 0.08      # ページ上部8%をノイズ除外
 FOOTER_MARGIN_RATIO = 0.10      # ページ下部10%をノイズ除外
 FOOTNOTE_AREA_RATIO = 0.80      # ページ下部20%に脚注検出
@@ -28,10 +28,14 @@ VLM_SEMAPHORE_LIMIT = 2         # VLM同時実行数の上限
 VLM_PROMPT = """<role>学術論文のデジタル化専門のシニア・エディター</role>
 <task>
 画像からノイズを除去し、高品質なテキストを再構築してください。
-1. 文末(.!?)以外での改行は削除し、各段落は「改行を含まない単一の長い行」として出力すること。
-2. 2段組み等の場合、論理的な順序で読み取ること。
-3. 行末のハイフン分割は結合すること。
-4. ヘッダー、フッター、ページ番号、ジャーナル名、図表内テキスト、ページ下部の脚注は絶対に抽出しないこと。
+この画像は「見開きスキャン（2ページ分が1枚の画像）」である可能性があります。
+
+1. 【重要】見開きの場合、まず左側のページを上から下まで読み、次に右側のページを上から下まで読むという「論理的な順序」でテキストを抽出すること。
+2. 文末(.!?)以外での改行は削除し、各段落は「改行を含まない単一の長い行」として出力すること。
+3. 行末のハイフン分割（例: "inter-\nnational"）は結合して1語にすること。
+4. 中央の綴じ目（のど）の影や歪み、汚れを文字として誤認識しないよう注意すること。
+5. ヘッダー、フッター、ページ番号、ジャーナル名、図表内テキスト、ページ下部の脚注は絶対に抽出しないこと。
+
 出力は純粋なテキストのみとし、マークダウン記法(```)で囲まないこと。
 </task>"""
 
@@ -198,7 +202,7 @@ async def process_page_vlm(
         try:
             result = await call_gemini_async(
                 prompt=prompt,
-                model=model or "gemini-3.1-flash-lite-preview",
+                model=model or get_default_model("vlm"),
                 api_key=api_key,
                 temperature=0.0,
                 max_retries=3,
@@ -314,4 +318,5 @@ async def run_pdf_ingestion_async(
 
 def run_pdf_ingestion(pdf_path: str, api_key: str | None = None, state: Any = None) -> str:
     """同期呼び出しラッパー"""
-    return asyncio.run(run_pdf_ingestion_async(pdf_path, api_key, state))
+    from .llm_client import run_async
+    return run_async(run_pdf_ingestion_async(pdf_path, api_key, state))

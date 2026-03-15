@@ -13,6 +13,7 @@ import wordninja
 
 from .models import RawChunk, save_chunks_to_json
 from .config import load_glossary_csv, print_log
+from .text_utils import _SENTENCE_END_RE, _TRAILING_WORDS
 
 
 # ============================================================
@@ -64,16 +65,7 @@ def detect_format(text: str) -> str:
 # 3. 段落の再結合 (Smart Unwrap Heuristics)
 # ============================================================
 
-# 文末判定用正規表現（引用ブラケット対応）
-_SENTENCE_END_RE = re.compile(r"""[.!?;:\"'](?:\[[\d,\s-]+\])?\s*$""")
-
-# Trailing words リスト
-_TRAILING_WORDS = frozenset([
-    "the", "a", "an", "of", "in", "on", "at", "to", "for",
-    "and", "or", "but", "with", "by", "from", "as", "is",
-    "was", "were", "are", "has", "had", "have", "that",
-    "which", "who", "whom", "this", "these", "those",
-])
+# (定数は .text_utils からインポート)
 
 
 def _should_keep_break(current_line: str, next_line: str) -> bool:
@@ -176,9 +168,17 @@ def split_one_line_per_paragraph(text: str) -> List[str]:
 # ページ番号の正規表現
 _PAGE_NUMBER_RE = re.compile(r"^\d{1,5}$")
 
+# Running Header 除去（例: "Preface · ix", "Experimentations · 27"）
+# pdftotext の出力に混入する柱テキストを除去する
+_RUNNING_HEADER_RE = re.compile(
+    r'^.{3,60}\s[\u00b7\u2022]\s(?:\d{1,4}|[ivxlcdmIVXLCDM]{1,8})$'   # 中黒区切り（前テキスト）
+    r'|^(?:\d{1,4}|[ivxlcdmIVXLCDM]{1,8})\s[\u00b7\u2022]\s.{3,60}$'  # 中黒区切り（前ページ番号）
+    r'|^.{10,55}\s\d{1,3}$'   # [V2.9.4 追加] "Title 233"形式 (最小10文字、3桁以下で年号誤爆回避)
+)
+
 
 def filter_paragraphs(paragraphs: List[str]) -> List[str]:
-    """段落を strip し、ページ番号行を除去する。"""
+    """段落を strip し、ページ番号行や Rrunning Header を除去する。"""
     filtered = []
     for p in paragraphs:
         p = p.strip()
@@ -186,6 +186,9 @@ def filter_paragraphs(paragraphs: List[str]) -> List[str]:
             continue
         # ページ番号の除去
         if _PAGE_NUMBER_RE.match(p):
+            continue
+        # Running Header の除去
+        if _RUNNING_HEADER_RE.match(p):
             continue
         filtered.append(p)
     return filtered

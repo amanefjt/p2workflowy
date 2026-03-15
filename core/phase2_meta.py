@@ -13,9 +13,13 @@ from .llm_client import call_gemini
 
 
 # サンプリング閾値 (仕様書に基づき調整)
-MAX_INPUT_CHARS = 500_000   # これ以上の場合はサンプリング
+MAX_INPUT_CHARS = 500_000   # 論文モード：これ以上の場合はサンプリング
 HEAD_CHARS = 100_000        # 冒頭部分
 TAIL_CHARS = 50_000         # 末尾部分
+
+MAX_BOOK_CHARS = 1_500_000  # 書籍モード：セーフティ・ハードリミット
+BOOK_HEAD_CHARS = 1_000_000 # 書籍モード冒頭
+BOOK_TAIL_CHARS = 500_000   # 書籍モード末尾
 
 
 def _build_full_text(chunks_path: str | Path) -> str:
@@ -24,41 +28,43 @@ def _build_full_text(chunks_path: str | Path) -> str:
     return "\n\n".join(c.text for c in chunks)
 
 
-def _sample_text(full_text: str) -> str:
+def _sample_text(full_text: str, is_book: bool = False) -> str:
     """テキストが長すぎる場合、冒頭 + 末尾をサンプリングする。"""
-    if len(full_text) <= MAX_INPUT_CHARS:
+    limit = MAX_BOOK_CHARS if is_book else MAX_INPUT_CHARS
+    head_size = BOOK_HEAD_CHARS if is_book else HEAD_CHARS
+    tail_size = BOOK_TAIL_CHARS if is_book else TAIL_CHARS
+
+    if len(full_text) <= limit:
         return full_text
 
-    head = full_text[:HEAD_CHARS]
-    tail = full_text[-TAIL_CHARS:]
-    print_log(f"  [Phase 2] テキストサンプリング: {len(full_text)} 文字 → 冒頭 {HEAD_CHARS} + 末尾 {TAIL_CHARS}")
+    head = full_text[:head_size]
+    tail = full_text[-tail_size:]
+    print_log(f"  [Phase 2] テキストサンプリング ({'Book' if is_book else 'Paper'}): {len(full_text)} 文字 → 冒頭 {head_size} + 末尾 {tail_size}")
     return head + "\n\n[...中略...]\n\n" + tail
 
 
-def generate_resume(text: str, api_key: str | None = None, expertise: str = "文化人類学", model: str | None = None, thinking_level: str = "High") -> str:
+def generate_resume(text: str, api_key: str | None = None, expertise: str = "文化人類学", model: str | None = None, thinking_level: str = "High", is_book: bool = False, state: Any = None) -> str:
     """
-    SUMMARY_PROMPT を使ってレジュメ（構造化要約）を生成する。
+    SUMMARY_PROMPT または GLOBAL_SUMMARY_PROMPT を使ってレジュメ（構造化要約）を生成する。
 
     Args:
         text: 全文テキスト（必要に応じてサンプリング済み）
         api_key: APIキー
         expertise: 専門分野
+        is_book: 書籍モードかどうか。False の場合は論文用プロンプトを使用。
 
     Returns:
         str: 生成されたレジュメ（Markdown）
     """
     prompts = load_coreprompts()
     
-    # モデルに応じてプロンプトテンプレートを切り替え
-    # Gemini 3.x 系 (3-flash, 3.1-flash) は Thinking Level 活用により安定するため標準プロンプトを使用
-    # Gemini 2.x 系の Flash モデルは構造解析が不安定な傾向があるため、専用プロンプトを引き続き使用する
-    if model and any(m in model.lower() for m in ["gemini-3.0-flash", "gemini-3-flash", "gemini-3.1-flash"]):
-        prompt_tpl = prompts["SUMMARY_PROMPT"]
-    elif model and any(m in model.lower() for m in ["gemini-2.0-flash", "gemini-2.5-flash"]):
-        prompt_tpl = prompts.get("SUMMARY_PROMPT_ronbun", prompts["SUMMARY_PROMPT"])
-        print_log(f"  [Phase 2] {model} 検知: 専用の構造重視プロンプトを使用します。")
+    # モードに応じてプロンプトテンプレートを切り替え
+    if is_book:
+        # 書籍モード: GLOBAL_SUMMARY_PROMPT を優先使用
+        prompt_tpl = prompts.get("GLOBAL_SUMMARY_PROMPT", prompts["SUMMARY_PROMPT"])
     else:
-        prompt_tpl = prompts["SUMMARY_PROMPT"]
+        # 論文モード: SUMMARY_PROMPT_ronbun を優先使用
+        prompt_tpl = prompts.get("SUMMARY_PROMPT_ronbun", prompts["SUMMARY_PROMPT"])
 
     # プロンプト構築
     prompt = prompt_tpl.replace(
@@ -70,13 +76,19 @@ def generate_resume(text: str, api_key: str | None = None, expertise: str = "文
     )
 
     print_log(f"  [Phase 2] レジュメ生成中... (入力: {len(text)} 文字)")
-    resume = call_gemini(prompt, api_key=api_key, temperature=0.3, model=model, thinking_level=thinking_level)
+    # 長文出力を許可
+    resume = call_gemini(
+        prompt, api_key=api_key, temperature=0.3, model=model, 
+        thinking_level=thinking_level, max_output_tokens=8192,
+        log_dir=state.logs_dir if state else None,
+        metrics_metadata={"section": "global_resume"}
+    )
     print_log(f"  [Phase 2] レジュメ生成完了 ({len(resume)} 文字)")
 
     return resume
 
 
-def extract_keywords(text: str, api_key: str | None = None, expertise: str = "文化人類学", model: str | None = None, thinking_level: str = "High") -> list[dict]:
+def extract_keywords(text: str, api_key: str | None = None, expertise: str = "文化人類学", model: str | None = None, thinking_level: str = "High", state: Any = None) -> list[dict]:
     """
     KEYWORD_EXTRACTION_PROMPT を使ってキーワードを抽出する。
 
@@ -102,6 +114,8 @@ def extract_keywords(text: str, api_key: str | None = None, expertise: str = "�
         response_mime_type="application/json",
         model=model,
         thinking_level=thinking_level,
+        log_dir=state.logs_dir if state else None,
+        metrics_metadata={"section": "keywords"}
     )
 
     # JSON パース
@@ -180,6 +194,7 @@ def run_phase2(
     model: str | None = None,
     thinking_level: str = "High",
     state: "Any" = None,
+    is_book: bool = False,
 ) -> dict:
     """
     Phase 2 メイン処理: レジュメ生成 → キーワード抽出 → Glossary マージ。
@@ -190,6 +205,7 @@ def run_phase2(
         glossary_path: glossary.csv のパス（省略時はデフォルト）
         save_state: state/phase2_meta.json に保存するか
         expertise: 専門分野
+        is_book: 書籍モードかどうか
 
     Returns:
         dict: {"resume_content": str, "keywords_data": list}
@@ -202,17 +218,28 @@ def run_phase2(
             "先に Phase 1 を実行してください。"
         )
 
+    # [V2.9.8] スマート再利用機能: すでに Phase 2 の出力が存在する場合は読み込んで終了する
+    if phase2_state_path.exists():
+        try:
+            with open(phase2_state_path, "r", encoding="utf-8") as f:
+                cached_result = json.load(f)
+            if "resume_content" in cached_result and "keywords_data" in cached_result:
+                print_log(f"  [Phase 2] 既存のキャッシュを再利用します: {phase2_state_path}")
+                return cached_result
+        except Exception as e:
+            print_log(f"  [Phase 2] キャッシュ読み込み失敗 (再生成します): {e}")
+
     # Load full text from phase1 state
     full_text = _build_full_text(phase1_state_path)
 
     # Sample text for LLM input
-    text_for_llm = _sample_text(full_text)
+    text_for_llm = _sample_text(full_text, is_book=is_book)
 
     # 1. レジュメ生成
-    resume_content = generate_resume(text_for_llm, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level)
+    resume_content = generate_resume(text_for_llm, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level, is_book=is_book, state=state)
 
     # 2. キーワード抽出
-    keywords = extract_keywords(text_for_llm, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level)
+    keywords = extract_keywords(text_for_llm, api_key=api_key, expertise=expertise, model=model, thinking_level=thinking_level, state=state)
 
     # 3. Glossary マージ
     keywords_data = merge_with_glossary(keywords, glossary_path)

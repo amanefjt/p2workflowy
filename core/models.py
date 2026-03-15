@@ -35,6 +35,7 @@ class TreeNode:
     role: str          # "h2" または "p"
     seq_index: float   # 物理的な出現順序を保持
     children: List["TreeNode"] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict) # 任意のメタデータ
 
     def to_dict(self) -> dict:
         d = {
@@ -47,6 +48,8 @@ class TreeNode:
             d["children"] = [child.to_dict() for child in self.children]
         else:
             d["children"] = []
+        if self.metadata:
+            d["metadata"] = self.metadata
         return d
 
     @classmethod
@@ -58,6 +61,7 @@ class TreeNode:
             role=data["role"],
             seq_index=data["seq_index"],
             children=children,
+            metadata=data.get("metadata", {}),
         )
 
 

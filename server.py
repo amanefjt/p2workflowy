@@ -1,16 +1,19 @@
-import uvicorn
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
+import asyncio
 import uuid
-import shutil
 import os
+import re  # ← 【追加】
 from pathlib import Path
 from typing import Optional, Dict
 
+from fastapi import FastAPI, BackgroundTasks, File, Form, UploadFile, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+import uvicorn
+
 from core.pipeline import run_pipeline
 from core.config import DATA_DIR, STATE_DIR, PROJECT_ROOT
+from core.llm_client import get_default_model
 
 app = FastAPI(title="p2workflowy Web")
 
@@ -26,6 +29,9 @@ app.add_middleware(
 # ワークスペース内の web ディレクトリのパス
 web_dir = PROJECT_ROOT / "web"
 web_dir.mkdir(exist_ok=True)
+
+# 【追加】UUID検証用の正規表現
+UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 
 # タスク管理（簡易版）
 MAX_TASK_STATUS_ENTRIES = 50
@@ -48,6 +54,35 @@ async def index():
 @app.get("/ronbun")
 async def ronbun_page():
     return FileResponse(web_dir / "ronbun.html")
+
+# パイプラインを別スレッドで実行するための非同期ラッパー関数
+async def run_pipeline_in_background(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str, export_mode: str):
+    try:
+        print(f"Task {task_id}: バックグラウンドスレッドでパイプラインを開始します...")
+        
+        # asyncio.to_thread で同期関数である run_pipeline をスレッドプールにオフロード
+        await asyncio.to_thread(
+            run_pipeline,
+            input_path=input_path,
+            glossary_path=glossary_path,
+            title=title,
+            api_key=api_key,
+            session_id=task_id,
+            expertise=expertise,
+            export_mode=export_mode,
+            model=get_default_model("free"),
+            thinking_level="High",
+            pdf_mode="hybrid",
+            tier="free"
+        )
+        task_status[task_id]["status"] = "completed"
+        print(f"Task {task_id}: 処理が正常に完了しました。")
+    except Exception as e:
+        import traceback
+        error_msg = traceback.format_exc()
+        print(f"Task {task_id}: エラーが発生しました - {error_msg}")
+        task_status[task_id]["status"] = "failed"
+        task_status[task_id]["error"] = str(e)
 
 @app.post("/api/process")
 async def process(
@@ -96,7 +131,6 @@ async def process(
             
     print(f"Starting task {task_id} for input: {input_path} (Expertise: {expertise})")
     
-    # Initialize status BEFORE starting background task to avoid KeyError
     task_status[task_id] = {
         "status": "processing",
         "title": title,
@@ -105,41 +139,21 @@ async def process(
         "error": None
     }
     
+    # 非同期ラッパーを登録
     background_tasks.add_task(
-        run_task, task_id, str(input_path), str(glossary_path) if glossary_path else None, title, api_key, expertise, export_mode
+        run_pipeline_in_background, task_id, str(input_path), str(glossary_path) if glossary_path else None, title, api_key, expertise, export_mode
     )
     
     _cleanup_task_status()
     return {"task_id": task_id}
 
-async def run_task(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str, export_mode: str):
-    import asyncio
-    try:
-        # 同期関数である run_pipeline を別スレッドで実行してイベントループのブロックと競合を避ける
-        await asyncio.to_thread(
-            run_pipeline,
-            input_path=input_path,
-            glossary_path=glossary_path,
-            title=title,
-            api_key=api_key,
-            session_id=task_id,
-            expertise=expertise,
-            export_mode=export_mode,
-            model="gemini-3.1-flash-lite-preview",
-            thinking_level="High",
-            pdf_mode="hybrid",
-            tier="free"
-        )
-        task_status[task_id]["status"] = "completed"
-    except Exception as e:
-        import traceback
-        error_msg = traceback.format_exc()
-        print(f"Error in task {task_id}: {error_msg}")
-        task_status[task_id]["status"] = "failed"
-        task_status[task_id]["error"] = str(e)
 
 @app.get("/api/status/{task_id}")
 async def get_status(task_id: str):
+    # 【追加】多層防御: task_id が正しいUUIDフォーマットか検証
+    if not UUID_RE.match(task_id):
+        raise HTTPException(status_code=400, detail="Invalid task_id format")
+
     if task_id not in task_status:
         raise HTTPException(status_code=404, detail="Task not found")
     
@@ -160,7 +174,7 @@ async def get_status(task_id: str):
             except Exception:
                 pass
         
-        # 2. ファイル存在によるバックアップ判定（status.json が詳細を更新していない場合用）
+        # 2. ファイル存在によるバックアップ判定
         elif (session_dir / "phase4_translation.json").exists():
             task_status[task_id]["progress"] = "最終書き出し中..."
             task_status[task_id]["percentage"] = 95
@@ -181,7 +195,10 @@ async def get_status(task_id: str):
 
 @app.get("/api/download/{task_id}/{file_type}")
 async def download(task_id: str, file_type: str):
-    # uploads（アップロード先）と state（成果物保存先）の両方を確認
+    # 【追加】多層防御: task_id が正しいUUIDフォーマットか検証
+    if not UUID_RE.match(task_id):
+        raise HTTPException(status_code=400, detail="Invalid task_id format")
+
     search_dirs = [DATA_DIR / "uploads" / task_id, STATE_DIR / task_id]
     
     files = []
@@ -202,11 +219,9 @@ async def download(task_id: str, file_type: str):
     if not files:
         raise HTTPException(status_code=404, detail="Result file not found")
         
-    # 最新のファイルを選択
     files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
     target_file = files[0]
     
-    # media_type の推定
     media_type = "application/octet-stream"
     if target_file.suffix == ".md":
         media_type = "text/markdown"
@@ -222,14 +237,12 @@ async def download(task_id: str, file_type: str):
 
 @app.get("/api/glossary/sample")
 async def get_sample_glossary():
-    # サンプルが存在しない場合は空のCSVを生成
     sample_path = DATA_DIR / "sample" / "glossary_sample.csv"
     if not sample_path.exists():
         sample_path.parent.mkdir(parents=True, exist_ok=True)
         with open(sample_path, "w", encoding="utf-8-sig") as f:
             f.write("Term,Translation\nLLM,大規模言語モデル\nAI,人工知能\n")
     
-    # ユーザーが安心できるよう、拡張子と名称を非常に明示的にする
     return FileResponse(
         sample_path, 
         filename="p2workflowy_glossary_sample.csv",
@@ -241,6 +254,5 @@ async def get_sample_glossary():
 app.mount("/", StaticFiles(directory=str(web_dir), html=True), name="web")
 
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)

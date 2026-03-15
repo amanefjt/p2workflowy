@@ -1,7 +1,8 @@
 import asyncio
 import uuid
 import os
-import re  # ← 【追加】
+import re
+import shutil  # ← 【追加】
 from pathlib import Path
 from typing import Optional, Dict
 
@@ -12,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from core.pipeline import run_pipeline
-from core.config import DATA_DIR, STATE_DIR, PROJECT_ROOT
+from core.config import DATA_DIR, STATE_DIR, PROJECT_ROOT, APP_ADMIN_PASSCODE, GEMINI_API_KEY
 from core.llm_client import get_default_model
 
 app = FastAPI(title="p2workflowy Web")
@@ -45,6 +46,12 @@ def _cleanup_task_status():
     completed = [tid for tid, info in task_status.items() if info.get('status') in ('completed', 'failed')]
     num_to_delete = len(task_status) - MAX_TASK_STATUS_ENTRIES
     for tid in completed[:num_to_delete]:
+        # 【重要】物理ファイルも削除する
+        try:
+            shutil.rmtree(DATA_DIR / "uploads" / tid, ignore_errors=True)
+            shutil.rmtree(STATE_DIR / tid, ignore_errors=True)
+        except Exception as e:
+            print(f"Cleanup error for {tid}: {e}")
         del task_status[tid]
 
 @app.get("/")
@@ -95,6 +102,11 @@ async def process(
     export_mode: str = Form("p2workflowy"),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
+    # パスコード認証ロジック
+    if api_key and APP_ADMIN_PASSCODE and api_key.strip() == APP_ADMIN_PASSCODE:
+        print("Admin Passcode detected. Using server-side API key.")
+        api_key = GEMINI_API_KEY
+
     # テスト時のダミーキーがブラウザの localStorage に残ってしまうケースの対策
     if api_key and api_key.strip() in ["DUMMY_KEY", ""]:
         api_key = None

@@ -37,8 +37,9 @@ STATE_DIR = PROJECT_ROOT / "state"
 _env_path = PROJECT_ROOT / ".env"
 load_dotenv(_env_path)
 
-# API キー
+# API キーとパスコード
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
+APP_ADMIN_PASSCODE = os.getenv("APP_ADMIN_PASSCODE")
 
 # state ディレクトリの自動作成
 STATE_DIR.mkdir(exist_ok=True)

@@ -51,15 +51,6 @@
                             <label>専門分野（例：文化人類学、社会学、心理学...）</label>
                             <input type="text" id="expertise" name="expertise" value="文化人類学" placeholder="専門分野名を入力...">
                         </div>
-                        <div class="form-group-checkbox" style="margin-top: 1rem;">
-                            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
-                                <input type="checkbox" id="is_book" name="is_book" style="width: auto;">
-                                <span><strong>書籍モード</strong> (章立て・目次抽出を有効にする)</span>
-                            </label>
-                            <div class="important-note" style="margin-top: 0.5rem; font-size: 0.85rem; color: #666; line-height: 1.4;">
-                                <p>💡 <strong>スキャン書籍のコツ:</strong> 画像ベースのPDFは解析が不完全になる場合があります。うまく行かない際は、章ごとにテキストを抜き出し、下の「本文テキスト」欄に貼り付けて通常モードで実行すると、より正確に処理できます。</p>
-                            </div>
-                        </div>
                     </div>
 
                     <!-- Glossary -->
@@ -90,6 +81,16 @@
                             <div class="form-group">
                                 <label>またはPDFファイルをアップロード (Beta)</label>
                                 <input type="file" id="pdf_file" name="pdf_file" accept=".pdf" style="margin-bottom: 1rem;">
+                            </div>
+                            <!-- 書籍モードの設定をここに移動 -->
+                            <div class="form-group-checkbox" style="margin-top: 0.5rem; padding: 1rem; background: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1;">
+                                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                                    <input type="checkbox" id="is_book" name="is_book" style="width: auto;">
+                                    <span><strong>書籍モード</strong> (章立て・目次抽出を有効にする)</span>
+                                </label>
+                                <div class="important-note" style="margin-top: 0.5rem; font-size: 0.85rem; color: #64748b; line-height: 1.5;">
+                                    <p>💡 <strong>スキャン書籍のコツ:</strong> 画像ベースのPDFは解析が不完全になる場合があります。うまく行かない際は、章ごとにテキストを抜き出し、上の「本文テキスト」欄に貼り付けて通常モードで実行すると、より正確に処理できます。</p>
+                                </div>
                             </div>
                     </div>
                 </div>

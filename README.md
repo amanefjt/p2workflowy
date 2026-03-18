@@ -1,3 +1,12 @@
+---
+title: p2workflowy
+emoji: 📚
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+---
+
 # 📚 p2workflowy V3 (Stable Release)
 
 [![Gemini](https://img.shields.io/badge/Model-Gemini%202.0%20/%201.5%20Pro-blue.svg)](https://deepmind.google/technologies/gemini/)

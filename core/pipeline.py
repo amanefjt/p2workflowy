@@ -28,11 +28,12 @@ def run_pipeline(
     export_mode: str = "p2workflowy",
     model: str | None = None,
     thinking_level: str = "High",
-    pdf_mode: str = "full_vlm",
+    pdf_mode: str = "hybrid",
     tier: str = "paid",
     is_book: bool = False,
     structure_only: bool = False,
-    resume_only: bool = False,    # ← 追加
+    resume_only: bool = False,
+    heavy_ocr: bool = False,      # ← 追加
 ) -> None:
     """
     パイプライン全体を実行する。
@@ -61,6 +62,23 @@ def run_pipeline(
     print_log(f"  Stateディレクトリ: {state.session_dir}")
     print_log()
 
+    # --- Pre-flight Check: PDF Quality Diagnostic ---
+    # ユーザーが明示的に Route C (full_vlm) を指定していない場合、テキスト抽出品質を事前診断する
+    if input_path.lower().endswith(".pdf"):
+        if pdf_mode == "full_vlm":
+            print_log("  [Pipeline] Route C (full_vlm) が明示的に指定されています。診断をスキップします。")
+        else:
+            from .pdf_ingester import diagnose_pdf_quality
+            print_log("  [Pipeline] PDFのテキスト品質を診断中 (Pre-flight Check)...")
+            is_clean = diagnose_pdf_quality(input_path)
+            if not is_clean:
+                print_log("  [Warning] PDFのテキスト形式に致命的な破損（またはノイズ）を検知しました。")
+                print_log("  [Warning] 安全のため、一貫して Route C (Full VLM Extraction) で処理を行う「Bipolar Routing」を適用します。")
+                pdf_mode = "full_vlm"
+            else:
+                mode_desc = "Hybrid (Python+VLM)" if not is_book else "Pure Python (Bipolar)"
+                print_log(f"  [Pipeline] PDFのテキスト品質は良好です。{mode_desc} モードで続行します。")
+
     # オリジナルのパスを保持しておく（Phase 5 の出力先決定用）
     original_input_path = input_path
 
@@ -75,7 +93,11 @@ def run_pipeline(
                 print_log(f"  [Phase 0] 既存の PDF 抽出テキストを使用します: {extracted_path}")
                 pdf_text = extracted_path.read_text(encoding="utf-8")
             else:
-                pdf_text = run_async(run_pdf_ingestion_async(input_path, api_key=api_key, state=state, pdf_mode=pdf_mode, model=model))
+                pdf_text = run_async(run_pdf_ingestion_async(
+                    input_path, api_key=api_key, state=state, 
+                    pdf_mode=pdf_mode, model=model,
+                    is_book=is_book, heavy_ocr=heavy_ocr
+                ))
                 extracted_path.write_text(pdf_text, encoding="utf-8")
             
             input_path = str(extracted_path)
@@ -146,7 +168,8 @@ def run_pipeline(
             is_book=is_book,
             api_key=api_key,
             model=model,
-            input_path=phase3_input
+            input_path=phase3_input,
+            pdf_mode=pdf_mode,   # Route C (full_vlm) のルーティングに使用
         )
         print_log(f"  完了: {len(tree)} セクション\n")
 
@@ -165,7 +188,8 @@ def run_pipeline(
             model=model, thinking_level=thinking_level, 
             state=state, tier=tier,
             resume_only=resume_only,
-            is_book=is_book,  # ← 追加
+            is_book=is_book,
+            pdf_mode=pdf_mode,
         )
         print_log(f"  完了: {len(japanese_tree)} セクション翻訳完了\n")
 

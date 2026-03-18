@@ -54,6 +54,7 @@ async def process_section(
     state: Any = None,
     resume_only: bool = False,
     is_book: bool = False,
+    pdf_mode: str = "default",
 ) -> Tuple[str, Any, List[TreeNode], str] | Tuple[str, List[TreeNode], str]:
     """
     セクション内のチャンクを動的にバッチ化して翻訳を進める。
@@ -100,13 +101,28 @@ async def process_section(
             # Book Mode の場合、resume_only でも構造化だけは行って返す（ユーザー要望）
             if is_book:
                 chunk_nodes = [
-                    TreeNode(id=c["id"], text=c["text"], role="p", seq_index=c.get("seq_index", 0.0))
+                    TreeNode(id=c["id"], text=c["text"], role=c.get("role", "p"), seq_index=c.get("seq_index", 0.0))
                     for c in chunks
                 ]
-                ch_headings = extract_headings_from_resume(resume_text)
-                prompts_data = load_coreprompts()
-                exclude_keywords = prompts_data.get("EXCLUDE_SECTION_KEYWORDS", [])
-                result_tree, _ = structure_nodes_by_headings(chunk_nodes, ch_headings, exclude_keywords)
+                if pdf_mode == "full_vlm":
+                    # Route C: すでに Phase 3 で構造化されているため、そのままの構造を維持
+                    ch_tree: List[TreeNode] = []
+                    current_h3 = None
+                    for node in chunk_nodes:
+                        if node.role.startswith("h"):
+                            current_h3 = node
+                            ch_tree.append(node)
+                        else:
+                            if current_h3:
+                                current_h3.children.append(node)
+                            else:
+                                ch_tree.append(node)
+                    result_tree = ch_tree
+                else:
+                    ch_headings = extract_headings_from_resume(resume_text)
+                    prompts_data = load_coreprompts()
+                    exclude_keywords = prompts_data.get("EXCLUDE_SECTION_KEYWORDS", [])
+                    result_tree, _ = structure_nodes_by_headings(chunk_nodes, ch_headings, exclude_keywords)
                 
                 if state:
                     progress_state[0] += len(chunks)
@@ -132,16 +148,31 @@ async def process_section(
         if is_book:
             # 1. チャンクをTreeNodeに変換し、レジュメ見出しで構造化
             chunk_nodes = [
-                TreeNode(id=c["id"], text=c["text"], role="p", seq_index=c.get("seq_index", 0.0))
+                TreeNode(id=c["id"], text=c["text"], role=c.get("role", "p"), seq_index=c.get("seq_index", 0.0))
                 for c in chunks
             ]
-            ch_headings = extract_headings_from_resume(resume_text)
             
-            prompts_data = load_coreprompts()
-            exclude_keywords = prompts_data.get("EXCLUDE_SECTION_KEYWORDS", [])
-            
-            # 章内のツリー構造（見出しh3と段落pが混在した状態）を作成
-            ch_tree, _ = structure_nodes_by_headings(chunk_nodes, ch_headings, exclude_keywords)
+            if pdf_mode == "full_vlm":
+                # Route C: Phase 3 (sections_dict) に格納された role をそのまま信頼する
+                print_log(f"  [Phase 4] Route C (full_vlm) のため、レジュメ抽出による再構造化をスキップします。")
+                ch_tree: List[TreeNode] = []
+                current_h3 = None
+                for node in chunk_nodes:
+                    if node.role.startswith("h"):
+                        current_h3 = node
+                        ch_tree.append(node)
+                    else:
+                        if current_h3:
+                            current_h3.children.append(node)
+                        else:
+                            ch_tree.append(node)
+            else:
+                # Route A/B: 古いロジック（レジュメから見出しを抽出して無理やり構造化）
+                ch_headings = extract_headings_from_resume(resume_text)
+                prompts_data = load_coreprompts()
+                exclude_keywords = prompts_data.get("EXCLUDE_SECTION_KEYWORDS", [])
+                # 章内のツリー構造（見出しh3と段落pが混在した状態）を作成
+                ch_tree, _ = structure_nodes_by_headings(chunk_nodes, ch_headings, exclude_keywords)
 
             # BUG-001 修正3: [Unlabeled Section] のクリーンアップ
             # LLM が見出しを意訳した場合、match_heading が全て失敗し、全段落が
@@ -477,8 +508,14 @@ def rebuild_translated_tree(
                 return ja_subnode
 
             ja_node = _recursive_rebuild(en_node)
-            if resume_only or (ch_resume):
+            # Paper Mode では本文中に要約を挿入しない（要約はフルレジュメ側にのみ表示）
+            # もし resume_only であれば、レジュメノードのみを追加するなどの調整が必要だが、
+            # 現在の resume_only は rebuild_translated_tree の外側（process_section）でも制御されているため
+            # ここではシンプルに Body のみを生成する。
+            if resume_only:
                 ja_node.children = resume_nodes + ja_node.children
+
+            if ch_resume:
                 ja_node.metadata["summary"] = ch_resume
             japanese_tree.append(ja_node)
 
@@ -499,6 +536,7 @@ async def _run_phase4_async(
     tier: str = "paid",
     resume_only: bool = False,
     is_book: bool = False,
+    pdf_mode: str = "default",
 ) -> List[TreeNode]:
     """非同期メイン実行処理"""
     phase2_state_path = Path(phase2_state_path)
@@ -572,7 +610,8 @@ async def _run_phase4_async(
             master_glossary=master_glossary, prompt_template=prompt_template,
             progress_state=progress_state, semaphore=semaphore, rate_limiter=rate_limiter,
             settings=settings, api_key=api_key, expertise=expertise, model=model,
-            thinking_level=thinking_level, state=state, resume_only=resume_only, is_book=is_book
+            thinking_level=thinking_level, state=state, resume_only=resume_only, is_book=is_book,
+            pdf_mode=pdf_mode
         ))
     
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -638,10 +677,11 @@ def run_phase4(
     tier: str = "paid",
     resume_only: bool = False,
     is_book: bool = False,
+    pdf_mode: str = "default",
 ) -> List[TreeNode]:
     from .llm_client import run_async
     return run_async(_run_phase4_async(
         phase2_state_path, structure_state_path, sections_state_path, phase4_state_path,
         glossary_path, api_key, save_state, expertise, model, thinking_level, state, tier,
-        resume_only, is_book
+        resume_only, is_book, pdf_mode
     ))

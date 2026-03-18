@@ -490,7 +490,7 @@ async def generate_section_resume(
 ):
     """セクション（章）の要約と論理展開（h3見出し候補）を生成する。"""
     full_text = "\n".join([c.get("text", "") for c in chunks])
-    limit_text = full_text[:40000] # 長すぎる場合は制限
+    limit_text = full_text # 制約なく全テキストをプロンプトに込める
     
     prompts = _get_prompts()
     prompt_template = prompts.get("SECTION_SUMMARY_PROMPT")

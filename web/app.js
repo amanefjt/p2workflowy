@@ -44,11 +44,14 @@ form.addEventListener('submit', async (e) => {
     localStorage.setItem('p2workflowy_api_key', apiKey);
     localStorage.setItem('p2workflowy_expertise', expertise);
 
+    const isBook = document.getElementById('is_book').checked;
+    
     if (apiKey) {
         formData.set('api_key', apiKey);
     }
-    formData.set('expertise', expertise); // name属性で既に入っている場合があるためsetで上書き
+    formData.set('expertise', expertise); 
     formData.set('export_mode', 'p2workflowy');
+    formData.set('is_book', isBook ? 'true' : 'false');
 
     // UI Update
     submitBtn.disabled = true;

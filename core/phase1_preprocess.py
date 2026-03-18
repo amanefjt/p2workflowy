@@ -142,7 +142,7 @@ def smart_unwrap(text: str) -> List[str]:
             else:
                 # ハイフン末尾の場合はハイフンを除去して結合
                 if prev_line.endswith("-"):
-                    current_paragraph_parts[-1] = prev_line[:-1]
+                    current_paragraph_parts[-1] = prev_line.removesuffix("-")
                 current_paragraph_parts.append(stripped)
 
     # 最後の段落を追加
@@ -173,7 +173,7 @@ _PAGE_NUMBER_RE = re.compile(r"^\d{1,5}$")
 _RUNNING_HEADER_RE = re.compile(
     r'^.{3,60}\s[\u00b7\u2022]\s(?:\d{1,4}|[ivxlcdmIVXLCDM]{1,8})$'   # 中黒区切り（前テキスト）
     r'|^(?:\d{1,4}|[ivxlcdmIVXLCDM]{1,8})\s[\u00b7\u2022]\s.{3,60}$'  # 中黒区切り（前ページ番号）
-    r'|^.{10,55}\s\d{1,3}$'   # [V2.9.4 追加] "Title 233"形式 (最小10文字、3桁以下で年号誤爆回避)
+    r'|^(?!(?:Chapter|Part|Contents|Preface|Notes|Bibliography|Index)\b).{10,55}\s\d{1,3}$'   # [V2.9.4 追加] "Title 233"形式 (TOC保護用ルックアヘッド追加)
 )
 
 

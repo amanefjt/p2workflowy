@@ -63,7 +63,7 @@ async def ronbun_page():
     return FileResponse(web_dir / "ronbun.html")
 
 # パイプラインを別スレッドで実行するための非同期ラッパー関数
-async def run_pipeline_in_background(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str, export_mode: str):
+async def run_pipeline_in_background(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str, export_mode: str, is_book: bool):
     try:
         print(f"Task {task_id}: バックグラウンドスレッドでパイプラインを開始します...")
         
@@ -80,7 +80,11 @@ async def run_pipeline_in_background(task_id: str, input_path: str, glossary_pat
             model=get_default_model("free"),
             thinking_level="High",
             pdf_mode="hybrid",
-            tier="free"
+            tier="free",
+            is_book=is_book,
+            structure_only=False,
+            resume_only=False,
+            heavy_ocr=False
         )
         task_status[task_id]["status"] = "completed"
         print(f"Task {task_id}: 処理が正常に完了しました。")
@@ -100,6 +104,7 @@ async def process(
     glossary: Optional[UploadFile] = File(None),
     pdf_file: Optional[UploadFile] = File(None),
     export_mode: str = Form("p2workflowy"),
+    is_book: bool = Form(False),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     task_id = str(uuid.uuid4())
@@ -159,7 +164,7 @@ async def process(
     
     # 非同期ラッパーを登録
     background_tasks.add_task(
-        run_pipeline_in_background, task_id, str(input_path), str(glossary_path) if glossary_path else None, title, api_key, expertise, export_mode
+        run_pipeline_in_background, task_id, str(input_path), str(glossary_path) if glossary_path else None, title, api_key, expertise, export_mode, is_book
     )
     
     _cleanup_task_status()

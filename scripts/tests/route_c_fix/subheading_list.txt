@@ -1,0 +1,140 @@
+import json
+import re
+import difflib
+
+def normalize_heading(text: str) -> str:
+    t = re.sub(r'[^\w\s]', ' ', text)
+    norm = " ".join(t.lower().split())
+    return norm
+
+def is_valid_chapter(title: str, norm_toc: list[str]) -> bool:
+    norm_title = normalize_heading(title)
+    if norm_title in norm_toc:
+        return True
+    for t in norm_toc:
+        if norm_title in t or t in norm_title:
+            return True
+        ratio = difflib.SequenceMatcher(None, norm_title, t).ratio()
+        if ratio > 0.85:
+            return True
+    return False
+
+def show_subheadings():
+    with open("state/psdpdf/phase3_toc.json", "r") as f:
+        toc_data = json.load(f)
+    toc_list = [e["title"] for e in toc_data["toc"]]
+    norm_toc = [normalize_heading(t) for t in toc_list]
+
+    with open("state/psdpdf/phase1_clean.json", "r") as f:
+        chunks = json.load(f)
+
+    print("=== Subheadings (h3) identified in phase1_clean.json ===")
+    
+    found_any = False
+    for chunk in chunks:
+        text = chunk["text"].strip()
+        
+        # 1. VLMが元々 ## (h3) として出力したもの
+        if text.startswith("## "):
+            print(f"[{chunk['id']:4}] [VLM ##] | '{text}'")
+            found_any = True
+            
+        # 2. VLMが # (h2) としたが、TOC不一致で降格(h3)されたもの
+        elif text.startswith("# ") and not text.startswith("##"):
+            title = text[2:].strip()
+            if not is_valid_chapter(title, norm_toc):
+                print(f"[{chunk['id']:4}] [DEMOTE] | '{text}' (Not in TOC)")
+                found_any = True
+            
+    if not found_any:
+        print("No subheadings (h3) found.")
+
+if __name__ == "__main__":
+    show_subheadings()
+=== Subheadings (h3) identified in phase1_clean.json ===
+[   1] [DEMOTE] | '# Property, Substance and Effect' (Not in TOC)
+[   2] [VLM ##] | '## Anthropological Essays on Persons and Things'
+[  91] [VLM ##] | '## UNPREDICTABILITY'
+[  93] [VLM ##] | '## The ethnographic moment'
+[ 124] [VLM ##] | '## Relational knowledge'
+[ 142] [VLM ##] | '## The Reification of Social Relations'
+[ 163] [VLM ##] | '## ACKNOWLEDGEMENTS'
+[ 165] [DEMOTE] | '# Part I' (Not in TOC)
+[ 179] [VLM ##] | '## INDIVIDUAL FEATURES'
+[ 185] [VLM ##] | '## Pre-figured Features'
+[ 194] [VLM ##] | '## COMPOSITE FIGURES'
+[ 213] [VLM ##] | '## GENETIC PROFILES'
+[ 223] [VLM ##] | '## The Aesthetics of Substance'
+[ 225] [VLM ##] | '## DISPOSAL'
+[ 234] [VLM ##] | '## THE QUESTION OF SUBSTANCE'
+[ 243] [VLM ##] | '## Hagen'
+[ 253] [VLM ##] | '## VELOCITY'
+[ 274] [DEMOTE] | '# ACKNOWLEDGEMENTS' (Not in TOC)
+[ 285] [VLM ##] | '## CREATING KINSHIP'
+[ 302] [VLM ##] | '## REGULATIVE AND CONSTITUTIVE INFORMATION'
+[ 323] [VLM ##] | '## Different types of constitutive information'
+[ 332] [VLM ##] | '## NORMALISING INFORMATION'
+[ 350] [VLM ##] | '## ACKNOWLEDGEMENTS'
+[ 353] [DEMOTE] | '# Part II' (Not in TOC)
+[ 356] [VLM ##] | '## New Economic Forms: a Report'
+[ 360] [VLM ##] | '## THREE HORIZONS'
+[ 376] [VLM ##] | '## DIVIDED PERSONS'
+[ 385] [VLM ##] | '## Two kinds of men'
+[ 390] [VLM ##] | '## Two kinds of relations'
+[ 396] [VLM ##] | '## Flows of sentiment'
+[ 408] [VLM ##] | '## ABSORBING EXCESS'
+[ 411] [VLM ##] | '## The individual'
+[ 417] [VLM ##] | '## Cross-sex relations'
+[ 437] [VLM ##] | '## POSTSCRIPT 1998'
+[ 442] [VLM ##] | '## ACKNOWLEDGEMENTS'
+[ 445] [VLM ##] | '## The New Modernities'
+[ 451] [VLM ##] | '## SEARCHING FOR SYMMETRY'
+[ 463] [VLM ##] | '## Impure cultures and hybrid networks'
+[ 472] [VLM ##] | '## Papua New Guinean hybrids'
+[ 482] [DEMOTE] | '# FINDING MODERNITY' (Not in TOC)
+[ 483] [VLM ##] | '## New culturalisms'
+[ 496] [VLM ##] | '## New proprietors'
+[ 514] [VLM ##] | '## Divisions of Interest and Languages of Ownership'
+[ 525] [VLM ##] | '## LANGUAGES OF OWNERSHIP'
+[ 533] [VLM ##] | '## Varieties of timelessness'
+[ 546] [VLM ##] | '## Dispute'
+[ 554] [VLM ##] | '## Divisions of Interest'
+[ 558] [VLM ##] | '## DIVISIONS OF INTEREST'
+[ 577] [VLM ##] | '## ACKNOWLEDGEMENTS'
+[ 579] [DEMOTE] | '# Part III' (Not in TOC)
+[ 582] [VLM ##] | '## Potential Property: Intellectual Rights and Property in Persons'
+[ 592] [DEMOTE] | '# BORROWING CATEGORIES' (Not in TOC)
+[ 600] [DEMOTE] | '# ASSEMBLAGE' (Not in TOC)
+[ 603] [VLM ##] | '## Products of collective life'
+[ 609] [VLM ##] | '## Products of usable knowledge'
+[ 616] [VLM ##] | '## Products of the body'
+[ 624] [VLM ##] | '## Products of professional commitment'
+[ 631] [VLM ##] | '## FINAL REMARKS'
+[ 640] [VLM ##] | '## ACKNOWLEDGEMENT'
+[ 649] [VLM ##] | '## First passage point: the Biodiversity Convention'
+[ 668] [VLM ##] | '## POSTSCRIPT 1998'
+[ 675] [VLM ##] | '## ACKNOWLEDGEMENTS'
+[ 685] [VLM ##] | '## COSMOPOLITAN TROBRIANDERS'
+[ 714] [VLM ##] | '## II'
+[ 723] [VLM ##] | '## III'
+[ 736] [VLM ##] | '## MEASURES FOR MEASURES'
+[ 753] [VLM ##] | '## ACKNOWLEDGEMENTS'
+[ 759] [VLM ##] | '## The Ethnographic Effect II'
+[ 771] [VLM ##] | '## WRITING SOCIETIES, WRITING PERSONS'
+[ 778] [VLM ##] | '## Displacement'
+[ 789] [VLM ##] | '## Perspective'
+[ 799] [VLM ##] | '## Number'
+[ 811] [VLM ##] | '## Writing'
+[ 817] [DEMOTE] | '# PERSPECTIVES AND BLIND SPOTS' (Not in TOC)
+[ 819] [VLM ##] | '## A merographic commentary'
+[ 830] [VLM ##] | '## Perspectivism'
+[ 849] [VLM ##] | '## Blind spot'
+[ 860] [VLM ##] | '## JOINT ACKNOWLEDGEMENTS'
+[ 865] [VLM ##] | '## 1 THE ETHNOGRAPHIC EFFECT I'
+[ 876] [VLM ##] | '## 2 PRE-FIGURED FEATURES'
+[ 911] [VLM ##] | '## 4 REFUSING INFORMATION'
+[ 940] [VLM ##] | '## 5 NEW ECONOMIC FORMS: A REPORT'
+[1056] [VLM ##] | '## 9 WHAT IS INTELLECTUAL PROPERTY AFTER?'
+[1471] [DEMOTE] | '# DOCUMENTS FROM THE CANADIAN ROYAL COMMISSION ON NEW REPRODUCTIVE TECHNOLOGIES' (Not in TOC)
+[1472] [VLM ##] | '## Submissions'
+[1476] [VLM ##] | '## Reports'

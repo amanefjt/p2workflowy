@@ -28,6 +28,7 @@ archive/
 
 # 各種データファイル（論文、アップロード、テスト実行結果など）
 data/sample/
+data/Booksample/
 data/uploads/
 data/test_batch/
 

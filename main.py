@@ -81,6 +81,17 @@ def main():
         action="store_true",
         help="各章の最後に英語原文を、冒頭に日本語要約のみを出力（翻訳なし）",
     )
+    parser.add_argument(
+        "--heavy-ocr",
+        action="store_true",
+        help="OpenCVを使用した高度なレイアウト解析（脚注分離等）を有効にします。",
+    )
+    parser.add_argument(
+        "--pdf-mode",
+        default=None,
+        choices=["hybrid", "full_vlm"],
+        help="PDF抽出モードを明示的に指定します (hybrid, full_vlm)。指定しない場合は他のフラグから自動決定されます。",
+    )
 
     args = parser.parse_args()
 
@@ -138,8 +149,10 @@ def main():
         print(f"\n[{i}/{len(input_files)}] --- 処理を開始します: {p.name} ---")
         try:
             export_mode = "ronbunnihongo" if args.ronbun else "p2workflowy"
-            pdf_mode = "hybrid" if args.hybrid_pdf else "full_vlm"
+            is_pdf = p.suffix.lower() == ".pdf"
+            pdf_mode = args.pdf_mode if args.pdf_mode else ("hybrid" if (args.hybrid_pdf or not is_pdf) else "full_vlm")
             tier = "free" if args.free else "paid"
+            heavy_ocr = args.heavy_ocr
             
             run_pipeline(
                 input_path=str(p),
@@ -154,6 +167,7 @@ def main():
                 is_book=args.book,
                 structure_only=args.structure_only,
                 resume_only=args.resume_only,
+                heavy_ocr=heavy_ocr,
             )
         except Exception as e:
             print(f"[{i}/{len(input_files)}] エラー発生: {e}")

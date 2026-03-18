@@ -9,3 +9,4 @@ python-multipart
 pymupdf
 pillow
 python-docx
+opencv-python-headless

@@ -160,6 +160,11 @@ class SessionState:
         return self.session_dir / "status.json"
 
     @property
+    def vlm_cache(self) -> Path:
+        """VLMの抽出結果をページ単位で記録するキャッシュファイル。"""
+        return self.session_dir / "vlm_cache.json"
+
+    @property
     def logs_dir(self) -> Path:
         """デバッグログを格納するディレクトリ。"""
         d = self.session_dir / "logs"

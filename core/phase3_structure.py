@@ -134,7 +134,6 @@ def extract_toc_via_llm(pdf_path: str | Path, api_key: str | None = None, model:
 {text_for_llm}
 """
 
-    print_log("  [Phase 3] TOC抽出中（LLM）...")
     response = call_gemini(
         prompt,
         api_key=api_key,
@@ -159,6 +158,71 @@ def extract_toc_via_llm(pdf_path: str | Path, api_key: str | None = None, model:
     except Exception as e:
         print_log(f"  [Phase 3] TOC抽出失敗: {e} → タイトル補正をスキップ")
         return {"toc": [], "body_start_page": 1}
+
+
+def extract_toc_from_chunks(
+    chunks: List[RawChunk],
+    api_key: str | None = None,
+    model: str | None = None,
+) -> List[str]:
+    """
+    VLMが精製したクリーンなチャンクテキスト（冒頭部分）をLLMに渡し、
+    書籍の目次（章タイトルのリスト）を抽出する。
+    """
+    from .llm_client import call_gemini
+    
+    # 冒頭 100 チャンク程度（目次が含まれる十分な範囲）を結合
+    sample_size = min(100, len(chunks))
+    text_for_llm = "\n\n".join([c.text for c in chunks[:sample_size]])
+
+    prompt = f"""以下は書籍の冒頭部分のテキストです。
+このテキストの中から「目次（Table of Contents）」を特定し、
+「章タイトル」のリストのみを抽出してJSON形式で返してください。
+
+【制約】
+1. 出力は以下のJSON形式のみとし、説明文などは一切含めないでください。
+2. ページ番号は不要です。タイトル文字列のみをリストにしてください。
+3. 節（Section）の見出しは含めず、トップレベルの「章（Chapter）」の見出しのみを抽出してください。
+4. 目次にない文字列は含めないでください。
+
+出力形式:
+{{
+  "toc": [
+    "Preface",
+    "1. Experimentations, English and Otherwise",
+    "2. The New Modernities",
+    ...
+  ]
+}}
+
+テキスト:
+{text_for_llm}
+"""
+    print_log("  [Phase 3] VLMチャンクからTOCを抽出中...")
+    response_str = call_gemini(
+        prompt,
+        api_key=api_key,
+        model=model,
+        response_schema={
+            "type": "OBJECT",
+            "properties": {
+                "toc": {"type": "ARRAY", "items": {"type": "STRING"}}
+            },
+            "required": ["toc"]
+        }
+    )
+    if not response_str:
+        print_log("  [Phase 3] TOC抽出に失敗しました（空のリストを返します）")
+        return []
+    
+    try:
+        # JSON フェンス除去 & パース
+        clean = re.sub(r"```(?:json)?\s*|\s*```", "", response_str).strip()
+        data = json.loads(clean)
+        return data.get("toc", [])
+    except Exception as e:
+        print_log(f"  [Phase 3] TOCパース失敗: {e}")
+        return []
 
 
 def apply_toc_titles(
@@ -265,7 +329,8 @@ def detect_chapter_font_sizes(
                             line_max_size = span["size"]
 
                 line_text = "".join(line_parts).strip()
-                if line_text and line_max_size > 0:
+                line_max_size_val = float(line_max_size)
+                if line_text and line_max_size_val > 0.0:
                     # サイズを0.5pt単位で丸めてグループ化（微妙な浮動小数点差を吸収）
                     rounded = round(line_max_size * 2) / 2
                     if rounded not in size_to_lines:
@@ -429,6 +494,7 @@ def extract_book_chapters(
                         else:
                             prev = current_paragraphs[-1]
                             if _should_join_lines(prev, line_text):
+                                assert isinstance(current_paragraphs, list)
                                 if prev.endswith("-"):
                                     current_paragraphs[-1] = prev[:-1] + line_text
                                 else:
@@ -512,7 +578,8 @@ def extract_book_chapters(
                     continue
 
                 # --- 章タイトル検出 (Stateful Coalescing & Hybrid Verification) ---
-                rounded_size = round(max_size * 2) / 2
+                max_size_val = float(max_size)
+                rounded_size = round(max_size_val * 2) / 2
                 is_heading_size = (rounded_size in chapter_sizes)
                 is_valid_heading = is_heading_size
                 
@@ -577,6 +644,7 @@ def extract_book_chapters(
                     else:
                         prev_line = current_paragraphs[-1]
                         if _should_join_lines(prev_line, line_text):
+                            assert isinstance(current_paragraphs, list)
                             # 結合（ハイフン除去対応）
                             if prev_line.endswith("-"):
                                 current_paragraphs[-1] = prev_line[:-1] + line_text
@@ -617,17 +685,14 @@ def extract_book_chapters(
 
 def normalize_heading(text: str) -> str:
     """比較のために見出しを正規化する（記号、数字、ローマ数字、余分な空白を除去）。"""
-    # 【追加】削りすぎた場合のフォールバック用に、記号だけ除去した元テキストを退避
+    # 削りすぎた場合のフォールバック用に、記号だけ除去した元テキストを退避
     original_clean = re.sub(r'[^\w\s]', '', text).strip()
     
-    # 章番号・節番号（"1. ", "Chapter 1: ", "III. ", "1.1. " 等）を除去
-    # ローマ数字 (I, II, III, IV, V, VI, VII, VIII, IX, X 等) にも対応
-    t = re.sub(r'^(?:Chapter\s+)?(?:[IVXLCDM]+\b|[\d\.]+)\s*[:\.]?\s*', '', text, flags=re.I)
-    # 記号を除去、小文字化、空白のトリミング
-    t = re.sub(r'[^\w\s]', '', t)
+    # 記号をスペースに置換（2.1 -> 2 1）、小文字化、空白のトリミング
+    t = re.sub(r'[^\w\s]', ' ', text)
     norm = " ".join(t.lower().split())
     
-    # 【追加】正規化の結果、空文字や2文字未満になってしまった場合は、
+    # 正規化の結果、空文字や2文字未満になってしまった場合は、
     # 数字やローマ数字だけのタイトルである可能性が高いため、フォールバックを使用する
     if len(norm) < 2 and original_clean:
         return " ".join(original_clean.lower().split())
@@ -657,11 +722,22 @@ def match_heading(text: str, headings: List[str]) -> Optional[tuple[str, str]]:
     
     for head in headings:
         norm_head = normalize_heading(head)
-        if not norm_head or len(norm_head) < 3:
+        if not norm_head:
             continue
-
+            
         # 決定論的な前方一致判定
         if norm_first.startswith(norm_head):
+            # --- [強化] タイトル行等の誤爆防止フィルター ---
+            # マッチした見出しが行全体に対して短すぎる場合（例: タイトルの冒頭数文字に過ぎない）、
+            # それは見出しではなく本文（またはタイトル）の一部とみなす。
+            # 閾値: 行の長さが見出しの長さの2.2倍を超える場合はマッチを却下する。
+            # 例: "Arbitrary locations: in defence..." (50枚) vs "Arbitrary locations" (19文字)
+            if len(norm_first) > len(norm_head) * 2.2:
+                # ただし、見出し自体が十分長い（20文字以上）場合は、
+                # 連結された本文である可能性が高いのでパースを許可する。
+                if len(norm_head) < 20:
+                    continue
+
             # 一致した場合、見出しとして分離
             # 連結されていた場合（本文が1行目に残っている場合）は、単語数ベースでカット
             words = first_line.split()
@@ -683,9 +759,10 @@ def match_heading(text: str, headings: List[str]) -> Optional[tuple[str, str]]:
 # ============================================================
 
 def structure_nodes_by_headings(
-    nodes: List[TreeNode],
-    headings: List[str],
-    exclude_keywords: List[str] | None = None,
+    nodes: List[TreeNode], 
+    headings: List[str], 
+    exclude_keywords: List[str],
+    is_book: bool = False
 ) -> tuple[List[TreeNode], Dict[str, List[dict]]]:
     """
     TreeNodeのリスト（平坦または既存構造）を、見出しリストに基づいて再構造化する。
@@ -712,7 +789,58 @@ def structure_nodes_by_headings(
     for n in nodes:
         _collect_p(n)
 
-    for node in flat_paragraphs:
+    # ----------------------------------------------------------------
+    # Abstract 前処理（[Unlabeled Section] として収集）
+    # Introduction が見つかる前のチャンクを先取りする。
+    # ----------------------------------------------------------------
+    intro_found_idx = None
+    for i, node in enumerate(flat_paragraphs):
+        # 先頭チャンクが見出しリストの最初の見出し（Introduction 等）と一致したら Break
+        match_result_pre = match_heading(node.text, headings)
+        if match_result_pre is not None:
+            intro_found_idx = i
+            break
+ 
+    abstract_chunks_pre = []
+    if intro_found_idx and intro_found_idx > 0:
+        # Introduction 検出前のチャンクを Abstract セクションとして事前収集
+        for pre_node in flat_paragraphs[:intro_found_idx]:
+            text_clean = pre_node.text.strip()
+            # "English text" などのラベル・ノイズをストリップ（大文字小文字無視、冒頭一致）
+            text_clean = re.sub(r'^(English text|日本語本文|Table of Contents|Abstract)\s*', '', text_clean, flags=re.IGNORECASE)
+            
+            if not text_clean:
+                continue
+            
+            pre_node.text = text_clean # ノイズを除去したテキストに更新
+            abstract_chunks_pre.append(pre_node)
+        
+        if abstract_chunks_pre:
+            abstract_node = TreeNode(
+                id="unlabeled_pre",
+                text="[Unlabeled Section]",
+                role="h2" if not is_book else "h1", # 論文モードなら H3/H2 になるよう h2
+                seq_index=-2.0,
+                children=[]
+            )
+            for pre_node in abstract_chunks_pre:
+                abstract_node.children.append(pre_node)
+            structured_tree.append(abstract_node)
+            sections_dict["unlabeled_pre|[Unlabeled Section]"] = [{"text": pn.text, "id": pn.id} for pn in abstract_chunks_pre]
+            print_log(f"  [Structure] Abstract 前処理: {len(abstract_chunks_pre)} チャンクを [Unlabeled Section] として収集")
+
+    # ----------------------------------------------------------------
+    # Introduction 以降をスキャンして見出しベースの構造化
+    # ----------------------------------------------------------------
+    scan_start = intro_found_idx if intro_found_idx is not None else 0
+
+    for node in flat_paragraphs[scan_start:]:
+        # --- [フィルター] VLM 抽出の区切り行 "English text" をスキップ ---
+        stripped_text = node.text.strip()
+        if stripped_text.lower() == "english text":
+            print_log(f"  [Structure] 区切り行をスキップ: '{node.text[:40]}'")
+            continue
+
         # 見出しの抽出と分離判定
         match_result = match_heading(node.text, headings)
 
@@ -724,29 +852,26 @@ def structure_nodes_by_headings(
                 structured_tree.append(current_node)
                 sections_dict[section_key] = current_section_chunks
 
-            # 新しいセクションの開始
             matched_heading, remaining_text = match_result
             current_heading = matched_heading
+            # セクション全体の起点としてのノード (h2 role for paper sections)
             current_node = TreeNode(
-                id=str(node.id),
-                text=matched_heading,
-                role="h3",
-                seq_index=node.seq_index,
-                children=[]
+                id=node.id, text=current_heading, 
+                role="h2" if not is_book else "h3",
+                seq_index=node.seq_index, children=[]
             )
             current_section_chunks = []
             
+            # 残りのテキストがある場合は子ノードとして追加
             if remaining_text:
-                # 本文部分を子ノードとして追加
                 child_id = f"{node.id}_b"
                 child = TreeNode(id=child_id, text=remaining_text, role="p", seq_index=node.seq_index + 0.001)
                 current_node.children.append(child)
                 current_section_chunks.append({"text": remaining_text, "id": child_id})
             
-            if is_excluded_heading(matched_heading, exclude_keywords):
-                print_log(f"  [Structure] 除外セクション検出: '{matched_heading}'")
-                excluded = True
-                break
+            current_section_key = f"{current_node.id}|{current_heading}"
+            sections_dict[current_section_key] = current_section_chunks
+            continue
         else:
             # --- [V2.9.4 追加] 柱（Running Header）の亡霊迎撃フィルター ---
             if current_heading:
@@ -759,14 +884,16 @@ def structure_nodes_by_headings(
             # ----------------------------------------------------------------
 
             if current_node is None:
+                # 救済措置: 最初に見出しが見つかる前のテキスト、または見出しが1つもマッチしない場合
                 current_heading = "[Unlabeled Section]"
                 current_node = TreeNode(
-                    id=f"unlabeled_{node.id}",
+                    id=f"unlabeled_{node.id}", 
                     text=current_heading,
-                    role="h3",
+                    role="h2" if not is_book else "h3",
                     seq_index=node.seq_index,
                     children=[]
                 )
+                print_log(f"  [Structure] Unlabeled Section を開始: '{node.text[:60]}'")
             
             current_node.children.append(node)
             current_section_chunks.append({"text": node.text, "id": node.id})
@@ -801,7 +928,7 @@ def build_tree(
     intro_start_id = None
     metadata_ids = set()
 
-    if is_book:
+    if is_book and "chapters" in anchors:
         # --- Book Mode: extract_book_chapters の結果をそのままTreeNodeに変換 ---
         current_part_node: Optional[TreeNode] = None
         chapters = anchors.get("chapters", [])
@@ -859,17 +986,136 @@ def build_tree(
         for c in chunks:
             base_nodes.append(TreeNode(id=c.id, text=c.text, role="p", seq_index=c.seq_index))
         
-        tree, sections_dict = structure_nodes_by_headings(base_nodes, headings, exclude_keywords)
-        # Paper Mode ではトップレベルの見出しなので h2 に変更
-        for node in tree:
-            if node.role == "h3":
-                node.role = "h2"
+        tree, sections_dict = structure_nodes_by_headings(base_nodes, headings, exclude_keywords, is_book=is_book)
 
     return tree, sections_dict
 
 
 # ============================================================
-# 5. Pipeline Phase Execution
+# 5. Route C: VLM Markdown Structuring
+# ============================================================
+
+def structure_nodes_by_markdown(
+    chunks: List[RawChunk],
+    is_book: bool = False,
+    toc_list: List[str] | None = None,
+) -> tuple[List[TreeNode], Dict[str, List[dict]]]:
+    """
+    Route C: VLM が出力した Markdown 記号（# / ##）を正規表現でパースし、
+    TreeNode の親子構造を構築する。
+    
+    TOC（目次）リストが存在する場合、`# ` (h2候補) が TOC に含まれるか検証し、
+    含まれない場合は自動的に h3 (節) へと降格（Demote）させる。
+    """
+    import difflib
+    
+    tree: List[TreeNode] = []
+    sections_dict: Dict[str, List[dict]] = {}
+
+    current_h2: Optional[TreeNode] = None
+    current_h3: Optional[TreeNode] = None
+    unlabeled_key = "unlabeled_0|[Unlabeled Section]"
+    current_section_key: str = unlabeled_key
+
+    # TOCリストの正規化（照合用）
+    norm_toc = [normalize_heading(t) for t in (toc_list or [])]
+
+    def is_valid_chapter(title: str) -> bool:
+        if not is_book or not norm_toc:
+            return True # TOCがない場合はVLMを信じる
+        
+        norm_title = normalize_heading(title)
+        # 1. 完全一致
+        if norm_title in norm_toc:
+            return True
+        # 2. 類似度判定 (SequenceMatcher)
+        for t in norm_toc:
+            # 部分一致または高い類似度（80%以上）
+            if norm_title in t or t in norm_title:
+                return True
+            ratio = difflib.SequenceMatcher(None, norm_title, t).ratio()
+            if ratio > 0.85:
+                return True
+        return False
+
+    for chunk in chunks:
+        raw_text = chunk.text.strip()
+
+        # --- トップレベル見出し（章: h2）---
+        if re.match(r'^#\s+', raw_text) and not re.match(r'^##', raw_text):
+            title = re.sub(r'^#+\s+', '', raw_text).strip()
+            
+            if not is_valid_chapter(title):
+                # TOCにないため、h3 (Section) へ降格
+                node = TreeNode(
+                    id=chunk.id, text=title, role="h3", seq_index=chunk.seq_index, children=[]
+                )
+                if current_h2 is not None:
+                    current_h2.children.append(node)
+                else:
+                    tree.append(node)
+                
+                sections_dict.setdefault(current_section_key, []).append(
+                    {"id": node.id, "text": node.text, "role": "h3"}
+                )
+                current_h3 = node
+                continue 
+
+            # 正規のh2処理
+            node = TreeNode(
+                id=chunk.id, text=title, role="h2", seq_index=chunk.seq_index, children=[]
+            )
+            tree.append(node)
+            current_section_key = f"{chunk.id}|{title}"
+            sections_dict[current_section_key] = []
+            current_h2 = node
+            current_h3 = None
+
+        # --- サブ見出し（節: h3）---
+        elif re.match(r'^##\s+', raw_text):
+            title = re.sub(r'^#+\s+', '', raw_text).strip()
+            node = TreeNode(
+                id=chunk.id, text=title, role="h3", seq_index=chunk.seq_index, children=[]
+            )
+            # フェイルセーフ: current_h2 がない（孤立した ##）場合はトップレベルへ
+            if current_h2 is not None:
+                current_h2.children.append(node)
+            else:
+                tree.append(node)
+            
+            sections_dict.setdefault(current_section_key, []).append(
+                {"id": node.id, "text": node.text, "role": "h3"}
+            )
+            current_h3 = node
+
+        # --- 本文（p）---
+        else:
+            node = TreeNode(
+                id=chunk.id, text=raw_text, role="p", seq_index=chunk.seq_index
+            )
+            
+            # 親見出しがない場合（見出しのない論文や、VLMが冒頭から本文を返した場合）の救済
+            if current_h2 is None:
+                current_h2 = TreeNode(
+                    id="unlabeled_0", text="[Unlabeled Section]", 
+                    role="h2" if not is_book else "h3", # 論文ならh2, 書籍ならh3相当
+                    seq_index=chunk.seq_index, children=[]
+                )
+                tree.append(current_h2)
+                current_section_key = unlabeled_key
+                sections_dict[current_section_key] = []
+            
+            parent = current_h3 or current_h2
+            parent.children.append(node)
+            sections_dict.setdefault(current_section_key, []).append(
+                {"id": node.id, "text": node.text, "role": "p"}
+            )
+
+    return tree, sections_dict
+
+
+# ============================================================
+# 6. Pipeline Phase Execution
 # ============================================================
 
 def run_phase3(
@@ -883,8 +1129,40 @@ def run_phase3(
     api_key: str | None = None,
     model: str | None = None,
     input_path: str | Path | None = None,
+    pdf_mode: str = "hybrid",
 ) -> tuple[List[TreeNode], Dict[str, List[dict]]]:
     """Phase 3 メイン処理."""
+    
+    chunks = load_chunks_from_json(str(phase1_state_path))
+    
+    # --- Route C: VLM Markdown 構造化 (pdf_mode == "full_vlm" かつ Markdown見出しが存在する場合) ---
+    if pdf_mode == "full_vlm":
+        has_markdown_headers = any(re.match(r'^#\s+', c.text.strip()) for c in chunks)
+        if has_markdown_headers:
+            print_log("  [Phase 3] Route C: VLM Markdown Mode (正規表現パース) を実行します")
+            toc_list = []
+            if is_book:
+                toc_path = Path(structure_state_path).parent / "phase3_toc.json"
+                if toc_path.exists():
+                    with open(toc_path, "r", encoding="utf-8") as f:
+                        cached_data = json.load(f)
+                        toc_list = [entry["title"] for entry in cached_data.get("toc", [])]
+                else:
+                    toc_list = extract_toc_from_chunks(chunks, api_key=api_key, model=model)
+
+            tree, sections_dict = structure_nodes_by_markdown(chunks, is_book=is_book, toc_list=toc_list)
+            if save_state:
+                save_tree_to_json(tree, str(structure_state_path))
+                with open(sections_state_path, "w", encoding="utf-8") as f:
+                    json.dump(sections_dict, f, ensure_ascii=False, indent=2)
+            return tree, sections_dict
+        else:
+            print_log("  [Phase 3] pdf_mode='full_vlm' ですが Markdown 見出しが未検出です。標準構造化へフォールバックします。")
+
+    anchors = {"metadata_ids": []}
+    headings = []
+    exclude_keywords = []
+
     if is_book and input_path:
         print_log("  [Phase 3] Book Mode (PyMuPDF + TOC補正)")
 
@@ -925,7 +1203,7 @@ def run_phase3(
                     print_log(f"  [Phase 3] TOCキャッシュ保存失敗: {e}")
 
         # 取得（キャッシュ経由またはLLM直後）
-        body_start_page = toc_data.get("body_start_page", 1)
+        body_start_page = int(toc_data.get("body_start_page", 1))
         toc = toc_data.get("toc", [])
         page_offset = body_start_page - 1  # PDF物理ページ - 書籍ページ = offset
 
@@ -963,9 +1241,13 @@ def run_phase3(
         resume_content = meta.get("resume_content", "")
         
         # アンカー検知によるスキップを廃止し、レジュメの見出しリストを唯一の基準にする
-        # anchors = pre_scan(chunks)  <-- キーワードスキャンによる誤検知のリスクがあるため使用しない
         anchors = {"metadata_ids": []} 
         headings = extract_headings_from_resume(resume_content)
+        
+        # 【重要】Abstract を見出し候補の先頭に強制追加（論文モードの標準構成を保証）
+        if "Abstract" not in headings and "abstract" not in [h.lower() for h in headings]:
+            headings.insert(0, "Abstract")
+            
         prompts = load_coreprompts()
         exclude_keywords = prompts.get("EXCLUDE_SECTION_KEYWORDS", [])
 
@@ -994,10 +1276,10 @@ def extract_headings_from_resume(resume: str) -> List[str]:
             # LLMが付与するメタ見出しのキーワードセット
             meta_keywords = {
                 "リサーチ・クエスチョン", "全体のリサーチ・クエスチョン", 
-                "核心的主張", "全体の核心的主張", "中心的な主張", 
+                "核心的主張", "核心的主張（Thesis）", "全体の核心的主張", "中心的な主張", 
                 "構成と理論的貢献", "論理展開", "詳細な論理展開", 
-                "詳細な各章の論理展開", "章内の論理展開",
-                "要約", "書籍全体のレジュメ", "各セクションの展開"
+                "詳細な各章の論理展開", "章内の論理展開", "各節の主張とその根拠",
+                "要約", "書籍全体のレジュメ", "各セクションの展開", "各章の構成と理論的貢献"
             }
             
             # 先頭の数字（"1. ", "2. "）等を取り除いたプレーンな状態で完全一致判定を行う

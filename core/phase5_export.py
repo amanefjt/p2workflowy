@@ -166,12 +166,11 @@ def generate_markdown_output(
             "## English text",
             "",
             # 警告: English text 内の見出しは階層を下げて ### (H3) に維持すること。
-            # 詳細は ideal_mdstructure.md (L21) を参照。
+            # 詳細は ideal_mdstructure.md (L21) を参照。tree_to_markdown の base_level=3 は必須
             tree_to_markdown(english_tree, base_level=3),
             "",
             "## 日本語本文",
             "",
-            # 重要: 論文モードの日本語本文セクションは、親にぶら下がらず独立した ## (H2) とすること。
             # 詳細は ideal_mdstructure.md (L31) を参照。tree_to_markdown の base_level=2 は必須。
             tree_to_markdown(japanese_tree, base_level=2)
         ]
@@ -229,8 +228,17 @@ def generate_resume_only_output(
             
             if node.children:
                 parts.append(f"### English text of {clean_node_text}")
-                # 原文を表示 (base_level=3 にすることで、h3ノードが #### になる)
-                parts.append(tree_to_markdown(node.children, base_level=3))
+                # Phase 4 の "English text" ラッパー (role=h3) をアンラップし、
+                # 中身（節見出し + 本文）だけを展開する。
+                # これにより「### English text of Chapter X」と
+                # 「#### English text」の二重ヘッダーを防ぐ。
+                content_nodes = []
+                for child in node.children:
+                    if child.text == "English text" and child.children:
+                        content_nodes.extend(child.children)
+                    else:
+                        content_nodes.append(child)
+                parts.append(tree_to_markdown(content_nodes, base_level=3))
                 parts.append("")
     else:
         # Paper Mode

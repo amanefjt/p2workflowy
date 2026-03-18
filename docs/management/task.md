@@ -1,37 +1,19 @@
-# Task: p2workflowy 実験モード - 高度な機能拡張と新モデル検証
+# Task: Remove Inline Running Headers & Cleanup
 
-## 目的
-安定的動作が確認された V3 安定版をベースに、さらに高品質・高機能なフェーズへと進化させるための試験的実装と検証を行う。
+## Task 1: Fix Empty Line Preservation Bug in `pdf_ingester.py`
+- [x] Step 1: Implement `header_removed` flag to skip append correctly
+- [x] Step 2: Verify with `tests/test_debug_header.py`
 
-## DoD (完了の定義)
-- [ ] **高度な PDF 構造解析**: 図表や数式を含む複雑なレイアウトの論文におけるテキスト抽出精度の向上。
-- [ ] **プロンプト・エンジニアリングの深化**: 専門用語の訳し分けや、文脈保持能力の極限までの追求。
-- [ ] **新モデル・ベンチマーク**: 新たにリリースされた Gemini モデル等の性能・コストパフォーマンス検証。
-- [ ] **実験結果の記録**: 各試行の結果（成功・失敗・副作用）を `requirements_log.md` または専用ドキュメントに詳細に記述すること。
+## Task 2: Strengthen Assumptions & Verification
+- [x] Step 1: Add assertions to `test_debug_header2.py`
+- [x] Step 2: Run all tests to verify current state
 
-## 進捗状況
-- 2026-03-15: **リファクタリング（保守性・負債解消）Phase 2**。
-    - [ ] `llm_client.py`: インポート修正 (`threading`, `Path`)、リミッターをキャッシュ化。
-    - [ ] `phase4_translate.py`: Book Mode ツリー構造の整合性修正（English text ラッパー）。
-    - [ ] `phase4_translate.py`: `_recursive_rebuild` の確実な実装。
-    - [ ] `phase2_meta.py`: 書籍モードのコンテキスト上限 (1.5M字) 追加。
-    - [ ] `pipeline.py`: `asyncio` 互換性向上 (`run_async` ヘルパーの実装)。
-    - [ ] `phase3_structure.py`: `pre_scan` 削除の最終確認。
-- 2026-03-15: **V2.9.8 安定版の確定**。
-    - [x] V2.9.8 安定版のアーカイブ（暫定スクリプトの整理）完了。
-    - [x] リリースノート ([stable_v2.9.8_final.md](file:///Users/shufujita/Antigravity/p2workflowy/docs/stable_v2.9.8_final.md)) の作成完了。
-    - [x] 要望・トラブルシューティングログの最終更新完了。
-- 2026-03-12: **実験モード開始**。
-    - [x] V3 安定版のアーカイブ作成完了。
-    - [x] 要望ログへの記録完了。
+## Task 3: Investigate & Fix "Unlabeled Section" Issue
+- [x] Step 1: Analyze `coreprompts.json` and `phase3_structure.py` (Investigation done)
+- [x] Step 2: Implement `normalize_heading` enhancement and diagnostic logs
+- [x] Step 3: Add regression test for Unlabeled Section
 
-## 実験予定・検討項目
-1. **PDF Book Mode の洗練**: 現在開発中の book_mode に関する残存課題の解消。
-2. **Agentic Workflows**: 翻訳結果を AI 自身が自己検閲・修正するプロセスの試験導入。
-3. **UI の大幅刷新**: よりモダンで使いやすいインターフェースの模索。
-
----
-### (参考) 前フェーズ：安定化フェーズの結果
-- [x] TierManager による動的変速の成功。
-- [x] ID 型不一致による翻訳漏れの解消。
-- [x] 非対称出力構造の確立。
+## Final Review
+- [x] Dispatch final code reviewer subagent
+- [x] Cleanup (Remove temp files)
+- [x] Finalize Stable Release (Commit, Mission/Rules, Tagging)

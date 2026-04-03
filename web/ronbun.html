@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RonbunNihongo - Academic Text to Japanese Markdown</title>
+    <link rel="stylesheet" href="/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Outfit:wght@700&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+    <header class="container">
+        <h1 class="logo">ronbun<span>nihongo</span></h1>
+    </header>
+
+    <main class="container">
+
+        <div class="main-card">
+            <section class="overview">
+                <p>RonbunNihongoは、学術論文・学術書をわかりやすい日本語で深く読むための翻訳専用ツールです。</p>
+                <p>質を追求しているため、翻訳はゆっくりです（通常数分程度）。</p>
+            </section>
+
+            <form id="process-form">
+                <div class="setup-grid">
+                    <!-- BYOK -->
+                    <div class="setup-item">
+                        <h3>1. Gemini APIキー</h3>
+                        <div class="form-group">
+                            <input type="password" id="api_key" placeholder="あなたのAPIキーを入力してください...">
+                            <div class="api-note">
+                                <p>🔑 <strong>APIキーについて</strong>: <a href="https://aistudio.google.com/app/apikey"
+                                        target="_blank">Google AI
+                                        Studio</a>
+                                    から取得可能です。無料枠で利用可能なツールですが、Googleの仕様上、支払い手段の登録が必要です。登録したAPIキーはブラウザにのみ保存され、ツール制作者には送信されません。
+                                </p>
+                                <p>⚠️ <strong>学習への利用について</strong>:
+                                    無料枠のAPIキーを使用する場合、入力データはGoogleのモデル改善のために利用される可能性があります。機密性の高い資料を扱う際はご注意ください。</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="setup-item">
+                        <h3>2. 翻訳の専門設定</h3>
+                        <div class="form-group">
+                            <label>専門分野（例：文化人類学、社会学、心理学...）</label>
+                            <input type="text" id="expertise" name="expertise" value="文化人類学" placeholder="専門分野名を入力...">
+                        </div>
+                    </div>
+
+                    <!-- Glossary -->
+                    <div class="setup-item">
+                        <h3>3. 用語集 (任意)</h3>
+                        <div class="file-row">
+                            <input type="file" id="glossary_file" name="glossary" accept=".csv">
+                            <a id="sample-glossary-link" href="/api/glossary/sample" class="link-download">サンプルCSVをダウンロード</a>
+                        </div>
+                    </div>
+
+                    <!-- Input -->
+                    <div class="setup-item">
+                        <h3>4. 論文PDFの選択</h3>
+                        <div class="important-note" style="margin-top: 0; margin-bottom: 1rem;">
+                            <strong>Note:</strong> 解析するPDFファイルをアップロードしてください。
+                        </div>
+                        <div class="form-group">
+                            <label>PDFファイルをアップロード</label>
+                            <input type="file" id="pdf_file" name="pdf_file" accept=".pdf" style="margin-bottom: 1rem;">
+                        </div>
+                        <div class="form-group-checkbox" style="margin-top: 0.5rem; padding: 1rem; background: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1;">
+                            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                                <input type="checkbox" id="is_book" name="is_book" style="width: auto;">
+                                <span><strong>書籍モード</strong> (章立て・目次抽出を有効にする)</span>
+                            </label>
+                            <div class="important-note" style="margin-top: 0.5rem; font-size: 0.85rem; color: #64748b; line-height: 1.5;">
+                                <p>💡 <strong>スキャン書籍への対応:</strong> 高精度な視覚的解析エンジンにより、画像ベースのPDFでも論理構造（セクション等）を高い精度で抽出できます。</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" id="submit-btn" class="btn-submit">翻訳を開始する</button>
+            </form>
+
+            <!-- Status Container -->
+            <div id="status-container" class="hidden">
+                <div class="status-box">
+                    <div class="progress-header">
+                        <span id="status-text">Processing...</span>
+                        <span id="percent-text">0%</span>
+                    </div>
+                    <div class="progress-track">
+                        <div id="progress-fill"></div>
+                    </div>
+                    <div id="log-viewer" class="log-mini"></div>
+
+                    <div id="download-links" class="results-area hidden">
+                        <a id="dl-ronbun" class="btn-download btn-primary" href="#" target="_blank"
+                            style="font-size: 1.2rem; padding: 1.2rem;">Download RonbunNihongo (.md)</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="container">
+        <p>&copy; 2026 RonbunNihongo. 人文社会科学系のためのデジタルツール.</p>
+    </footer>
+
+    <script src="/app_ronbun.js"></script>
+</body>
+
+</html>

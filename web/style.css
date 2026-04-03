@@ -1,0 +1,346 @@
+:root {
+    --primary-color: #49BAF2;
+    /* Workflowy Sky Blue */
+    --primary-hover: #3ca3d6;
+    --accent-color: #47525B;
+    /* Workflowy Bluish Gray */
+    --bg-color: #f8fafc;
+    /* slate-50 light background */
+    --card-bg: #ffffff;
+    --text-color: #1e293b;
+    /* slate-800 */
+    --text-muted: #64748b;
+    /* slate-500 */
+    --border-color: #e2e8f0;
+    /* slate-200 */
+    --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    line-height: 1.5;
+    padding-bottom: 4rem;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+}
+
+/* Header */
+header {
+    padding: 2.5rem 0;
+    text-align: center;
+}
+
+.logo {
+    font-family: 'Outfit', sans-serif;
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: var(--accent-color);
+    letter-spacing: -0.02em;
+}
+
+.logo span {
+    color: var(--primary-color);
+}
+
+/* Main Card */
+.main-card {
+    background: var(--card-bg);
+    border-radius: 1.5rem;
+    padding: 2.5rem;
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border-color);
+}
+
+.overview {
+    text-align: center;
+    margin-bottom: 2.5rem;
+}
+
+.overview p {
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    max-width: 600px;
+    margin: 0.5rem auto 0;
+}
+
+h3 {
+    font-family: 'Outfit', sans-serif;
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+    color: var(--text-color);
+}
+
+/* Setup Items */
+.setup-grid {
+    display: grid;
+    gap: 1.5rem;
+    margin-bottom: 2.5rem;
+}
+
+.setup-item {
+    border-top: 1px solid var(--border-color);
+    padding-top: 1.5rem;
+}
+
+.setup-item:first-child {
+    border-top: none;
+    padding-top: 0;
+}
+
+/* Inputs */
+.form-group {
+    margin-bottom: 1.5rem;
+}
+
+label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: var(--text-muted);
+}
+
+.radio-group {
+    display: flex;
+    gap: 1.5rem;
+    margin-top: 0.5rem;
+    background: var(--bg-color);
+    padding: 0.75rem 1rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--border-color);
+}
+
+.radio-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 500;
+    cursor: pointer;
+    color: var(--text-color);
+    margin-bottom: 0 !important;
+}
+
+.radio-label input {
+    width: 1.2rem;
+    height: 1.2rem;
+    cursor: pointer;
+}
+
+input[type="text"],
+input[type="password"],
+textarea {
+    width: 100%;
+    background: #fff;
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    padding: 0.875rem 1rem;
+    color: var(--text-color);
+    font-family: inherit;
+    font-size: 1rem;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+input:focus,
+textarea:focus {
+    border-color: var(--primary-color);
+    outline: none;
+    box-shadow: 0 0 0 4px rgba(73, 186, 242, 0.1);
+}
+
+.api-note {
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    color: var(--text-muted);
+    background: #f1f5f9;
+    padding: 0.75rem;
+    border-radius: 0.5rem;
+}
+
+.api-note p:first-child {
+    margin-bottom: 0.5rem;
+}
+
+.api-note a {
+    color: var(--primary-color);
+    text-decoration: underline;
+    font-weight: 600;
+}
+
+.file-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg-color);
+    padding: 0.75rem 1rem;
+    border-radius: 0.75rem;
+    border: 1px dashed var(--border-color);
+}
+
+.link-download {
+    font-size: 0.85rem;
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.link-download:hover {
+    text-decoration: underline;
+}
+
+/* Button */
+.btn-submit {
+    width: 100%;
+    padding: 1rem;
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 0.75rem;
+    font-size: 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s, transform 0.1s;
+    margin-top: 1rem;
+}
+
+.btn-submit:hover {
+    background-color: var(--primary-hover);
+}
+
+.btn-submit:active {
+    transform: scale(0.99);
+}
+
+.btn-submit:disabled {
+    background-color: var(--text-muted);
+    cursor: not-allowed;
+}
+
+/* Status & Results */
+#status-container {
+    margin-top: 2rem;
+    animation: slideUp 0.4s ease-out;
+}
+
+.status-box {
+    background: var(--bg-color);
+    border-radius: 1rem;
+    padding: 1.5rem;
+    border: 1px solid var(--border-color);
+}
+
+.progress-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.progress-track {
+    width: 100%;
+    height: 6px;
+    background: #e2e8f0;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+#progress-fill {
+    height: 100%;
+    background: var(--primary-color);
+    width: 0%;
+    transition: width 0.4s ease;
+}
+
+.log-mini {
+    display: none;
+    margin-top: 1rem;
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    max-height: 100px;
+    overflow-y: auto;
+    border-top: 1px solid var(--border-color);
+    padding-top: 0.5rem;
+}
+
+.results-area {
+    margin-top: 1.5rem;
+    display: grid;
+    gap: 0.75rem;
+}
+
+.btn-download {
+    display: block;
+    text-align: center;
+    padding: 0.875rem;
+    background: #fff;
+    border: 1px solid var(--primary-color);
+    color: var(--primary-color);
+    border-radius: 0.75rem;
+    text-decoration: none;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.btn-download:hover {
+    background: var(--primary-color);
+    color: #fff;
+}
+
+.speed-note {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin-top: 1rem !important;
+    font-style: italic;
+}
+
+.server-note {
+    display: none;
+}
+
+/* Utilities */
+.hidden {
+    display: none;
+}
+
+.important-note {
+    background: #fffbeb;
+    border: 1px solid #fef3c7;
+    color: #92400e;
+    padding: 1rem;
+    border-radius: 0.75rem;
+    font-size: 0.85rem;
+    margin-bottom: 2rem;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+footer {
+    margin-top: 4rem;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}

@@ -173,8 +173,11 @@ async def run_pdf_ingestion_v3_async(
 
         # 全スライスのタスクを生成（1-2枚目, 2-3枚目...）
         tasks = []
-        for i in range(1, total_logical_pages):
-            tasks.append(_vlm_slice_job(i, images[i], images[i-1]))
+        if total_logical_pages == 1:
+            tasks.append(_vlm_slice_job(1, images[0], None))
+        else:
+            for i in range(1, total_logical_pages):
+                tasks.append(_vlm_slice_job(i, images[i], images[i-1]))
         
         if tasks:
             print_log(f"  [Ingester] {len(tasks)} 個のスライディング VLM タスクを並列実行中 (Semaphore={ocr.semaphore._value})...")

@@ -9,6 +9,16 @@ from typing import List, Dict, Any
 from ..models import RawChunk
 from ..llm_client import call_gemini, load_coreprompts
 from ..base.exceptions import MetaExtractionError
+from ..config import print_log
+
+# DNA 抽出失敗時に返すフォールバック値
+_FALLBACK_DNA: Dict[str, Any] = {
+    "title": "Unknown Title",
+    "authors": [],
+    "abstract": {"start_id": "", "end_id": "", "text_preview": ""},
+    "keywords": {"id": "", "text": ""},
+    "intro_pre_heading": {"start_id": "", "end_id": ""},
+}
 
 class MetaAnalyzer:
     """1ページ目の RawChunk 群から、文献の構造的 DNA（メタデータと主要セクションの境界）を抽出する。"""
@@ -62,9 +72,9 @@ class MetaAnalyzer:
             return dna
 
         except Exception as e:
-            if isinstance(e, MetaExtractionError):
-                raise e
-            raise RuntimeError(f"DNA extraction from LLM failed: {str(e)}")
+            # クラッシュさせず、フォールバック DNA でパイプラインを継続する
+            print_log(f"  [MetaAnalyzer] ⚠️ DNA 抽出に失敗しました。フォールバック値で続行します。(原因: {type(e).__name__}: {e})")
+            return dict(_FALLBACK_DNA)
 
     def _parse_json_response(self, response: str) -> Dict[str, Any]:
         """LLM の応答テキストから JSON オブジェクトを抽出・デコードする。"""

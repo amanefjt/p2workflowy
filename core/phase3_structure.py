@@ -9,13 +9,10 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 
 from core.models import RawChunk, TreeNode, ProcessingContext, save_tree_to_json, load_chunks_from_json
-from core.config import load_coreprompts
+from core.config import load_coreprompts, print_log
 from core.engine.p3_structure.heading_detector import HeadingDetector
 from core.engine.p3_structure.toc_manager import TOCManager
 from core.engine.p3_structure.tree_constructor import TreeConstructor
-
-def print_log(msg: str):
-    print(msg)
 
 def run_phase3(
     input_path: str | Path,

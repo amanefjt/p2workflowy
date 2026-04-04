@@ -53,8 +53,9 @@ def run_phase5(
                 if is_note:
                     notes.append(n)
                     to_remove.append(n)
-            for r in to_remove:
-                if r in nodes: nodes.remove(r)
+            # id() ベースのセットで判定: text が同じ複数ノードの誤削除を防ぐ
+            to_remove_ids = set(id(n) for n in to_remove)
+            nodes[:] = [n for n in nodes if id(n) not in to_remove_ids]
         
         _process(tree)
         if notes:
@@ -84,6 +85,8 @@ def run_phase5(
     output_paths = []
 
     # Paper Mode (Stage 1) のみの処理とする (Book 統合は StateIntegrator が担当)
+    # NOTE: Book Mode も含め、すべての章を Paper Mode（論文形式）として処理する。
+    # Book 全体の統合は StateIntegrator が別途担当する（意図的な統一処理アーキテクチャ）。
     if True:
         # Paper Mode: 論文形式
         if export_mode == "p2workflowy":
@@ -123,19 +126,18 @@ def run_phase5(
                 md_content = "\n".join(md_parts)
                 
             # 4. Workflowy 構成
-            if export_mode == "p2workflowy":
-                wf_parts = [f"{title}"]
-                # レジュメ（空でない場合のみ追加）
-                if resume_content and resume_content.strip() not in ["", "Simple Mode", "...", "None"]:
-                    wf_parts.append("- レジュメ")
-                    wf_parts.append(wf_engine.render_resume(resume_content, base_depth=1))
-                
-                wf_parts.append("- English text")
-                wf_parts.append(wf_engine.render(english_tree, current_depth=1))
-                wf_parts.append("- 日本語本文")
-                wf_parts.append(wf_engine.render(japanese_tree, current_depth=0))
-
-                wf_content = "\n".join(wf_parts)
+            wf_parts = [f"{title}"]
+            # レジュメ（空でない場合のみ追加）
+            if resume_content and resume_content.strip() not in ["", "Simple Mode", "...", "None"]:
+                wf_parts.append("- レジュメ")
+                wf_parts.append(wf_engine.render_resume(resume_content, base_depth=1))
+            
+            wf_parts.append("- English text")
+            wf_parts.append(wf_engine.render(english_tree, current_depth=1))
+            wf_parts.append("- 日本語本文")
+            wf_parts.append(wf_engine.render(japanese_tree, current_depth=0))
+            
+            wf_content = "\n".join(wf_parts)
         elif export_mode == "ronbunnihongo":
             md_content = f"# {title}\n\n" + md_engine.render(japanese_tree, current_base=2)
 

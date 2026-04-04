@@ -30,7 +30,9 @@ class RawChunk:
 
     @classmethod
     def from_dict(cls, data: dict) -> "RawChunk":
-        return cls(**data)
+        # 未知のキーをフィルタリング: フィールド追加後に古い JSON を --resume で読んでも TypeError にならない
+        valid_keys = cls.__dataclass_fields__.keys()
+        return cls(**{k: v for k, v in data.items() if k in valid_keys})
 
 
 @dataclass
@@ -75,9 +77,11 @@ class TreeNode:
 
     @classmethod
     def from_dict(cls, data: dict) -> "TreeNode":
-        children_data = data.pop("children", [])
+        children_data = data.get("children", [])  # get() で元の辞書を破壊しない
         children = [cls.from_dict(c) for c in children_data]
-        return cls(children=children, **data)
+        valid_keys = cls.__dataclass_fields__.keys()
+        node_data = {k: v for k, v in data.items() if k != "children" and k in valid_keys}
+        return cls(children=children, **node_data)
 
 
 @dataclass
@@ -107,7 +111,8 @@ class ProcessingContext:
 
     @classmethod
     def from_dict(cls, data: dict) -> "ProcessingContext":
-        return cls(**data)
+        valid_keys = cls.__dataclass_fields__.keys()
+        return cls(**{k: v for k, v in data.items() if k in valid_keys})
 
 
 # --- JSON シリアライズ/デシリアライズ ヘルパー ---

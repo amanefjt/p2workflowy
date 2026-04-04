@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from .config import SessionState, print_log
 from .pdf_splitter import PDFSplitter
 from .engine.p3_structure.state_integrator import StateIntegrator
-from .llm_client import call_gemini, get_default_model, load_coreprompts
+from .llm_client import call_gemini, get_default_model, load_coreprompts, GeminiTier, apply_tier_settings
 
 class BookManager:
     """書籍全体のライフサイクル（全体解析 -> 分割 -> 処理 -> 統合）を管理する。"""
@@ -17,7 +17,7 @@ class BookManager:
     def __init__(self, input_path: str, api_key: str, model: Optional[str] = None):
         self.input_path = Path(input_path)
         self.api_key = api_key
-        self.model = model or get_default_model("default")
+        self.model = model # 解決は後で行う (get_default_model のために tier 確定を待つ)
         self.book_title = self.input_path.stem
         
         # 物理データ主権: PDFの中身に応じた一意なハッシュを生成
@@ -39,7 +39,8 @@ class BookManager:
                 return hashlib.md5(chunk).hexdigest()[:12]
         except Exception as e:
             print_log(f"  [BookManager] Fingerprint calculation failed: {e}")
-            return "unknown"
+            import uuid
+            return f"fallback_{uuid.uuid4().hex[:8]}"
 
     def _generate_global_context(self):
         """PDF 全編をスキャンし、書籍全体のレジュメと用語集を事前生成する。"""
@@ -97,6 +98,11 @@ class BookManager:
         
         # 0. 診断とグローバルコンテキストの判定（スキップ機能）
         from .pdf_ingester import diagnose_pdf_quality
+        
+        # ティア状態の初期化（get_default_model を呼ぶ前に必要）
+        tier = pipeline_kwargs.get("tier", "paid")
+        apply_tier_settings(tier)
+        
         can_use_full_scan = diagnose_pdf_quality(str(self.input_path))
         
         global_context_path = self.session_dir / "global_context.json"
@@ -145,13 +151,18 @@ class BookManager:
         chapter_sessions = []
         target_chapters = chapters[:max_chapters] if max_chapters else chapters
 
-        # BookManager が制御する引数は pipeline_kwargs から除去し、重複エラーを防ぐ
+        # BookManager が制御する引数は pipeline_kwargs から抽出して重複エラーを防ぐ
         max_pages = pipeline_kwargs.get("max_pages")
         heavy_ocr = pipeline_kwargs.get("heavy_ocr", False)
+        thinking_level = pipeline_kwargs.get("thinking_level", "High")
+        tier = pipeline_kwargs.get("tier", "paid")
+        resume_only = pipeline_kwargs.get("resume_only", False)
+        structure_only = pipeline_kwargs.get("structure_only", False)
+        resume_from = pipeline_kwargs.get("resume_from", None)
         
         explicit_keys = [
             "glossary_path", "pdf_mode", "thinking_level", "tier", 
-            "heavy_ocr", "max_pages", "resume_only", "structure_only", "api_key", "model"
+            "heavy_ocr", "max_pages", "resume_only", "structure_only", "api_key", "model", "resume_from"
         ]
         for key in explicit_keys:
             pipeline_kwargs.pop(key, None)
@@ -185,6 +196,9 @@ class BookManager:
                     structure_only=structure_only,
                     max_pages=max_pages,
                     heavy_ocr=heavy_ocr,
+                    thinking_level=thinking_level,
+                    tier=tier,
+                    resume_from=resume_from,
                     **pipeline_kwargs
                 )
                 

@@ -162,19 +162,30 @@ class StateIntegrator:
             # Chapter session から出力ファイルのパスを推定/特定
             # Phase 5 で出力される [Title]_p2.md / [Title]_p2.txt を探す
             # run_phase5 は input_path.parent に書き出すため、章PDFの隣にあるはず
-            ch_path = Path(sess["state_path"]).parent # session_id ディレクトリ
+            ch_path = Path(sess["state_path"])
             # 実際には SessionState のディレクトリ構造に依存
             from core.config import SessionState
             ch_session_id = ch_path.name
             st = SessionState(session_id=ch_session_id)
             
-            # Phase 5 の出力先は BookManager では state/book_sessions/[Book]/chapters/ になる
-            # かつファイル名は [Title]_p2.md
+            # Phase 5 の出力先は BookManager では session_dir / chapters/ になる
+            # かつ is_book=True の場合、[SafeTitle]_export/ というサブディレクトリが作成される
             safe_ch_title = re.sub(r'[\\/*?:"<>|]', "_", title)
-            ch_dir = Path("state/book_sessions") / self.book_title / "chapters"
             
-            md_file = ch_dir / f"{safe_ch_title}_p2.md"
-            wf_file = ch_dir / f"{safe_ch_title}_p2.txt"
+            if self.session_dir:
+                ch_dir = self.session_dir / "chapters"
+            else:
+                ch_dir = Path("state/book_sessions") / self.book_title / "chapters"
+            
+            # 章出力の探索（サブディレクトリ版を優先、直下をフォールバック）
+            export_dir = ch_dir / f"{safe_ch_title}_export"
+            md_file = export_dir / f"{safe_ch_title}_p2.md"
+            wf_file = export_dir / f"{safe_ch_title}_p2.txt"
+            
+            if not md_file.exists():
+                md_file = ch_dir / f"{safe_ch_title}_p2.md"
+            if not wf_file.exists():
+                wf_file = ch_dir / f"{safe_ch_title}_p2.txt"
             
             if md_file.exists():
                 md_chapters.append((title, md_file))

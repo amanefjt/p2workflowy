@@ -176,7 +176,9 @@ def main():
                 tier="free" if (args.free or args.lite) else "paid",
                 heavy_ocr=args.heavy_ocr,
                 max_pages=args.max_pages,
-                resume_only=args.resume_only
+                resume_only=args.resume_only,
+                structure_only=args.structure_only,
+                resume_from=args.resume
             )
         except Exception as e:
             print(f"書籍処理中にエラー発生: {e}")

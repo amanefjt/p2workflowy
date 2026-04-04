@@ -4,6 +4,7 @@ import fitz
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from core.models import RawChunk, ProcessingContext
+from core.config import print_log
 
 class TOCManager:
     """
@@ -29,15 +30,18 @@ class TOCManager:
                 h = re.sub(r'^[\d\.I\-\·]+\s+', '', L).strip()
                 if h and len(h) < 100: headings.append(h)
                 continue
-            if L and L[0].isupper() and len(L) < 80 and not L.endswith((".", ":", ";")):
-                headings.append(L)
+            # 番号付き見出しの抽出（例: 1. Introduction, II. Background）
+            m = re.match(r'^[\dIVX]+\.\s+(.+)$', L)
+            if m:
+                h = m.group(1).strip()
+                if h and len(h) < 100: headings.append(h)
         return headings
 
     def get_toc(self, state: Any, input_path: Path, chunks: List[RawChunk], is_book: bool = True) -> Dict[str, Any]:
         """
         TOCを抽出またはキャッシュからロード。
         """
-        toc_cache_path = state.session_dir / "phase3_toc.json"
+        toc_cache_path = state.session_dir / "phase3_toc.json" if state else input_path.parent / "phase3_toc.json"
         
         # 1. キャッシュの確認
         if toc_cache_path.exists():
@@ -94,10 +98,16 @@ class TOCManager:
         )
 
         try:
-            clean = re.sub(r"```(?:json)?\s*|\s*```", "", response).strip()
-            data = json.loads(clean)
+            clean = re.sub(r"```(?:json)?|```", "", response).strip()
+            # LLMが説明文や追記を割り込む場合があるため、
+            # 最初の JSON オブジェクト ({...}) のみを抽出する（meta_analyzer と同じパターン）
+            json_match = re.search(r"\{.*\}", clean, re.DOTALL)
+            if not json_match:
+                raise ValueError(f"JSONオブジェクトが見つかりませんでした: {clean[:100]}...")
+            data = json.loads(json_match.group(0))
             return {"toc": data.get("toc", []), "body_start_page": data.get("body_start_page", 1)}
-        except Exception:
+        except Exception as e:
+            print_log(f"  [TOCManager] ⚠️ TOC JSONパース失敗。空の TOC で続行します。 ({e})")
             return {"toc": [], "body_start_page": 1}
 
     def _extract_toc_via_llm_chunks(self, chunks: List[RawChunk]) -> List[str]:
@@ -117,8 +127,13 @@ class TOCManager:
             response_mime_type="application/json"
         )
         try:
-            clean = re.sub(r"```(?:json)?\s*|\s*```", "", response_str).strip()
-            data = json.loads(clean)
-            return data.get("toc", [])
-        except Exception:
+            clean = re.sub(r"```(?:json)?|```", "", response_str).strip()
+            # JSON 配列 [...] を抽出する（説明文が割り込まれていても安全）
+            json_match = re.search(r"\[.*\]", clean, re.DOTALL)
+            if not json_match:
+                raise ValueError(f"JSON配列が見つかりませんでした: {clean[:100]}...")
+            data = json.loads(json_match.group(0))
+            return data
+        except Exception as e:
+            print_log(f"  [TOCManager] ⚠️ チャンク TOC JSONパース失敗。 ({e})")
             return []

@@ -27,12 +27,11 @@ state/
 # ローカルでのバックアップや古いコードの退避先
 archive/
 
-# 各種データファイル（論文、アップロード、テスト実行結果など）
-data/sample/
-data/Booksample/
-data/uploads/
-data/test_batch/
-data/*.pdf
+# 各種データファイル（個人データ・著作権物を含むため、原則すべて除外）
+data/*
+!data/*.example
+!data/*.md
+!data/.gitkeep
 
 # ルート直下の生成された成果物（もし存在する場合）
 *_p2.md

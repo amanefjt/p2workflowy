@@ -40,6 +40,9 @@ def run_pipeline(
     simple_mode: bool = False,
 ) -> List[Path]:
     """パイプライン全体を実行する。"""
+    from .llm_client import tier_manager, GeminiTier
+    tier_manager.set_tier(GeminiTier.FREE if tier == "free" else GeminiTier.PAID)
+
     if simple_mode:
         print_log(f"  [Pipeline] Simple Mode Enabled for: {title}")
 

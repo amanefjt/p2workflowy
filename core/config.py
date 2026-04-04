@@ -1,5 +1,7 @@
 import os
 import json
+import csv
+import functools
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -24,8 +26,13 @@ APP_ADMIN_PASSCODE = os.environ.get("APP_ADMIN_PASSCODE")
 if not GEMINI_API_KEY:
     print("Warning: Neither GEMINI_API_KEY nor GOOGLE_API_KEY is set in environment variables.")
 
+@functools.lru_cache(maxsize=1)
 def load_coreprompts() -> Dict[str, str]:
-    """core/coreprompts.json から全てのプロンプトテンプレートを読み込む。"""
+    """core/coreprompts.json から全てのプロンプトテンプレートを読み込む。
+    
+    NOTE: @lru_cache により初回のみ JSON を読み込み、以降はメモリから返す。
+    coreprompts.json を変更した場合はプロセスの再起動が必要。
+    """
     prompts_path = PROJECT_ROOT / "core" / "coreprompts.json"
     if prompts_path.exists():
         with open(prompts_path, "r", encoding="utf-8") as f:
@@ -46,7 +53,7 @@ def print_log(msg: str):
 class SessionState:
     """パイプラインの実行状態（中間データ、メタデータ）を管理するクラス。"""
     
-    MAX_STATE_SESSIONS = 300
+    MAX_STATE_SESSIONS = 10
 
     def __init__(self, session_id: str = None, base_dir: Path = None, mode: str = "paper"):
         if session_id is None:
@@ -113,10 +120,12 @@ class SessionState:
                 except Exception as e:
                     print_log(f"  [Cleanup] 削除失敗 {d}: {e}")
 
-import csv
-
 def load_glossary_csv(path: str | Path | None = None) -> dict:
-    """glossary.csv を読み込んで辞書形式で返す。"""
+    """glossary.csv を読み込んで辞書形式で返す。
+    
+    形式: 1列目=英語, 2列目=日本語 （ヘッダー行は自動スキップ）
+    ヘッダー判定: 1行目の1列目が小文字化して既知のヘッダーキーワードと一致する場合スキップ。
+    """
     if path is None:
         path = PROJECT_ROOT / "data" / "glossary.csv"
     
@@ -124,10 +133,20 @@ def load_glossary_csv(path: str | Path | None = None) -> dict:
     if not path.exists():
         return {}
 
+    # ヘッダー行として認識する1列目の値（大文字小文字不問）
+    _HEADER_KEYWORDS = {"en", "english", "englishterm", "word", "term", "source", "original"}
+
     glossary = {}
     with open(path, "r", encoding="utf-8") as f:
         reader = csv.reader(f)
-        for row in reader:
-            if len(row) >= 2:
-                glossary[row[0].strip()] = row[1].strip()
+        for i, row in enumerate(reader):
+            if len(row) < 2:
+                continue
+            # 1行目がヘッダーキーワードと一致する場合はスキップ
+            if i == 0 and row[0].strip().lower() in _HEADER_KEYWORDS:
+                continue
+            key = row[0].strip()
+            val = row[1].strip()
+            if key:  # 空キーは除外
+                glossary[key] = val
     return glossary

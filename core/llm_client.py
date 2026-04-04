@@ -110,9 +110,6 @@ def run_async(coro):
                 nest_asyncio.apply()
                 return asyncio.run(coro)
             except ImportError:
-                # nest_asyncio がなければ既存ループの run_until_complete (実質的に困難な場合が多いが) 
-                # または、新しいスレッドで実行する等の高度な処理が必要
-                # ここでは簡易的に現在のループで試行
                 return loop.run_until_complete(coro)
     except RuntimeError:
         # ループが走っていない通常環境
@@ -320,7 +317,7 @@ async def call_gemini_async(
     last_error = None
     for attempt in range(1, max_retries + 1):
         try:
-            # モデルと Config の動적決定 (モデル未指定の場合のみリトライごとに再評価)
+            # モデルと Config の動力決定 (モデル未指定の場合のみリトライごとに再評価)
             current_model = model
             if use_default_model:
                 current_model = get_default_model()
@@ -399,6 +396,7 @@ async def call_gemini_async(
 
     raise RuntimeError(f"Gemini API 非同期呼び出し失敗: {last_error}")
 
+
 # --- 高レベル API ラッパー ---
 
 async def translate_batch(
@@ -413,93 +411,113 @@ async def translate_batch(
     model: str | None = None,
     thinking_level: str = "High",
     state: Any = None,
-    rate_limiter: AsyncLimiter = None, # セマフォ削除、レートリミッターのみ
+    rate_limiter: AsyncLimiter = None,
     context_guide: str = "",
-    log_dir: Optional[Any] = None
+    log_dir: Optional[Any] = None,
+    max_parse_retries: int = 2,
 ) -> List["TreeNode"]:
-    """チャンク群を一つのバッチとして翻訳する。"""
+    """チャンク群を XML タグ形式で翻訳し、パース失敗時は再試行する。"""
     from .models import TreeNode
-    
-    # チャンクをテキストに結合 (あるいは JSON 形式)
+
+    # 対象 ID セット（パース時の高速フィルタ用）
+    known_ids = {str(c['id']) for c in chunks}
+
+    def _parse_response(response: str) -> dict:
+        """
+        レスポンスから <p2w_chunk_ID> タグを一括抽出する（O(N) 一括パース）。
+
+        戦略:
+          Step A: 開始タグ → 次の開始タグ or 末尾 まで非欲張りマッチ
+          Step B: 閉じタグが含まれていれば除去して内容を確定
+          Step C: 3000文字超は末尾の誤取込み（閉じタグ欠落による複数チャンク混入）と見なし切り捨て
+        """
+        id_map = {}
+        for m in re.finditer(
+            r"<p2w_chunk_(\w+)>(.*?)(?=<p2w_chunk_\w+>|\Z)",
+            response, re.DOTALL | re.IGNORECASE
+        ):
+            tag_id = m.group(1)
+            if tag_id not in known_ids:
+                continue
+            content = m.group(2)
+            # 閉じタグがあれば除去（その後の余分なテキストも含めて）
+            content = re.sub(
+                rf"</p2w_chunk_{re.escape(tag_id)}>.*\Z", "",
+                content, flags=re.DOTALL | re.IGNORECASE
+            ).strip()
+            if not content:
+                continue
+            # Safety: 3000 文字超は閉じタグ欠落による複数チャンク誤取込みの可能性
+            if len(content) > 3000:
+                # 次の開始タグ手前で強制切断を試みる
+                cut = re.split(r"<p2w_chunk_\w+>", content, maxsplit=1)
+                content = cut[0].strip()
+                print_log(f"  [LLM] ⚠️ chunk_{tag_id}: 抽出内容が3000文字超のため末尾を切り捨てました。")
+                if not content:
+                    continue
+            id_map[tag_id] = content
+        return id_map
+
+    # 1. チャンクを XML タグ形式でパッケージング
     combined_text = ""
     for c in chunks:
-        combined_text += f"<chunk_{c['id']}>\n{c['text']}\n</chunk_{c['id']}>\n\n"
+        combined_text += f"<p2w_chunk_{c['id']}>\n{c['text']}\n</p2w_chunk_{c['id']}>\n\n"
 
-    # プロンプトテンプレート内のプレースホルダーに合わせてフォーマット
-    # coreprompts.json の TRANSLATION_PROMPT は {expertise}, {context_guide}, {resume_content}, {glossary_content}, {chunk_json} を持つ
-    prompt = prompt_template.format(
+    # 2. プロンプト構築
+    base_prompt = prompt_template.format(
         expertise=expertise,
         context_guide=context_guide,
         glossary_content=glossary_content or "なし",
         resume_content=resume_content or "なし",
         previous_translation=previous_translation or "なし",
-        chunk_json=combined_text  # coreprompts.json のプレースホルダー名に合わせる
+        chunk_json=combined_text
     )
 
-    async with rate_limiter:
-        metrics_meta = {"section": section_name, "batch_id": "batch_" + str(chunks[0]['id']) if chunks else "unknown"}
-        response = await call_gemini_async(
-            prompt, model=model, api_key=api_key, thinking_level=thinking_level,
-            metrics_metadata=metrics_meta, log_dir=log_dir
-        )
-
-    # 2. レスポンスのパース (ログ解析に基づいた修正実装)
-    results = []
-    import re
-    import json
-
-    # --- ステップA: JSON解析とキー正規化 ---
     id_map = {}
-    json_match = re.search(r"\[\s*\{.*\}\s*\]", response, re.DOTALL)
-    if json_match:
-        try:
-            clean_json = re.sub(r"```json|```", "", json_match.group(0)).strip()
-            json_data = json.loads(clean_json)
-            for item in json_data:
-                raw_id = str(item.get("id", item.get("chunk_id", "")))
-                clean_id = raw_id.removeprefix("chunk_") # キーの正規化
-                val = item.get("trans", item.get("text", item.get("translation", "")))
-                if clean_id and val:
-                    id_map[clean_id] = val
-            if id_map:
-                print_log(f"  [LLM] JSON形式({len(id_map)}件)を正常にパースしました。")
-        except Exception:
-            pass # JSONが壊れている場合は後続の処理へ
+    for attempt in range(max_parse_retries + 1):
+        current_prompt = base_prompt
+        if attempt > 0:
+            # リトライ時: 欠落しているタグを明示してLLMに再挑戦させる
+            missing_ids = [str(c['id']) for c in chunks if str(c['id']) not in id_map]
+            missing_tags = ", ".join(f"<p2w_chunk_{i}>" for i in missing_ids)
+            current_prompt += (
+                f"\n\n(IMPORTANT) 前回の回答では以下のタグが正しく出力されませんでした: {missing_tags}\n"
+                "今回は必ずすべての <p2w_chunk_ID> ... </p2w_chunk_ID> タグを完全な形で出力してください。"
+            )
 
+        async with rate_limiter:
+            batch_id = "batch_" + str(chunks[0]['id']) if chunks else "unknown"
+            metrics_meta = {"section": section_name, "batch_id": batch_id}
+            response = await call_gemini_async(
+                current_prompt, model=model, api_key=api_key, thinking_level=thinking_level,
+                metrics_metadata=metrics_meta, log_dir=log_dir
+            )
+
+        # 3. 一括パース
+        id_map = _parse_response(response)
+
+        missing_ids = [str(c['id']) for c in chunks if str(c['id']) not in id_map]
+        if not missing_ids:
+            print_log(f"  [LLM] バッチ翻訳成功: {len(id_map)}件すべてのタグを正常に抽出しました。")
+            break
+        else:
+            if attempt < max_parse_retries:
+                print_log(f"  [LLM] パース失敗 (欠落: {missing_ids})。再試行します ({attempt + 1}/{max_parse_retries})...")
+                await asyncio.sleep(2.0)
+            else:
+                print_log(f"  [LLM] !!! 最大リトライ回数到達。欠落したまま継続します: {missing_ids} !!!")
+
+    # 4. 結果の構築
+    results = []
     for c in chunks:
         cid = str(c['id'])
-        text = None
-
-        # 1. 正常なJSONマップから取得
-        if cid in id_map:
-            text = id_map[cid]
-        
-        # 2. タグ形式、あるいは壊れた閉じタグからの救出 (先読み正規表現)
+        text = id_map.get(cid)
         if not text:
-            # <(?:chunk[ _-]*)?{cid}> : <chunk_123>, <chunk 123>, <chunk-123>, <123> すべてに対応
-            pattern = rf"<(?:chunk[ _-]*)?{cid}>(.*?)(?=</(?:chunk[ _-]*)?{cid}>|<(?:chunk[ _-]*)?\d+>|}}\s*,|]\s*```|$)"
-            match = re.search(pattern, response, re.DOTALL | re.IGNORECASE)
-            if match:
-                text = match.group(1).strip()
-
-        # 3. 出力打ち切り対策：開始タグはあるが閉じタグがない場合、末尾まで全取得
-        if not text:
-            pattern_unclosed = rf"<(?:chunk_)?{cid}>\s*(.*)"
-            match = re.search(pattern_unclosed, response, re.DOTALL | re.IGNORECASE)
-            if match:
-                extracted = match.group(1).strip()
-                # 誤って次のチャンクの内容まで取り込まないよう長さ制限 (約1000文字程度を想定)
-                if len(extracted) < 3000:
-                    text = extracted
-
-        # 最終判定
-        if not text:
-            print_log(f"  [LLM] !!! パース完全失敗 chunk_id={cid} !!!")
             text = f"【翻訳失敗】 {c['text']}"
-            
         results.append(TreeNode(id=cid, text=text, role="p", seq_index=c.get("seq_index", 0.0)))
-    
+
     return results
+
 
 async def generate_section_resume(
     section_name: str,
@@ -524,8 +542,8 @@ async def generate_section_resume(
 
 1. 【要約】: この章の核心的な議論を300字程度で簡潔にまとめてください。
 2. 【詳細な論理展開】: この章の内部構造（節見出しに相当する議論の区切り）を抽出し、以下の形式で列挙してください。
-   - ##見出し1
-   - ##見出し2
+   - # [見出し1]
+   - # [見出し2]
    ...
 
 ---
@@ -553,24 +571,37 @@ async def generate_section_resume(
 _CACHED_LIMITERS = {}
 _LIMITER_LOCK = threading.Lock()
 
-def apply_tier_settings(tier: GeminiTier) -> Tuple[AsyncLimiter, asyncio.Semaphore, dict]:
-    """ティアに応じたレート制限とセマフォを返す（キャッシュ版）。"""
+def apply_tier_settings(tier: str | GeminiTier) -> Tuple[AsyncLimiter, asyncio.Semaphore, dict]:
+    """
+    ティアに応じたレートリミッター・セマフォ・設定を返す。
+    ティアの文字列表記を受け入れ、tier_manager のグローバル状態を更新する。
+    """
     global _CACHED_LIMITERS
-    
+
+    if isinstance(tier, str):
+        try:
+            tier = GeminiTier(tier.lower())
+        except ValueError:
+            print_log(f"  [LLM] 警告: 未知のティア '{tier}'。PAID を使用します。")
+            tier = GeminiTier.PAID
+
+    # グローバルなティア状態を更新
+    tier_manager.set_tier(tier)
+
     with _LIMITER_LOCK:
-        if tier in _CACHED_LIMITERS:
-            return _CACHED_LIMITERS[tier]
-            
         if tier == GeminiTier.FREE:
-            # 無料枠: 秒間制限が厳しいため、1並列、低速
-            rate_limiter = AsyncLimiter(1, 4.0) # 1 request per 4 seconds
-            semaphore = asyncio.Semaphore(1)
-            settings = {"max_batch_chunks": 3, "max_batch_chars": 3000}
+            settings = {"max_batch_chunks": 5, "max_batch_chars": 6000}
+            semaphore_size = 1
+            if tier not in _CACHED_LIMITERS:
+                _CACHED_LIMITERS[tier] = AsyncLimiter(1, 4.0)  # 1 request per 4 seconds
         else:
-            # 有料枠: 15並列程度
-            rate_limiter = AsyncLimiter(100, 60.0) # 100 requests per minute
-            semaphore = asyncio.Semaphore(15)
             settings = {"max_batch_chunks": 10, "max_batch_chars": 11000}
-            
-        _CACHED_LIMITERS[tier] = (rate_limiter, semaphore, settings)
-        return _CACHED_LIMITERS[tier]
+            semaphore_size = 2
+            if tier not in _CACHED_LIMITERS:
+                _CACHED_LIMITERS[tier] = AsyncLimiter(100, 60.0)  # 100 requests per minute
+
+        rate_limiter = _CACHED_LIMITERS[tier]
+        # Semaphore は毎回新規作成（イベントループ依存のためキャッシュ不可）
+        semaphore = asyncio.Semaphore(semaphore_size)
+
+    return rate_limiter, semaphore, settings

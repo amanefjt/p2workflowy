@@ -136,7 +136,7 @@ def extract_keywords(text: str, api_key: str | None = None, expertise: str = "�
             keywords = []
     except json.JSONDecodeError as e:
         print_log(f"  [Phase 2] 警告: キーワード JSON パースエラー: {e}")
-        # JSON ブロックを抽出する試み
+        # JSON 配列 [...] を抽出する試み（re.DOTALL で改行を含む複数行 JSON に対応）
         import re
         json_match = re.search(r'\[.*\]', response, re.DOTALL)
         if json_match:
@@ -218,15 +218,19 @@ def run_phase2_v3(
         raise FileNotFoundError(f"Phase 1 の出力が空または見つかりません: {phase1_state_path}")
 
     # 2. DNA 抽出 (1ページ目の物理チャンクを使用)
-    page1_chunks = [c for c in chunks if getattr(c, 'page_idx', 0) == 0]
+    page1_chunks = [c for c in chunks if getattr(c, 'page_idx', 0) <= 1]
     if not page1_chunks:
         # ページインデックスがない場合は冒頭の数個のチャンクを代用
         page1_chunks = chunks[:20]
         
     print_log(f"  [Phase 2 V3] DNA 抽出中 (Page 1 チャンク数: {len(page1_chunks)})...")
-    analyzer = MetaAnalyzer()
-    dna = analyzer.analyze_dna(page1_chunks)
-    print_log(f"  [Phase 2 V3] DNA 抽出完了: Title='{dna.get('title', 'N/A')}'")
+    try:
+        analyzer = MetaAnalyzer()
+        dna = analyzer.analyze_dna(page1_chunks)
+        print_log(f"  [Phase 2 V3] DNA 抽出完了: Title='{dna.get('title', 'N/A')}'")
+    except Exception as e:
+        print_log(f"  [Phase 2 V3] ⚠️ DNA 抽出がエラーで終了しました。パイプラインは空の DNA で続行します。 ({e})")
+        dna = {"title": "Unknown Title", "authors": [], "abstract": {}, "keywords": {}, "intro_pre_heading": {}}
 
     # 3. テキストサンプリング & レジュメ生成
     full_text = "\n\n".join(c.text for c in chunks)

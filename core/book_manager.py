@@ -202,17 +202,17 @@ class BookManager:
                     **pipeline_kwargs
                 )
                 
-                # 取得した物理ファイル（_p2.txt, _p2.md）を記録
+                # run_pipeline() が返した物理ファイルパスをそのまま記録
                 chapter_sessions.append({
                     "title": ch_title,
-                    "state_path": ch_state.path
+                    "output_paths": [str(p) for p in processed_paths],
                 })
 
             except Exception as e:
                 print_log(f"  [Error] Chapter {ch_title} failed: {e}")
                 chapter_sessions.append({
                     "title": ch_title,
-                    "output_paths": []
+                    "output_paths": [],
                 })
 
         # 3. 統合

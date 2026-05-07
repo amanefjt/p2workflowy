@@ -1,11 +1,9 @@
 """
-p2workflowy V2 Phase 1: Ingest & Preprocess (Golden Rewrite Edition)
-物理データ主権に基づいた整形 (V3) と、従来のクレンジングユーティリティ。
+p2workflowy Phase 1: Ingest & Preprocess
+PDF（VLM/物理）とプレーンテキストの両入力に対応する統合前処理エンジン。
 """
 
 import re
-import csv
-import statistics
 from pathlib import Path
 from typing import List, Any, Optional
 
@@ -41,7 +39,6 @@ def filter_paragraphs(paragraphs: List[str]) -> List[str]:
         p_strip = p.strip()
         if not p_strip:
             continue
-        # 数字のみ（ページ番号等）は除外
         if re.match(r"^\d+$", p_strip):
             continue
         filtered.append(p_strip)
@@ -51,13 +48,10 @@ def filter_paragraphs(paragraphs: List[str]) -> List[str]:
 _LONG_WORD_RE = re.compile(r"\b[A-Za-z]{15,}\b")
 
 def glossary_aware_word_split(text: str, glossary_keys: List[str]) -> str:
-    """
-    用語集の単語を保護しつつ、長い癒着単語（WordNinjaが必要なもの）を分割する。
-    """
+    """用語集の単語を保護しつつ、長い癒着単語を wordninja で分割する。"""
     if not text:
         return ""
 
-    # ステップ 1: 用語集の単語を一時的にプレースホルダーに置換
     placeholders = {}
     sorted_keys = sorted(glossary_keys, key=len, reverse=True)
 
@@ -67,7 +61,6 @@ def glossary_aware_word_split(text: str, glossary_keys: List[str]) -> str:
             text = text.replace(key, placeholder)
             placeholders[placeholder] = key
 
-    # ステップ 2: 癒着単語を wordninja で分割
     def _split_long_word(match: re.Match) -> str:
         word = match.group(0)
         if "__GLOS" in word:
@@ -79,7 +72,6 @@ def glossary_aware_word_split(text: str, glossary_keys: List[str]) -> str:
 
     text = _LONG_WORD_RE.sub(_split_long_word, text)
 
-    # ステップ 3: 復元
     for placeholder, original in placeholders.items():
         text = text.replace(placeholder, original)
 
@@ -87,10 +79,46 @@ def glossary_aware_word_split(text: str, glossary_keys: List[str]) -> str:
 
 
 # ============================================================
-# メイン実行関数 (V3 & V2)
+# 統合エントリーポイント
 # ============================================================
 
-def run_phase1_v3(
+def run_phase1_unified(
+    input_path: str,
+    state_path: str | Path,
+    api_key: str | None = None,
+    save_state: bool = True,
+    state: "Any" = None,
+    pdf_mode: str = "hybrid",
+    model: str | None = None,
+    is_book: bool = False,
+    heavy_ocr: bool = False,
+    max_pages: Optional[int] = None,
+) -> List[RawChunk]:
+    """
+    Phase 1 統合エントリーポイント: .pdf なら PDF ルート、それ以外はテキストルートに振り分ける。
+    両ルートとも role 付き RawChunk[] を出力するという契約を守る。
+    """
+    is_text = not str(input_path).lower().endswith(".pdf")
+
+    if is_text:
+        return _run_phase1_text(
+            input_path, state_path,
+            api_key=api_key, state=state, save_state=save_state, model=model,
+        )
+    else:
+        return _run_phase1_pdf(
+            input_path, state_path,
+            api_key=api_key, state=state, save_state=save_state,
+            pdf_mode=pdf_mode, model=model,
+            is_book=is_book, heavy_ocr=heavy_ocr, max_pages=max_pages,
+        )
+
+
+# ============================================================
+# PDF ルート
+# ============================================================
+
+def _run_phase1_pdf(
     pdf_path: str,
     state_path: str | Path,
     api_key: str | None = None,
@@ -100,69 +128,97 @@ def run_phase1_v3(
     model: str | None = None,
     is_book: bool = False,
     heavy_ocr: bool = False,
-    max_pages: Optional[int] = None, # 追加
+    max_pages: Optional[int] = None,
 ) -> List[RawChunk]:
-    """
-    Phase 1 V3 (Golden Rewrite): PDF から物理情報を抽出し、Formatter を用いて段落を復元する。
-    """
-    print_log(f"--- Phase 1 V3: Preprocessor (Physical Sovereignty) ---")
-    
-    # 1. PDF 読み込み & 物理要素抽出
+    """PDF から物理情報 or VLM ルートで RawChunk を生成する。"""
+    print_log(f"--- Phase 1 [PDF]: Preprocessor ---")
+
     elements = run_pdf_ingestion_v3(
-        pdf_path, api_key=api_key, state=state, 
-        pdf_mode=pdf_mode, model=model, 
+        pdf_path, api_key=api_key, state=state,
+        pdf_mode=pdf_mode, model=model,
         is_book=is_book, heavy_ocr=heavy_ocr,
-        max_pages=max_pages # 追加
+        max_pages=max_pages,
     )
-    
-    # 2. チャンク化 (VLM-First Logic or Physical-Smart-Unwrap)
+
     if elements and elements[0].get("role") == "vlm_page_source":
-        # VLM 論理抽出ルート
         chunks = Formatter.logical_split(elements)
-        print_log(f"  [Phase 1 V3] VLM 論理ブロックから {len(chunks)} チャンクを生成しました。")
+        print_log(f"  [Phase 1 PDF] VLM ルート: {len(chunks)} チャンクを生成。")
     else:
-        # 物理段落結合ルート (Legacy/Book Mode Hybrid)
         chunks = Formatter.smart_unwrap(elements)
-        print_log(f"  [Phase 1 V3] 物理抽出により {len(chunks)} チャンクを生成しました。")
-    
-    # 3. ノイズ除去・フィルタリング
-    # (将来的に Formatter に統合するが、一旦既存の簡易フィルタを通す)
+        print_log(f"  [Phase 1 PDF] 物理ルート: {len(chunks)} チャンクを生成。")
+
     for c in chunks:
         c.text = c.text.strip()
-    
-    # State 保存
+
     if save_state:
         save_chunks_to_json(chunks, str(state_path))
-        print_log(f"  [Phase 1 V3] State 保存: {state_path}")
+        print_log(f"  [Phase 1 PDF] State 保存: {state_path}")
 
     return chunks
 
 
-def run_phase1(
+# ============================================================
+# テキストルート
+# ============================================================
+
+def _run_phase1_text(
     input_path: str,
     state_path: str | Path,
-    glossary_path: str | None = None,
+    api_key: str | None = None,
     save_state: bool = True,
     state: "Any" = None,
+    model: str | None = None,
 ) -> List[RawChunk]:
     """
-    Legacy run_phase1 for compatibility (non-PDF inputs).
+    プレーンテキスト（Acrobat 抽出等）を処理する。
+    VLM 不使用のため画像トークンコストゼロ。
+    LLM による構造認識（TextStructureExtractor）で role を付与する。
     """
+    print_log(f"--- Phase 1 [Text]: Preprocessor ---")
+
     path = Path(input_path)
     raw_text = path.read_text(encoding="utf-8")
-    
+
     text = normalize_line_endings(raw_text)
     text = rejoin_hyphenated_words(text)
-    
-    # シンプルな改行区切り
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+
+    # 分割方式の自動判定: \n\n 分割と \n 分割を比較して適切な方を選ぶ。
+    # Acrobat 抽出テキストは 1行=1段落 の形式（\n のみ）が多いが、
+    # ファイルによっては数個の \n\n が存在する場合もある。
+    # \n\n 分割後のチャンク数が \n 分割後の 1/10 未満 かつ 5未満 の場合は
+    # \n\n が段落区切りでないと判断して \n 分割を使う。
+    nn_paras = [p.strip() for p in text.split("\n\n") if p.strip()]
+    n_paras = [p.strip() for p in text.split("\n") if p.strip()]
+    if len(nn_paras) < max(5, len(n_paras) // 10):
+        paragraphs = n_paras
+    else:
+        paragraphs = nn_paras
     paragraphs = filter_paragraphs(paragraphs)
-    
+
     chunks: List[RawChunk] = []
     for idx, para in enumerate(paragraphs):
-        chunk = RawChunk(id=idx, text=para, seq_index=float(idx))
-        chunks.append(chunk)
+        chunks.append(RawChunk(id=str(idx), text=para, seq_index=float(idx)))
+
+    print_log(f"  [Phase 1 Text] {len(chunks)} チャンクを生成。")
+
+    # LLM による構造認識: 見出しを抽出して role を付与
+    if api_key and chunks:
+        try:
+            from .engine.p1_ingest.text_structure_extractor import TextStructureExtractor
+            from .llm_client import get_default_model
+            extractor = TextStructureExtractor(
+                api_key=api_key,
+                model=model or get_default_model("free"),
+            )
+            headings = extractor.extract_headings(chunks)
+            chunks = extractor.assign_roles(chunks, headings)
+        except Exception as e:
+            print_log(f"  [Phase 1 Text] ⚠️ 構造認識をスキップ（{e}）。全チャンク role='p' で続行。")
+    else:
+        print_log("  [Phase 1 Text] API キーなし、または空入力のため構造認識をスキップ。")
 
     if save_state:
         save_chunks_to_json(chunks, str(state_path))
+        print_log(f"  [Phase 1 Text] State 保存: {state_path}")
+
     return chunks

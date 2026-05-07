@@ -85,6 +85,23 @@ class TreeNode:
 
 
 @dataclass
+class ChapterBoundary:
+    """Book モード Phase 3 出力: 章の境界情報。PDF 物理解析の結果を隠蔽するクリーンなインターフェース。"""
+    title: str
+    role: str           # "h2" (PART), "h3" (chapter)
+    start_page: int
+    paragraphs: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ChapterBoundary":
+        valid_keys = cls.__dataclass_fields__.keys()
+        return cls(**{k: v for k, v in data.items() if k in valid_keys})
+
+
+@dataclass
 class ProcessingContext:
     """セッション全体の進行状態とメタデータを管理するコンテキストクラス"""
     session_id: str

@@ -11,8 +11,8 @@ from .config import (
     SessionState,
     print_log,
 )
-from .phase1_preprocessor import run_phase1, run_phase1_v3
-from .phase2_meta import run_phase2, run_phase2_v3
+from .phase1_preprocessor import run_phase1_unified
+from .phase2_meta import run_phase2_v3 as run_phase2
 from .phase3_structure import run_phase3
 from .phase4_translate import run_phase4
 from .phase5_export import run_phase5
@@ -54,6 +54,8 @@ def run_pipeline(
     state = SessionState(session_id=session_id, mode="book" if is_book else "paper")
     original_input_path = input_path
 
+    # Track if the caller explicitly provided a title (e.g. BookManager passing chapter titles)
+    explicit_title = title is not None
     if title is None:
         title = Path(input_path).stem
 
@@ -78,11 +80,10 @@ def run_pipeline(
             print_log(f"  [Pipeline] Phase 1 (Preprocessor) already finished. Skipping.")
         else:
             state.update_status("テキストの準備中...", 20)
-            from .phase1_preprocessor import run_phase1_v3
-            run_phase1_v3(
-                input_path, state.phase1_preprocessor, api_key=api_key, 
-                state=state, pdf_mode=pdf_mode, is_book=is_book, 
-                heavy_ocr=heavy_ocr, max_pages=max_pages
+            run_phase1_unified(
+                input_path, state.phase1_preprocessor, api_key=api_key,
+                state=state, pdf_mode=pdf_mode, is_book=is_book,
+                heavy_ocr=heavy_ocr, max_pages=max_pages,
             )
             print_log(f"  完了: Phase 1 解析完了\n")
 
@@ -98,13 +99,13 @@ def run_pipeline(
                 meta = {"dna": {"title": title, "keywords": []}, "resume_content": "Simple Mode"}
                 state.phase2_meta.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
             else:
-                meta = run_phase2_v3(
-                    state.phase1_preprocessor, state.phase2_meta, glossary_path, 
-                    api_key=api_key, expertise=expertise, model=model, 
+                meta = run_phase2(
+                    state.phase1_preprocessor, state.phase2_meta, glossary_path,
+                    api_key=api_key, expertise=expertise, model=model,
                     thinking_level=thinking_level, state=state, is_book=is_book,
-                    resume_content=resume_content
+                    resume_content=resume_content,
                 )
-        if meta and "dna" in meta and meta["dna"].get("title"):
+        if meta and "dna" in meta and meta["dna"].get("title") and not explicit_title:
             title = meta["dna"]["title"]
 
     # --- Phase 3: Structural Skeleton Construction ---
@@ -114,9 +115,17 @@ def run_pipeline(
             tree = json.loads(state.phase3_structure.read_text(encoding="utf-8"))
         else:
             state.update_status("構造を構築中...", 60)
-            from .phase3_structure import run_phase3
             phase3_input = original_input_path if is_book else input_path
-            tree, sections = run_phase3(phase3_input, state=state, api_key=api_key, model=model)
+            tree, sections = run_phase3(
+                state.phase1_preprocessor,
+                state.phase2_meta,
+                state.phase3_structure,
+                state.phase3_sections,
+                state=state,
+                api_key=api_key,
+                model=model,
+                input_path=phase3_input,
+            )
             print_log(f"  [Phase 3] 構造化完了: {len(tree)} セクション")
 
         if structure_only:

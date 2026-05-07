@@ -265,21 +265,3 @@ def run_phase2_v3(
     return result
 
 
-def run_phase2(
-    phase1_state_path: str | Path,
-    phase2_state_path: str | Path,
-    glossary_path: str | None = None,
-    api_key: str | None = None,
-    save_state: bool = True,
-    expertise: str = "文化人類学",
-    model: str | None = None,
-    thinking_level: str = "High",
-    state: "Any" = None,
-    is_book: bool = False,
-) -> dict:
-    """
-    既存の run_phase2 (後方互換性)。V3 への移行を促すか、自動的に v3 を呼ぶようにする。
-    """
-    return run_phase2_v3(
-        phase1_state_path, phase2_state_path, glossary_path, api_key, save_state, expertise, model, thinking_level, state, is_book
-    )

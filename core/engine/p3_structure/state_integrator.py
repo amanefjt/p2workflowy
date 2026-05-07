@@ -150,47 +150,37 @@ class StateIntegrator:
         return exporter.generate_workflowy(self.book_title, global_resume or "", self.chapters)
 
     def integrate_to_book(self, chapter_sessions: List[Dict[str, str]], global_resume: Optional[str] = None) -> List[Path]:
-        """各章の生成済みテキストファイルを読み込み、TextBookIntegrator で統合する。"""
+        """各章の生成済みテキストファイルを読み込み、TextBookIntegrator で統合する。
+
+        chapter_sessions の各エントリは以下のいずれかの形式:
+          - {"title": str, "output_paths": List[str]}  ← BookManager が output_paths を明示する場合（推奨）
+          - {"title": str, "state_path": str}           ← 後方互換
+        """
         print_log(f"  [Integrator] {len(chapter_sessions)} 章のテキストファイルを統合中 (Simple Stacking)...")
-        
-        # 統合対象のファイルリストを作成
+
         md_chapters: List[Tuple[str, Path]] = []
         wf_chapters: List[Tuple[str, Path]] = []
-        
+
         for sess in chapter_sessions:
             title = sess["title"]
-            # Chapter session から出力ファイルのパスを推定/特定
-            # Phase 5 で出力される [Title]_p2.md / [Title]_p2.txt を探す
-            # run_phase5 は input_path.parent に書き出すため、章PDFの隣にあるはず
-            ch_path = Path(sess["state_path"])
-            # 実際には SessionState のディレクトリ構造に依存
-            from core.config import SessionState
-            ch_session_id = ch_path.name
-            st = SessionState(session_id=ch_session_id)
-            
-            # Phase 5 の出力先は BookManager では session_dir / chapters/ になる
-            # かつ is_book=True の場合、[SafeTitle]_export/ というサブディレクトリが作成される
-            safe_ch_title = re.sub(r'[\\/*?:"<>|]', "_", title)
-            
-            if self.session_dir:
-                ch_dir = self.session_dir / "chapters"
+
+            # --- 出力パスの解決 ---
+            output_paths: List[Path] = []
+            if sess.get("output_paths"):
+                # 推奨パス: BookManager が run_pipeline() の戻り値を直接渡す
+                output_paths = [Path(p) for p in sess["output_paths"] if p]
             else:
-                ch_dir = Path("state/book_sessions") / self.book_title / "chapters"
-            
-            # 章出力の探索（サブディレクトリ版を優先、直下をフォールバック）
-            export_dir = ch_dir / f"{safe_ch_title}_export"
-            md_file = export_dir / f"{safe_ch_title}_p2.md"
-            wf_file = export_dir / f"{safe_ch_title}_p2.txt"
-            
-            if not md_file.exists():
-                md_file = ch_dir / f"{safe_ch_title}_p2.md"
-            if not wf_file.exists():
-                wf_file = ch_dir / f"{safe_ch_title}_p2.txt"
-            
-            if md_file.exists():
-                md_chapters.append((title, md_file))
-            if wf_file.exists():
-                wf_chapters.append((title, wf_file))
+                print_log(f"  [Integrator] 警告: 章 '{title}' は output_paths が未設定です。統合をスキップ。")
+                continue
+
+            for p in output_paths:
+                if not p.exists():
+                    print_log(f"  [Integrator] ⚠️ ファイルが見つかりません: {p}")
+                    continue
+                if p.suffix == ".md":
+                    md_chapters.append((title, p))
+                elif p.suffix == ".txt":
+                    wf_chapters.append((title, p))
 
         integrator = TextBookIntegrator()
         resume_for_export = global_resume or "..."

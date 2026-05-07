@@ -26,19 +26,27 @@ def format_resume_markdown(resume_content: str, shift: int = 2) -> str:
     """レジュメの見出しレベルを調整する。
     shift=2: H1→H3（書籍全体レジュメ・論文レジュメ）
     shift=3: H1→H4（各章レジュメ）
+    「3. 各セクションの展開」内のH2節見出しは H1+shift にフラット化しブラケットを付ける。
     """
     if not resume_content:
         return ""
     lines = resume_content.split("\n")
     adjusted = []
+    in_section_expansion = False
     for line in lines:
         if line.strip().startswith("#"):
             match = re.match(r"^\s*(#+)\s*(.*)$", line)
             if match:
                 current_level = len(match.group(1))
                 title_text = clean_heading_text(match.group(2))
-                new_level = current_level + shift
-                adjusted.append("#" * new_level + " " + title_text)
+                if current_level == 1:
+                    in_section_expansion = "各セクション" in title_text
+                    adjusted.append("#" * (1 + shift) + " " + title_text)
+                elif current_level == 2 and in_section_expansion:
+                    # 節見出しを H1+shift レベルにフラット化してブラケット付与
+                    adjusted.append("#" * (1 + shift) + " [" + title_text + "]")
+                else:
+                    adjusted.append("#" * (current_level + shift) + " " + title_text)
                 continue
         adjusted.append(line)
     return "\n".join(adjusted)

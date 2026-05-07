@@ -34,10 +34,11 @@ class WorkflowyEngine:
         """Markdown 形式のレジュメを Workflowy 形式に変換。"""
         if not resume_content:
             return ""
-        
+
         lines = resume_content.split("\n")
         wf_lines: List[str] = []
         current_depth = base_depth
+        in_section_expansion = False
 
         for line in lines:
             line_strip = line.strip()
@@ -49,21 +50,29 @@ class WorkflowyEngine:
             if heading_match:
                 level = len(heading_match.group(1))
                 text = heading_match.group(2)
-                # 見出しからノイズ（#など）をクリーンアップ
                 cleaned_text = clean_heading_text(text)
-                # Markdown の # レベルを階層に変換
-                depth = base_depth + (level - 1)
-                indent = "\t" * depth
-                wf_lines.append(f"{indent}- {cleaned_text}")
-                current_depth = depth + 1
+
+                if level == 1:
+                    in_section_expansion = "各セクション" in cleaned_text
+                    depth = base_depth
+                    wf_lines.append(f"{'	' * depth}- {cleaned_text}")
+                    current_depth = depth + 1
+                elif level == 2 and in_section_expansion:
+                    # 「3. 各セクションの展開」内の節見出し: 兄弟ノード + ブラケット付き
+                    depth = base_depth
+                    wf_lines.append(f"{'	' * depth}- [{cleaned_text}]")
+                    current_depth = depth + 1
+                else:
+                    depth = base_depth + (level - 1)
+                    wf_lines.append(f"{'	' * depth}- {cleaned_text}")
+                    current_depth = depth + 1
                 continue
 
             # 2. リスト（箇条書き）の処理
             list_match = re.match(r"^(\s*)[-*]\s+(.+)$", line)
             if list_match:
                 leading_spaces = len(list_match.group(1))
-                # 2スペースごとに1インデント
-                extra_depth = min(leading_spaces // 2, 1) 
+                extra_depth = min(leading_spaces // 2, 1)
                 indent = "\t" * (current_depth + extra_depth)
                 wf_lines.append(f"{indent}- {sanitize_wf_text(list_match.group(2))}")
                 continue

@@ -181,6 +181,8 @@ def _run_phase1_text(
 
     text = normalize_line_endings(raw_text)
     text = rejoin_hyphenated_words(text)
+    # Acrobat 抽出テキストの語間スペース修正: 文末記号(.!?)の直後に大文字が続くケースのみ
+    text = re.sub(r'([.!?])([A-Z][a-z])', r'\1 \2', text)
 
     # 分割方式の自動判定: \n\n 分割と \n 分割を比較して適切な方を選ぶ。
     # Acrobat 抽出テキストは 1行=1段落 の形式（\n のみ）が多いが、

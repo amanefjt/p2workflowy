@@ -169,7 +169,7 @@ def main():
         manager = BookManager(input_path=main_input, api_key=GEMINI_API_KEY, model=args.model)
         
         try:
-            manager.run(
+            output_paths = manager.run(
                 glossary_path=args.glossary,
                 thinking_level=args.thinking,
                 pdf_mode=args.pdf_mode if args.pdf_mode else "full_vlm",
@@ -180,6 +180,18 @@ def main():
                 structure_only=args.structure_only,
                 resume_from=args.resume
             )
+            
+            # 1) 入力ファイルがあったところに出力コピー
+            import shutil
+            out_dir = Path(main_input).parent
+            if output_paths:
+                print(f"\n最終出力ファイルをコピー中: {out_dir}")
+                for out_path in output_paths:
+                    if out_path.exists():
+                        target_path = out_dir / out_path.name
+                        shutil.copy2(out_path, target_path)
+                        print(f"  -> {target_path.name}")
+                        
         except Exception as e:
             print(f"書籍処理中にエラー発生: {e}")
             traceback.print_exc()

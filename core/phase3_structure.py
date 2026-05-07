@@ -770,6 +770,7 @@ def structure_nodes_by_headings(
     exclude_keywords: List[str],
     is_book: bool = False,
     intro_pre_heading: dict | None = None,
+    dna: dict | None = None,
 ) -> tuple[List[TreeNode], Dict[str, List[dict]]]:
     """
     TreeNodeのリスト（平坦または既存構造）を、見出しリストに基づいて再構造化する。
@@ -808,17 +809,45 @@ def structure_nodes_by_headings(
             intro_found_idx = i
             break
  
+    # DNAのabstract.start_idを使ってメタデータ境界インデックスを特定
+    # そのインデックスより前のチャンクは全てタイトル・著者・所属等のメタデータ
+    _meta_boundary_idx: int | None = None
+    _meta_filter: set[str] = set()
+    if dna:
+        abs_start_id = str(dna.get("abstract", {}).get("start_id", ""))
+        if abs_start_id:
+            for _i, _n in enumerate(flat_paragraphs):
+                if str(_n.id) == abs_start_id:
+                    _meta_boundary_idx = _i
+                    break
+        # フォールバック: abstract.start_idが使えない場合はタイトル・著者の文字列一致
+        if _meta_boundary_idx is None:
+            if dna.get("title"):
+                _meta_filter.add(dna["title"].strip().lower())
+            for _author in dna.get("authors", []):
+                if _author and _author.strip():
+                    _meta_filter.add(_author.strip().lower())
+
     abstract_chunks_pre = []
     if intro_found_idx and intro_found_idx > 0:
         # Introduction 検出前のチャンクを Abstract セクションとして事前収集
-        for pre_node in flat_paragraphs[:intro_found_idx]:
+        for _idx, pre_node in enumerate(flat_paragraphs[:intro_found_idx]):
             text_clean = pre_node.text.strip()
             # "English text" などのラベル・ノイズをストリップ（大文字小文字無視、冒頭一致）
             text_clean = re.sub(r'^(English text|日本語本文|Table of Contents|Abstract)\s*', '', text_clean, flags=re.IGNORECASE)
-            
+
             if not text_clean:
                 continue
-            
+
+            # abstract開始より前のチャンクはメタデータとして除外（タイトル・著者・所属等）
+            if _meta_boundary_idx is not None and _idx < _meta_boundary_idx:
+                print_log(f"  [Structure] メタデータ行をスキップ: '{text_clean[:60]}'")
+                continue
+            # フォールバック: タイトル・著者の文字列一致によるフィルタ
+            if _meta_filter and text_clean.lower() in _meta_filter:
+                print_log(f"  [Structure] メタデータ行をスキップ: '{text_clean[:60]}'")
+                continue
+
             pre_node.text = text_clean # ノイズを除去したテキストに更新
             abstract_chunks_pre.append(pre_node)
         
@@ -939,6 +968,7 @@ def build_tree(
     exclude_keywords: List[str],
     is_book: bool = False,
     intro_pre_heading: dict | None = None,
+    dna: dict | None = None,
 ) -> tuple[List[TreeNode], Dict[str, List[dict]]]:
     """
     チャンクを構造化ツリーに変換する。
@@ -1007,6 +1037,7 @@ def build_tree(
             base_nodes, headings, exclude_keywords,
             is_book=is_book,
             intro_pre_heading=intro_pre_heading,
+            dna=dna,
         )
 
     return tree, sections_dict
@@ -1269,6 +1300,7 @@ def run_phase3(
         chunks, anchors, headings, exclude_keywords,
         is_book=is_book,
         intro_pre_heading=intro_pre_heading if not is_book else None,
+        dna=dna if not is_book else None,
     )
     
     if save_state:

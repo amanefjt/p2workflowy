@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## プロジェクト概要
 
-英語学術論文・専門書籍の PDF/テキストを Gemini AI で解析し、Workflowy 向けの階層 Markdown に変換するツール。CLI (`main.py`) と Web API (`server.py`) の両モードを持つ。PDF（VLM OCR）とプレーンテキスト（Acrobat 抽出等）の両入力に対応。
+英語学術論文・専門書籍の PDF/テキストを Gemini AI で解析し、Workflowy 向けの階層 Markdown に変換するツール。CLI (`main.py`) と Web API (`server.py`) の両モードを持つ。PDF（VLM OCR / Docling）とプレーンテキスト（Acrobat 抽出等）の両入力に対応。
 
 ## 環境セットアップ
 
@@ -29,14 +29,17 @@ python3 main.py data/paper.pdf
 # CLI: 書籍モード
 python3 main.py data/book.pdf --book
 
-# CLI: テスト用低コストモード（gemini-3.1-flash-lite）
+# CLI: テスト用低コストモード（gemini-3.1-flash-lite-preview）
 python3 main.py data/paper.txt --lite
 
 # CLI: 中断再開（フェーズ番号 1-5 を指定）
 python3 main.py data/paper.pdf --session <session_id> --resume 4
 
-# テスト実行
+# テスト実行（全体）
 python3 -m pytest tests/unit/ -v
+
+# テスト実行（単一ファイル）
+python3 -m pytest tests/unit/test_json_pipeline.py -v
 ```
 
 ## アーキテクチャ
@@ -55,11 +58,24 @@ python3 -m pytest tests/unit/ -v
 
 中間状態は `state/<session_id>/` に JSON として保存される。`--resume <N>` で任意フェーズから再開可能。
 
+### エンジン層（`core/engine/`）
+
+各フェーズの内部ロジックは `core/engine/` 配下のサブパッケージに閉じ込められている。フェーズのファサード（`core/phaseN_*.py`）はオーケストレーションのみ担当し、アルゴリズムはエンジン層に置く。
+
+| サブパッケージ | 主要モジュール |
+|---|---|
+| `p1_ingest/` | `docling_ingester.py`（Docling ルート）, `physical_ingester.py`, `ocr_manager.py`, `text_structure_extractor.py`, `formatter.py` |
+| `p3_structure/` | `tree_constructor.py`, `heading_detector.py`, `chapter_parser.py`, `state_integrator.py`, `toc_manager.py` |
+| `p4_translate/` | `parallel_translator.py`, `prompt_builder.py`, `tree_reconstructor.py` |
+| `p5_export/` | `workflowy_engine.py`, `markdown_engine.py`, `text_book_integrator.py` |
+
 ### Phase 1 の入力ルーティング
 
 `run_phase1_unified()` が `.pdf` か否かで自動判定する。
 
-- **PDF ルート** (`_run_phase1_pdf`): `run_pdf_ingestion_v3()` → VLM または物理抽出 → role 付き RawChunk
+- **PDF ルート** (`_run_phase1_pdf`):
+  - まず `is_docling_viable()` で Docling 適用可否を判定し、デジタル PDF なら Docling（`docling_ingester.py`）を優先使用。
+  - Docling が不適なスキャン PDF 等は `run_pdf_ingestion_v3()` → VLM または物理抽出にフォールバック。
 - **テキストルート** (`_run_phase1_text`): 段落分割 → `TextStructureExtractor` (LLM) で見出し抽出 → role 付き RawChunk
 
 **テキスト分割の自動判定**: `\n\n` 分割後チャンク数が `\n` 分割後の 1/10 未満なら、Acrobat 形式（1行=1段落）と判定して `\n` 分割を使う。
@@ -81,8 +97,8 @@ Phase 2 が抽出する DNA には `intro_pre_heading`（最初の節タイト�
 ### LLM クライアント（`core/llm_client.py`）
 
 - **TierManager（シングルトン）**: 429/503 エラーで自動的に FREE ティア（Lite モデル）へダウンシフトする自己修復機構。
-- **モデル選択**: `core/coreprompts.json` の `DEFAULT_MODEL` / `DEFAULT_MODEL_FREE` / `DEFAULT_MODEL_VLM` が真実ソース。
-- **Phase 4 並列数**: `max_concurrent_sections=4` が最適値。**絶対に 1（直列化）にしてはならない**（API 側の 240 秒 TTFT キューイングを並列で相殺する設計）。
+- **モデル選択の真実ソース**: `docs/model_optimization.md` が意思決定の正本。`core/coreprompts.json` の `DEFAULT_MODEL` / `DEFAULT_MODEL_FREE` / `DEFAULT_MODEL_VLM` は runtime の設定値であり、`model_optimization.md` に合わせて更新する。実装とドキュメントが不一致の場合はドキュメント側に揃える。
+- **Phase 4 並列数**: `max_concurrent_sections=4` が最適値。**絶対に 1（直列化）にしてはならない**（API 側の 240 秒 TTFT キューイングを並列で相殺する設計。直列化すると全セクションが順繰りに 240 秒待たされ処理が 1 時間超になる）。
 
 ### プロンプト管理（`core/coreprompts.json`）
 
@@ -109,7 +125,12 @@ Phase 2 が抽出する DNA には `intro_pre_heading`（最初の節タイト�
 - **判断優先順位**: `VLM の論理役割判断 > 物理証拠（フォント・座標）> 幾何的ヒント`
 - **責務境界**: `main.py` はエントリーポイント専任。`run_pipeline` はオーケストレーション専任。個別アルゴリズムは各フェーズモジュールに閉じ込める。
 - **出力形式**: `_p2.md` / `_p2.txt` が標準。Workflowy では英語ブロックを親子ネスト、日本語ブロックを並列展開する非対称階層を維持する。
+- **エクスポート不変条件**: `References` 系セクションは出力から除外し、`Appendix` は保持する。注釈ノードは言語ブロック末尾へ再配置する。
 - **ルール正本**: `.cursor/rules/` を唯一の正本として更新する（`.agent/` は凍結互換レイヤー）。
+
+## 変更管理
+
+仕様変更や判断根拠は `docs/management/requirements_log.md` に追記する。不具合の原因・再現手順・対策は `docs/management/troubleshooting_log.md` に追記する。
 
 ## デプロイ
 

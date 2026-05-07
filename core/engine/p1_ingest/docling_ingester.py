@@ -111,4 +111,16 @@ def is_docling_viable(pdf_path: str) -> bool:
     if words and (sum(len(w) for w in words) / len(words)) < 2.0:
         return False
 
+    # フォントエンコーディング破損チェック（+Nシフト等でASCII範囲内が化ける）
+    # 正常な英文では単語中間文字に大文字が現れる割合は低い（<10%）
+    # 化けた場合は本来小文字のグリフが大文字ASCII範囲に写像され高率になる
+    import re as _re
+    alpha_words = _re.findall(r'[a-zA-Z]{4,}', sample)
+    if len(alpha_words) >= 20:
+        non_first_total = sum(len(w) - 1 for w in alpha_words)
+        non_first_upper = sum(1 for w in alpha_words for c in w[1:] if c.isupper())
+        if non_first_total > 0 and non_first_upper / non_first_total > 0.15:
+            print_log(f"  [Docling] フォントエンコーディング破損を検出 (単語中大文字率: {non_first_upper/non_first_total:.1%}) → VLM ルートへ")
+            return False
+
     return True

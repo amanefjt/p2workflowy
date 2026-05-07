@@ -13,6 +13,7 @@ from .models import RawChunk, save_chunks_to_json
 from .config import load_glossary_csv, print_log, PROJECT_ROOT
 from .text_utils import _SENTENCE_END_RE, _TRAILING_WORDS
 from .engine.p1_ingest.formatter import Formatter
+from .engine.p1_ingest.docling_ingester import docling_pdf_to_chunks, is_docling_viable
 from .pdf_ingester import run_pdf_ingestion_v3
 
 
@@ -130,9 +131,30 @@ def _run_phase1_pdf(
     heavy_ocr: bool = False,
     max_pages: Optional[int] = None,
 ) -> List[RawChunk]:
-    """PDF から物理情報 or VLM ルートで RawChunk を生成する。"""
+    """PDF から RawChunk を生成する。
+    デジタルPDF → Docling ルート（低コスト）
+    スキャンPDF / Docling不可 → VLM ルート（フォールバック）
+    """
     print_log(f"--- Phase 1 [PDF]: Preprocessor ---")
 
+    # Docling ルート: デジタルPDFかつ max_pages 未指定（部分処理モードでない）
+    if max_pages is None and is_docling_viable(pdf_path):
+        try:
+            chunks = docling_pdf_to_chunks(pdf_path)
+            if chunks:
+                print_log(f"  [Phase 1 PDF] Docling ルート: {len(chunks)} チャンクを生成。")
+                for c in chunks:
+                    c.text = c.text.strip()
+                if save_state:
+                    save_chunks_to_json(chunks, str(state_path))
+                    print_log(f"  [Phase 1 PDF] State 保存: {state_path}")
+                return chunks
+            print_log("  [Phase 1 PDF] Docling が空を返したため VLM にフォールバック。")
+        except Exception as e:
+            print_log(f"  [Phase 1 PDF] Docling エラー ({e})、VLM にフォールバック。")
+
+    # VLM ルート（フォールバック）
+    print_log("  [Phase 1 PDF] VLM ルートで処理します。")
     elements = run_pdf_ingestion_v3(
         pdf_path, api_key=api_key, state=state,
         pdf_mode=pdf_mode, model=model,

@@ -31,10 +31,14 @@ function switchInputTab(tab) {
     const isPdf = tab === 'pdf';
     document.getElementById('input-pdf').style.display = isPdf ? '' : 'none';
     document.getElementById('input-text').style.display = isPdf ? 'none' : '';
-    const accentStyle = 'background: var(--accent, #6366f1); color: white; border-color: var(--accent, #6366f1);';
-    const inactiveStyle = 'background: white; color: #64748b; border-color: #cbd5e1;';
-    document.getElementById('tab-pdf').style.cssText = isPdf ? accentStyle : inactiveStyle;
-    document.getElementById('tab-text').style.cssText = isPdf ? inactiveStyle : accentStyle;
+    const tabPdf  = document.getElementById('tab-pdf');
+    const tabText = document.getElementById('tab-text');
+    tabPdf.style.background    = isPdf ? 'var(--accent, #6366f1)' : 'white';
+    tabPdf.style.color         = isPdf ? 'white' : '#64748b';
+    tabPdf.style.borderColor   = isPdf ? 'var(--accent, #6366f1)' : '#cbd5e1';
+    tabText.style.background   = isPdf ? 'white' : 'var(--accent, #6366f1)';
+    tabText.style.color        = isPdf ? '#64748b' : 'white';
+    tabText.style.borderColor  = isPdf ? '#cbd5e1' : 'var(--accent, #6366f1)';
 }
 
 form.addEventListener('submit', async (e) => {
@@ -78,10 +82,10 @@ form.addEventListener('submit', async (e) => {
 
     // UI Update
     submitBtn.disabled = true;
-    submitBtn.innerText = 'Processing...';
+    submitBtn.innerText = '処理中...';
     statusContainer.classList.remove('hidden');
     downloadLinks.classList.add('hidden');
-    logViewer.innerHTML = 'Submitting task...<br>';
+    logViewer.innerHTML = '処理を開始中...<br>';
     progressFill.style.width = '5%';
     percentText.innerText = '5%';
 
@@ -100,16 +104,16 @@ form.addEventListener('submit', async (e) => {
         const data = await response.json();
         console.log("Server response:", data);
         if (data.task_id) {
-            logViewer.innerHTML += `Task ID: ${data.task_id}<br>Pipeline started...<br>`;
+            logViewer.innerHTML += `パイプラインを起動しました...<br>`;
             pollStatus(data.task_id);
         } else {
-            throw new Error('Failed to start process: No task ID received');
+            throw new Error('タスクIDが取得できませんでした');
         }
     } catch (err) {
         console.error("Form submission error:", err);
         statusText.innerText = 'リクエストに失敗しました';
-        logViewer.innerHTML += `<span style="color:var(--text-danger)">Error: ${err.message}</span><br>`;
-        alert(`Error communicating with server: ${err.message}`);
+        logViewer.innerHTML += `<span style="color:var(--text-danger)">エラー: ${err.message}</span><br>`;
+        alert(`サーバーとの通信に失敗しました: ${err.message}`);
         resetButton();
     }
 });

@@ -105,7 +105,7 @@ form.addEventListener('submit', async (e) => {
         console.log("Server response:", data);
         if (data.task_id) {
             logViewer.innerHTML += `パイプラインを起動しました...<br>`;
-            pollStatus(data.task_id);
+            pollStatus(data.task_id, data.download_token || '');
         } else {
             throw new Error('タスクIDが取得できませんでした');
         }
@@ -123,7 +123,7 @@ function resetButton() {
     submitBtn.innerText = '変換を開始する';
 }
 
-async function pollStatus(taskId) {
+async function pollStatus(taskId, downloadToken) {
     const interval = setInterval(async () => {
         try {
             const response = await fetch(`${API_BASE}/api/status/${taskId}`);
@@ -141,13 +141,14 @@ async function pollStatus(taskId) {
                 clearInterval(interval);
                 updateProgress(100);
                 statusText.innerText = '完了！';
-                showDownloads(taskId);
+                showDownloads(taskId, downloadToken);
                 resetButton();
             } else if (data.status === 'failed') {
                 clearInterval(interval);
                 const errDetail = data.error || data.progress || '詳細不明';
                 statusText.innerText = `エラーが発生しました: ${errDetail}`;
-                logViewer.innerHTML += `<span style="color:var(--text-danger, #ef4444)">処理失敗: ${errDetail}</span><br>`;
+                const safeErr = errDetail.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                logViewer.innerHTML += `<span style="color:var(--text-danger, #ef4444)">処理失敗: ${safeErr}</span><br>`;
                 resetButton();
             }
         } catch (err) {
@@ -161,9 +162,10 @@ function updateProgress(percent) {
     percentText.innerText = `${percent}%`;
 }
 
-function showDownloads(taskId) {
-    document.getElementById('dl-markdown').href = `${API_BASE}/api/download/${taskId}/markdown`;
-    document.getElementById('dl-workflowy').href = `${API_BASE}/api/download/${taskId}/workflowy`;
+function showDownloads(taskId, downloadToken) {
+    const t = encodeURIComponent(downloadToken);
+    document.getElementById('dl-markdown').href = `${API_BASE}/api/download/${taskId}/markdown?token=${t}`;
+    document.getElementById('dl-workflowy').href = `${API_BASE}/api/download/${taskId}/workflowy?token=${t}`;
     downloadLinks.classList.remove('hidden');
     // Scroll to download section
     downloadLinks.scrollIntoView({ behavior: 'smooth' });

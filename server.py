@@ -2,7 +2,9 @@ import asyncio
 import uuid
 import os
 import re
-import shutil  # ← 【追加】
+import hmac
+import secrets
+import shutil
 from pathlib import Path
 from typing import Optional, Dict
 
@@ -112,7 +114,7 @@ async def process(
     clean_api_key = str(api_key).strip() if api_key else ""
     clean_passcode = str(APP_ADMIN_PASSCODE).strip() if APP_ADMIN_PASSCODE else ""
     
-    if clean_api_key and clean_passcode and clean_api_key == clean_passcode:
+    if clean_api_key and clean_passcode and hmac.compare_digest(clean_api_key, clean_passcode):
         print(f"Admin Passcode detected for task {task_id}. Using server-side API key.")
         api_key = GEMINI_API_KEY
     elif clean_api_key:
@@ -127,11 +129,19 @@ async def process(
     upload_dir = DATA_DIR / "uploads" / task_id
     upload_dir.mkdir(parents=True, exist_ok=True)
     
+    def _safe_upload_path(upload_dir: Path, filename: str, fallback: str) -> Path:
+        """ファイル名からディレクトリ成分を除去し、upload_dir 内に限定する。"""
+        safe_name = Path(filename).name or fallback
+        path = (upload_dir / safe_name).resolve()
+        if not path.is_relative_to(upload_dir.resolve()):
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        return path
+
     # ファイルの保存
     input_path = None
     if pdf_file and pdf_file.filename:
-        input_path = upload_dir / pdf_file.filename
-        print(f"Saving PDF to {input_path}")
+        input_path = _safe_upload_path(upload_dir, pdf_file.filename, "input.pdf")
+        print(f"Saving PDF to {input_path.name}")
         content = await pdf_file.read()
         with open(input_path, "wb") as f:
             f.write(content)
@@ -142,31 +152,33 @@ async def process(
             f.write(text)
     else:
         raise HTTPException(status_code=400, detail="テキストの入力、またはPDFファイルのアップロードが必要です。")
-    
+
     glossary_path = None
     if glossary and glossary.filename:
-        glossary_path = upload_dir / glossary.filename
-        print(f"Saving Glossary to {glossary_path}")
+        glossary_path = _safe_upload_path(upload_dir, glossary.filename, "glossary.csv")
+        print(f"Saving Glossary to {glossary_path.name}")
         content = await glossary.read()
         with open(glossary_path, "wb") as f:
             f.write(content)
             
     print(f"Starting task {task_id} for input: {input_path} (Expertise: {expertise})")
     
+    download_token = secrets.token_urlsafe(32)
     task_status[task_id] = {
         "status": "processing",
         "title": title,
         "progress": "準備中...",
         "percentage": 5,
-        "error": None
+        "error": None,
+        "download_token": download_token,
     }
-    
+
     background_tasks.add_task(
         run_pipeline_in_background, task_id, str(input_path), str(glossary_path) if glossary_path else None, title, api_key, expertise, export_mode, is_book
     )
-    
+
     _cleanup_task_status()
-    return {"task_id": task_id}
+    return {"task_id": task_id, "download_token": download_token}
 
 
 @app.get("/api/status/{task_id}")
@@ -215,10 +227,14 @@ async def get_status(task_id: str):
     return task_status[task_id]
 
 @app.get("/api/download/{task_id}/{file_type}")
-async def download(task_id: str, file_type: str):
-    # 【追加】多層防御: task_id が正しいUUIDフォーマットか検証
+async def download(task_id: str, file_type: str, token: str = ""):
     if not UUID_RE.match(task_id):
         raise HTTPException(status_code=400, detail="Invalid task_id format")
+    # ダウンロードトークンで所有者を検証
+    info = task_status.get(task_id)
+    stored_token = info.get("download_token", "") if info else ""
+    if not stored_token or not secrets.compare_digest(token, stored_token):
+        raise HTTPException(status_code=403, detail="Invalid download token")
 
     search_dirs = [DATA_DIR / "uploads" / task_id, STATE_DIR / task_id]
     

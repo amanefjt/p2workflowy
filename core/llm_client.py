@@ -9,6 +9,7 @@ import asyncio
 import enum
 import re
 import csv
+import random
 from typing import Any, List, Tuple, Dict, Optional
 from datetime import datetime
 import threading
@@ -282,11 +283,14 @@ def call_gemini(
                 if is_resource_limit:
                     tier_manager.downgrade()
                     match = re.search(r"retry in ([\d\.]+)s", msg)
-                    wait_time = float(match.group(1)) + 1.0 if match else (10.0 * attempt)
+                    base_wait = float(match.group(1)) + 1.0 if match else (10.0 * attempt)
+                    # ジッター: 複数タスクが同時に429を受けたとき同時リトライを防ぐ
+                    jitter = random.uniform(0, base_wait * 0.3)
+                    wait_time = base_wait + jitter
                     print_log(f"  [LLM] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
                 else:
                     wait_time = retry_delay * attempt
-                
+
                 time.sleep(wait_time)
     raise RuntimeError(f"Gemini API 呼び出し失敗: {last_error}")
 
@@ -387,11 +391,14 @@ async def call_gemini_async(
                 if is_resource_limit:
                     tier_manager.downgrade()
                     match = re.search(r"retry in ([\d\.]+)s", msg)
-                    wait_time = float(match.group(1)) + 1.0 if match else (10.0 * attempt)
+                    base_wait = float(match.group(1)) + 1.0 if match else (10.0 * attempt)
+                    # ジッター: 複数タスクが同時に429を受けたとき同時リトライを防ぐ
+                    jitter = random.uniform(0, base_wait * 0.3)
+                    wait_time = base_wait + jitter
                     print_log(f"  [LLM async] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
                 else:
                     wait_time = retry_delay * attempt
-                
+
                 await asyncio.sleep(wait_time)
 
     raise RuntimeError(f"Gemini API 非同期呼び出し失敗: {last_error}")
@@ -570,6 +577,20 @@ async def generate_section_resume(
 
 _CACHED_LIMITERS = {}
 _LIMITER_LOCK = threading.Lock()
+
+
+def reset_pipeline_state() -> None:
+    """
+    パイプライン開始前に呼び出す。
+    AsyncLimiter は生成時のイベントループに紐付くため、新しいパイプライン（新しいループ）
+    が始まる前にキャッシュをクリアし、次の apply_tier_settings 呼び出しで再生成させる。
+    TierManager も paid にリセットして前回の downgrade 状態を引き継がないようにする。
+    """
+    global _CACHED_LIMITERS
+    with _LIMITER_LOCK:
+        _CACHED_LIMITERS.clear()
+    tier_manager.set_tier(GeminiTier.PAID)
+
 
 def apply_tier_settings(tier: str | GeminiTier) -> Tuple[AsyncLimiter, asyncio.Semaphore, dict]:
     """

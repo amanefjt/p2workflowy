@@ -9,7 +9,7 @@ from .config import print_log, PROJECT_ROOT
 
 class PDFSplitter:
     """PDF を目次(TOC)に基づいて章ごとに分割する。"""
-    
+
     # OCRManager と共通のキャッシュファイルを使用
     CACHE_PATH = PROJECT_ROOT / "state" / "vlm_cache.json"
 
@@ -40,97 +40,253 @@ class PDFSplitter:
         return hashlib.md5(chunk).hexdigest()
 
     def split(self, pdf_path: str, output_dir: Path) -> List[Dict[str, Any]]:
-        """
-        PDF を分割し、章ごとの情報を返す。
-        """
+        """PDF を分割し、章ごとの情報（物理ページ補正済み）を返す。"""
         output_dir.mkdir(parents=True, exist_ok=True)
         doc = fitz.open(pdf_path)
-        
-        # 1. ローカル TOC ファイル優先
+
+        # Route 1: ローカル TOC ファイル（手動修正済みの最優先）
         local_toc = Path(pdf_path + ".toc.json")
         if local_toc.exists():
-            print_log(f"  [Splitter] ローカルの TOC ファイルを使用します: {local_toc.name}")
+            print_log(f"  [Splitter] ルート: ローカル TOC ファイル ({local_toc.name})")
             try:
-                toc_data = json.loads(local_toc.read_text(encoding="utf-8"))
+                llm_toc = json.loads(local_toc.read_text(encoding="utf-8"))
+                toc_data = self._apply_content_scan(doc, llm_toc)
             except Exception as e:
                 print_log(f"  [Splitter] ローカル TOC 読込エラー: {e}")
-                toc_data = []
+                toc_data = None
         else:
-            # 2. キャッシュチェック
+            toc_data = None
+
+        # Route 2: PDF ネイティブ outline（デジタル PDF に最適・物理ページ直参照）
+        if not toc_data:
+            toc_data = self._get_chapters_from_outline(doc)
+            if toc_data:
+                print_log(f"  [Splitter] ルート: PDF outline（{len(toc_data)}章）")
+
+        # Route 3: LLM TOC 抽出 + コンテンツスキャンで物理ページ補正
+        # （可変オフセット問題を回避するため、ページ番号に頼らず本文照合する）
+        if not toc_data:
             pdf_hash = self._get_pdf_hash(pdf_path)
             cache_key = f"{pdf_hash}_toc"
             if cache_key in self.cache:
-                print_log(f"  [Splitter] 既存の TOC キャッシュを使用します。")
-                toc_data = self.cache[cache_key]
+                print_log(f"  [Splitter] ルート: キャッシュ + コンテンツスキャン")
+                llm_toc = self.cache[cache_key]
             else:
-                print_log(f"  [Splitter] TOC 解析を開始: {pdf_path}")
-                toc_data = self._extract_toc(doc)
-                if toc_data:
-                    self.cache[cache_key] = toc_data
+                print_log(f"  [Splitter] ルート: LLM TOC 抽出 + コンテンツスキャン")
+                llm_toc = self._extract_toc(doc)
+                if llm_toc:
+                    self.cache[cache_key] = llm_toc
                     self._save_cache()
 
+            if llm_toc:
+                toc_data = self._apply_content_scan(doc, llm_toc)
+
         if not toc_data:
-            print_log("  [Splitter] TOC の抽出に失敗しました。全編を単独章として扱います。")
+            print_log("  [Splitter] 警告: TOC の取得に失敗しました。全編を単独章として扱います。")
             doc.close()
             return [{"title": Path(pdf_path).stem, "path": pdf_path, "role": "chapter"}]
-        
-        # 2. 分割実行
+
+        # 分割実行（toc_data の start_page はすべて 0-indexed 物理ページ）
         results = []
         target_roles = ["chapter", "preface", "introduction", "appendix"]
-        
+
         for i, entry in enumerate(toc_data):
             title = entry.get("title", f"Chapter_{i+1}")
-            start_page = entry.get("start_page", 1) - 1
+            start_page = entry.get("start_page", 0)  # 0-indexed 物理ページ
             role = entry.get("role", "chapter")
-            
-            # ノイズセクションの除外
+
             if role not in target_roles and "Chapter" not in title:
-                print_log(f"    - Skipping (Back Matter/Meta): {title} (P{start_page+1})")
+                print_log(f"    - スキップ (Back Matter/Meta): {title} (P{start_page+1})")
                 continue
 
-            # 終了ページの判定
             if i < len(toc_data) - 1:
-                end_page = toc_data[i+1].get("start_page", 1) - 2
+                end_page = toc_data[i+1].get("start_page", 0) - 1
             else:
                 end_page = len(doc) - 1
-            
+
             if start_page > end_page or start_page < 0:
                 continue
 
-            # ファイル名生成 (安全な名前に変換)
             safe_title = re.sub(r'[^\w\s-]', '', title).strip().replace(' ', '_')
-            if not safe_title: safe_title = f"chapter_{i+1}"
+            if not safe_title:
+                safe_title = f"chapter_{i+1}"
             out_filename = f"{i+1:02d}_{safe_title}.pdf"
             out_path = output_dir / out_filename
-            
-            # 分割実行
+
             new_doc = fitz.open()
             new_doc.insert_pdf(doc, from_page=start_page, to_page=end_page)
             new_doc.save(str(out_path))
             new_doc.close()
-            
+
             results.append({
                 "title": title,
                 "path": str(out_path),
                 "role": role,
-                "page_range": (start_page + 1, end_page + 1)
+                "page_range": (start_page + 1, end_page + 1),
             })
-            print_log(f"  [Splitter] Extracted: {out_filename} (P{start_page+1}-{end_page+1})")
+            print_log(f"  [Splitter] 抽出: {out_filename} (P{start_page+1}-{end_page+1})")
 
         doc.close()
         return results
 
+    def _get_chapters_from_outline(self, doc: fitz.Document) -> Optional[List[Dict[str, Any]]]:
+        """PDF ネイティブ outline から章リストを取得（物理ページ直参照）。"""
+        toc = doc.get_toc()  # [(level, title, phys_page_1indexed), ...]
+        if not toc:
+            return None
+
+        # まず level 1 を試し、なければ level 2
+        for target_level in (1, 2):
+            entries = [(title, phys) for level, title, phys in toc if level == target_level]
+            if entries:
+                break
+        if not entries:
+            return None
+
+        return [
+            {
+                "title": title,
+                "start_page": max(0, phys - 1),  # 1-indexed → 0-indexed
+                "role": self._classify_role(title),
+            }
+            for title, phys in entries
+        ]
+
+    def _apply_content_scan(
+        self, doc: fitz.Document, llm_toc: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """LLM の論理ページ番号をコンテンツスキャンで物理ページに補正する。
+
+        紙面ページと PDF 物理ページのオフセットは前付けや図版ページにより
+        章ごとに変動するため、ページ番号への依存を断ち本文照合で補正する。
+
+        照合は _matches_heading() による行単位の一致で行う。
+        本文中の「see Chapter 5」や「methods were applied」等との誤ヒットを防ぐ。
+        照合失敗時は論理ページをフォールバックとして使用し警告を出す。
+        """
+        total_pages = len(doc)
+        all_titles = [e.get("title", "") for e in llm_toc]
+        results = []
+
+        for entry in llm_toc:
+            title = entry.get("title", "")
+            logical_page = int(entry.get("start_page", 1))  # 1-indexed logical
+
+            norm_title = self._normalize_title(title)
+            title_lower = title.lower()
+
+            # 探索範囲: 論理ページ前後を広めに取り可変オフセットに対応
+            search_start = max(0, logical_page - 5)
+            search_end = min(total_pages - 1, logical_page + 49)
+
+            best_phys = None
+            for phys_idx in range(search_start, search_end + 1):
+                raw_page = doc[phys_idx].get_text("text")
+
+                # 目次ページをスキップ（3章以上のタイトルを含むページ＝TOC）
+                if self._is_toc_page(raw_page, all_titles):
+                    continue
+
+                if self._matches_heading(raw_page, norm_title, title_lower):
+                    best_phys = phys_idx
+                    break
+
+            if best_phys is not None:
+                phys_display = best_phys + 1
+                if phys_display != logical_page:
+                    print_log(
+                        f"  [Splitter] ページ補正: '{title}' "
+                        f"論理P{logical_page} → 物理P{phys_display}"
+                    )
+                results.append({**entry, "start_page": best_phys})
+            else:
+                fallback = max(0, logical_page - 1)
+                print_log(
+                    f"  [Splitter] 警告: '{title}' が本文で見つかりません。"
+                    f"論理ページ {logical_page} をフォールバックとして使用します。"
+                )
+                results.append({**entry, "start_page": fallback})
+
+        return results
+
+    def _matches_heading(self, page_text: str, norm_title: str, title_lower: str) -> bool:
+        """ページが章見出しページかどうかを行単位で判定する。
+
+        章見出しはページ冒頭の行に単独で現れる（本文の句中に埋め込まれない）。
+        行単位の照合により、短いタイトル（"Methods" 等）が本文中に出現しても
+        誤ヒットしない。
+
+        Pass 1: 1行単位の照合（行全体または行頭が norm_title と一致）
+        Pass 2: 冒頭5行を結合して照合（見出しと副題が別行に分割されているケース）
+                例: TOC="Introductions: The Compulsion of Relations" に対し
+                    実ページが "Introductions" + "The Compulsion of Relations" の2行
+        """
+        lines = page_text.split("\n")
+
+        # Pass 1: 1行単位
+        for line in lines[:15]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            line_norm = self._normalize_title(stripped)
+            if norm_title:
+                if line_norm == norm_title or line_norm.startswith(norm_title + " "):
+                    return True
+            else:
+                if title_lower and title_lower in stripped.lower():
+                    return True
+
+        # Pass 2: 冒頭5行を結合（複数行に分かれた見出し）
+        # 4語以上のタイトルにのみ適用。短いタイトルは本文にも頻出するため
+        # 結合マッチは誤ヒットリスクが高い。
+        # 例: "Introductions: The Compulsion of Relations"（5語）→ 適用
+        #     "Methods"（1語）や "Power and Politics"（3語）→ 適用しない
+        if norm_title and len(norm_title.split()) >= 4:
+            joined = " ".join(l.strip() for l in lines[:5] if l.strip())
+            joined_norm = self._normalize_title(joined)
+            if norm_title in joined_norm:
+                return True
+
+        return False
+
+    def _is_toc_page(self, page_text: str, all_titles: List[str]) -> bool:
+        """ページが目次ページかどうかを判定する。
+
+        目次ページは全章タイトルを列挙するため、3章以上のタイトルを含む。
+        これにより、検索開始が前付け内の場合の誤ヒットを防ぐ。
+        """
+        page_lower = page_text.lower()
+        matches = sum(1 for t in all_titles if t and t.lower() in page_lower)
+        return matches >= 3
+
+    def _classify_role(self, title: str) -> str:
+        """章タイトルから role を推定する。"""
+        t = title.lower()
+        if any(w in t for w in ["preface", "foreword", "前書き", "はしがき"]):
+            return "preface"
+        if any(w in t for w in ["appendix", "付録"]):
+            return "appendix"
+        if "introduction" in t:
+            return "introduction"
+        return "chapter"
+
+    def _normalize_title(self, text: str) -> str:
+        """タイトル照合用の正規化（章番号・記号除去・小文字化）。"""
+        t = re.sub(r'^(?:Chapter|CHAPTER|Part|PART|Section|SECTION)\s+[\dIVXivx]+\s*[.:]?\s*', '', text)
+        t = re.sub(r'^[\dIVXivx]+[.:]?\s+', '', t)
+        t = re.sub(r'[^\w\s]', ' ', t)
+        return ' '.join(t.lower().split())
+
     def _extract_toc(self, doc: fitz.Document) -> List[Dict[str, Any]]:
-        """LLM を用いて PDF から TOC を抽出・整理する。"""
-        # 最初の15ページ程度をサンプルとして使用
+        """LLM を用いて PDF から TOC を抽出・整理する（論理ページ番号を返す）。"""
         text_samples = ""
         for i in range(min(15, len(doc))):
             text_samples += f"--- Page {i+1} ---\n" + doc[i].get_text() + "\n"
-        
+
         from .llm_client import load_coreprompts
         prompts = load_coreprompts()
         prompt = prompts.get("TOC_EXTRACTION_PROMPT", "").replace("{text}", text_samples)
-        
+
         try:
             from .llm_client import call_gemini
             response = call_gemini(

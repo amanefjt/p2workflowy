@@ -40,6 +40,17 @@ UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 MAX_TASK_STATUS_ENTRIES = 50
 task_status: Dict[str, dict] = {}
 
+# パイプライン直列化: 同時実行を1タスクに制限する
+# asyncio.Semaphore はイベントループ生成後に初期化する必要があるため遅延初期化
+_pipeline_semaphore: Optional[asyncio.Semaphore] = None
+_pipeline_queue: list = []  # 待機中のタスクIDを順番に保持
+
+def _get_pipeline_semaphore() -> asyncio.Semaphore:
+    global _pipeline_semaphore
+    if _pipeline_semaphore is None:
+        _pipeline_semaphore = asyncio.Semaphore(1)
+    return _pipeline_semaphore
+
 def _cleanup_task_status():
     """完了済みタスクが多すぎる場合、古いエントリを削除する。"""
     if len(task_status) <= MAX_TASK_STATUS_ENTRIES:
@@ -66,33 +77,53 @@ async def ronbun_page():
 
 # パイプラインを別スレッドで実行するための非同期ラッパー関数
 async def run_pipeline_in_background(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str, export_mode: str, is_book: bool):
+    semaphore = _get_pipeline_semaphore()
+
+    # キューに追加して待機状態を通知
+    _pipeline_queue.append(task_id)
+    queue_pos = len(_pipeline_queue)
+    if queue_pos > 1:
+        task_status[task_id]["status"] = "queued"
+        task_status[task_id]["progress"] = f"待機中... (キュー位置: {queue_pos - 1})"
+        task_status[task_id]["percentage"] = 0
+        print(f"Task {task_id}: キュー待機中 (位置: {queue_pos - 1})")
+
     try:
-        print(f"Task {task_id}: バックグラウンドスレッドでパイプラインを開始します...")
-        
-        # asyncio.to_thread で同期関数である run_pipeline をスレッドプールにオフロード
-        await asyncio.to_thread(
-            run_pipeline,
-            input_path=input_path,
-            glossary_path=glossary_path,
-            title=title,
-            api_key=api_key,
-            session_id=task_id,
-            expertise=expertise,
-            export_mode=export_mode,
-            model=None,
-            thinking_level="High",
-            pdf_mode="hybrid",
-            tier="paid",
-            is_book=is_book,
-            structure_only=False,
-            resume_only=False
-        )
-        task_status[task_id]["status"] = "completed"
-        print(f"Task {task_id}: 処理が正常に完了しました。")
+        async with semaphore:
+            # キュー位置表示を更新
+            _pipeline_queue.remove(task_id)
+            task_status[task_id]["status"] = "processing"
+            task_status[task_id]["progress"] = "準備中..."
+            task_status[task_id]["percentage"] = 5
+
+            print(f"Task {task_id}: バックグラウンドスレッドでパイプラインを開始します...")
+
+            # asyncio.to_thread で同期関数である run_pipeline をスレッドプールにオフロード
+            await asyncio.to_thread(
+                run_pipeline,
+                input_path=input_path,
+                glossary_path=glossary_path,
+                title=title,
+                api_key=api_key,
+                session_id=task_id,
+                expertise=expertise,
+                export_mode=export_mode,
+                model=None,
+                thinking_level="High",
+                pdf_mode="hybrid",
+                tier="paid",
+                is_book=is_book,
+                structure_only=False,
+                resume_only=False
+            )
+            task_status[task_id]["status"] = "completed"
+            print(f"Task {task_id}: 処理が正常に完了しました。")
     except Exception as e:
         import traceback
         error_msg = traceback.format_exc()
         print(f"Task {task_id}: エラーが発生しました - {error_msg}")
+        if task_id in _pipeline_queue:
+            _pipeline_queue.remove(task_id)
         task_status[task_id]["status"] = "failed"
         task_status[task_id]["error"] = str(e)
 
@@ -190,8 +221,13 @@ async def get_status(task_id: str):
     if task_id not in task_status:
         raise HTTPException(status_code=404, detail="Task not found")
     
+    # キュー待機中はキュー位置を動的に更新
+    if task_status[task_id]["status"] == "queued":
+        pos = _pipeline_queue.index(task_id) if task_id in _pipeline_queue else 0
+        task_status[task_id]["progress"] = f"待機中... (キュー位置: {pos})"
+
     # プログレスの動的更新（status.json およびファイル存在チェック）
-    if task_status[task_id]["status"] == "processing":
+    elif task_status[task_id]["status"] == "processing":
         session_id = task_id
         session_dir = STATE_DIR / session_id
         

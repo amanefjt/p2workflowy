@@ -12,15 +12,28 @@ class TextBookIntegrator:
         self.tab_char = tab_char
 
     def shift_markdown_headings(self, content: str, shift: int = 1) -> str:
-        """Markdown の見出しレベルを shift 分だけ上げる。"""
+        """Markdown の見出しレベルを shift 分だけ上げる。
+
+        LLM が "## # Title" のように誤った形式で出力した場合も正規化する。
+        正規表現で先頭の # 群を抽出し、テキスト部分は clean_heading_text で
+        残留 # を除去してからシフト後のレベルで再組み立てする。
+        """
         if shift <= 0:
             return content
-        
+
+        import re
         lines = content.splitlines()
         shifted_lines = []
         for line in lines:
             if line.startswith("#"):
-                shifted_lines.append(("#" * shift) + line)
+                m = re.match(r'^(#+)\s*(.*)', line)
+                if m:
+                    level = len(m.group(1))
+                    # テキスト部分の残留 # を除去（LLM が "## # Title" と書く誤り対策）
+                    text = re.sub(r'^[#\s]+', '', m.group(2)).strip()
+                    shifted_lines.append("#" * (level + shift) + " " + text)
+                else:
+                    shifted_lines.append(line)
             else:
                 shifted_lines.append(line)
         return "\n".join(shifted_lines)

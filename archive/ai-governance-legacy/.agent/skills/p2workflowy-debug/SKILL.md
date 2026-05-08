@@ -34,6 +34,7 @@ description: Practical implementation recipes and debugging protocols for the p2
 | **Slicing Failure** | 相対ページ番号 `0` のチャンクが見つからない | `calibrate_page_offset` による物理ページと論理ページの再同期。 |
 | **Heading Vanish** | `normalize_heading` 後の文字数が 3 未満 | 元の `RawText` を保持し、LLM による再分類（ヘッダー再昇格）を行う。 |
 | **ID Drift** | フェーズを跨いで ID が変わる | `Node.id` の生成を、インジェスト時の `raw_text` ハッシュに強制固定。 |
+| **TTFT 240s Stall** | Phase 4の`call_gemini`にて、Attempt 1のまま数分間（~230秒）返答がない | **Google側のキューイング仕様（正常）**。`asyncio.gather` + `max_concurrent=4`による並列相殺アプローチでキュー待機を一括消化する。直列化は絶対に行わない。 |
 
 ## 4. デバッグ・ステップ
 1. 現象の特定（例: 翻訳が出ない）。

@@ -43,3 +43,9 @@ graph TD
 - **Immutable State**: 各フェーズは `state/phaseN_output.json` を非破壊的に生成し、不変性を保つこと。
 - **Separation of Concerns**: パイプライン（骨組）は Python、肉付け（翻訳・要約）は LLM、という役割分担を崩さないこと。
 - **Standard Suffix**: すべての成果物には `_p2` を付けることが品質の証である。
+
+## 5. Phase 4 翻訳における並列ペーシング (Global Optimum)
+V3 (Golden Rewrite) における Phase 4 (翻訳) では、Gemini 3 Flash Preview の「Thinking: High ＋ 長大コンテキスト（8万文字）」使用時に発生する **API側での 240秒の強制キューイング（塩漬け）** に対応するため、以下の原則を遵守すること。
+
+- **直列化（Context Chaining）の禁止**: 前のセクションの完了を待つ直列化は、毎回 240秒 のペナルティを連続で食らい、全体の処理時間を1時間規模に破壊するため、**絶対に採用してはならない**。
+- **並列相殺 (Scatter-Gather) の強制**: `parallel_translator.py` における `max_concurrent_sections = 4` の設定を用いた一斉並列送信を「Global Optimum」とする。これにより、全セクションの待機時間を並列で一括相殺（約10分内の完走）しつつ、制限帯域（TPM）の安全圏を確保する。

@@ -814,7 +814,7 @@ def structure_nodes_by_headings(
     _meta_boundary_idx: int | None = None
     _meta_filter: set[str] = set()
     if dna:
-        abs_start_id = str(dna.get("abstract", {}).get("start_id", ""))
+        abs_start_id = str((dna.get("abstract") or {}).get("start_id", ""))
         if abs_start_id:
             for _i, _n in enumerate(flat_paragraphs):
                 if str(_n.id) == abs_start_id:

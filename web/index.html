@@ -65,15 +65,26 @@
 
                     <!-- Input -->
                     <div class="setup-item">
-                        <h3>4. 論文PDFの選択</h3>
-                            <div class="important-note" style="margin-top: 0; margin-bottom: 1rem;">
-                                <strong>Note:</strong> 解析するPDFファイルをアップロードしてください。
-                            </div>
+                        <h3>4. 入力（PDF または テキスト）</h3>
+
+                        <!-- タブ切り替え -->
+                        <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                            <button type="button" id="tab-pdf" onclick="switchInputTab('pdf')"
+                                style="padding: 0.4rem 1rem; border-radius: 6px; border: 2px solid var(--accent, #6366f1); background: var(--accent, #6366f1); color: white; cursor: pointer; font-weight: 600;">
+                                PDF
+                            </button>
+                            <button type="button" id="tab-text" onclick="switchInputTab('text')"
+                                style="padding: 0.4rem 1rem; border-radius: 6px; border: 2px solid #cbd5e1; background: white; color: #64748b; cursor: pointer; font-weight: 600;">
+                                テキスト貼り付け
+                            </button>
+                        </div>
+
+                        <!-- PDF入力 -->
+                        <div id="input-pdf">
                             <div class="form-group">
                                 <label>PDFファイルをアップロード</label>
                                 <input type="file" id="pdf_file" name="pdf_file" accept=".pdf" style="margin-bottom: 1rem;">
                             </div>
-                            <!-- 書籍モードの設定をここに移動 -->
                             <div class="form-group-checkbox" style="margin-top: 0.5rem; padding: 1rem; background: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1;">
                                 <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
                                     <input type="checkbox" id="is_book" name="is_book" style="width: auto;">
@@ -83,6 +94,17 @@
                                     <p>💡 <strong>スキャン書籍への対応:</strong> 高精度な視覚的解析エンジンにより、画像ベースのPDFでも論理構造（セクション等）を高い精度で抽出できます。</p>
                                 </div>
                             </div>
+                        </div>
+
+                        <!-- テキスト入力 -->
+                        <div id="input-text" style="display: none;">
+                            <div class="form-group">
+                                <label>論文テキストを貼り付け（AcrobatなどでコピーしたPDFテキスト）</label>
+                                <textarea id="text_input" name="text"
+                                    placeholder="ここに論文のテキストを貼り付けてください..."
+                                    style="width: 100%; height: 200px; padding: 0.75rem; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.9rem; font-family: monospace; resize: vertical; box-sizing: border-box;"></textarea>
+                            </div>
+                        </div>
                     </div>
                 </div>
 

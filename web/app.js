@@ -26,6 +26,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+// タブ切り替え
+function switchInputTab(tab) {
+    const isPdf = tab === 'pdf';
+    document.getElementById('input-pdf').style.display = isPdf ? '' : 'none';
+    document.getElementById('input-text').style.display = isPdf ? 'none' : '';
+    const accentStyle = 'background: var(--accent, #6366f1); color: white; border-color: var(--accent, #6366f1);';
+    const inactiveStyle = 'background: white; color: #64748b; border-color: #cbd5e1;';
+    document.getElementById('tab-pdf').style.cssText = isPdf ? accentStyle : inactiveStyle;
+    document.getElementById('tab-text').style.cssText = isPdf ? inactiveStyle : accentStyle;
+}
+
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
 
@@ -33,10 +44,23 @@ form.addEventListener('submit', async (e) => {
     const apiKey = document.getElementById('api_key').value;
     const expertise = document.getElementById('expertise').value;
     const pdfFile = document.getElementById('pdf_file').files[0];
+    const textInput = document.getElementById('text_input').value.trim();
+    const isTextMode = document.getElementById('input-text').style.display !== 'none';
 
-    if (!pdfFile) {
-        alert("PDFファイルをアップロードしてください。");
-        return;
+    if (isTextMode) {
+        if (!textInput) {
+            alert("テキストを入力してください。");
+            return;
+        }
+        // PDF フィールドを除去してテキストのみ送信
+        formData.delete('pdf_file');
+        formData.set('text', textInput);
+    } else {
+        if (!pdfFile) {
+            alert("PDFファイルをアップロードしてください。");
+            return;
+        }
+        formData.delete('text');
     }
 
     // 設定の保存（空入力でも上書き保存を許可）
@@ -117,7 +141,9 @@ async function pollStatus(taskId) {
                 resetButton();
             } else if (data.status === 'failed') {
                 clearInterval(interval);
-                statusText.innerText = 'エラーが発生しました';
+                const errDetail = data.error || data.progress || '詳細不明';
+                statusText.innerText = `エラーが発生しました: ${errDetail}`;
+                logViewer.innerHTML += `<span style="color:var(--text-danger, #ef4444)">処理失敗: ${errDetail}</span><br>`;
                 resetButton();
             }
         } catch (err) {

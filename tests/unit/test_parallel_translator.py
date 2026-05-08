@@ -8,19 +8,21 @@ from core.llm_client import GeminiTier
 @pytest.mark.asyncio
 async def test_parallel_translator_batching():
     """バッチングの検証: max_batch_chars を超える場合にバッチが分割されること。"""
-    # max_batch_chars を小さく設定
     translator = ParallelTranslator(tier=GeminiTier.FREE)
-    # FREE tiere settings: {"max_batch_chunks": 3, "max_batch_chars": 1500}
-    # 意図的に 600文字のチャンクを 4つ用意
+    # 現行 FREE tier デフォルト値を上書きして確定的なテストにする
+    translator.settings["max_batch_chunks"] = 3
+    translator.settings["max_batch_chars"] = 1500
+
+    # 600文字のチャンクを 4つ用意
     chunks = [
         {"id": f"c{i}", "text": "A" * 600, "seq_index": float(i)}
         for i in range(4)
     ]
-    
+
     batches = translator._create_batches(chunks)
-    
-    # バッチ1: c0 (600), c1 (600) = 1200. c2 (600) を足すと 1800 > 1500 なので、2つで切れるはず
-    # バッチ2: c2 (600), c3 (600) = 1200.
+
+    # バッチ1: c0 (600) + c1 (600) = 1200 < 1500。c2 を足すと 1800 > 1500 → ここで切断
+    # バッチ2: c2 (600) + c3 (600) = 1200 < 1500
     assert len(batches) == 2
     assert len(batches[0]) == 2
     assert len(batches[1]) == 2
@@ -86,4 +88,4 @@ async def test_parallel_translator_batch_failure_isolation():
     
     assert len(results) == 2
     assert results[0].translation == "OK"
-    assert "[翻訳失敗]" in results[1].text # text にエラーが書き込まれる仕様
+    assert "【翻訳失敗】" in results[1].text  # text に全角括弧のエラーマーカーが書き込まれる仕様

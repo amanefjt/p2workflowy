@@ -1,124 +1,140 @@
-import asyncio
-import re
-import sys
-import os
+"""
+RTT v3.4: XML パースロバスト性 & 適応バッチングの回帰テスト
 
-# プロジェクトルートをパスに追加
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PROJECT_ROOT)
+旧版は正規表現を手書きコピーしていたが、実際の translate_batch 実装と乖離していた。
+本ファイルは実装を直接使い、pytest + AsyncMock で動作を検証する。
+"""
 
-try:
-    from core.llm_client import tier_manager, GeminiTier, apply_tier_settings
-    from core.models import TreeNode
-    from core.engine.p4_translate.parallel_translator import ParallelTranslator
-    from core.config import print_log
-except ImportError as e:
-    print(f"Import error: {e}")
-    print(f"Make sure you are running this from {PROJECT_ROOT}")
-    sys.exit(1)
+import pytest
+from unittest.mock import AsyncMock, patch
+from aiolimiter import AsyncLimiter
 
-def test_regex_robustness():
-    """llm_client.py の正規表現ロジックが、不完全な応答をどこまで救えるか検証する。"""
-    print("\n=== [1] Testing Regex Robustness (RTT v3.4 Rescue) ===")
-    
-    # 実際の llm_client.py のロジックを再現
-    def extract_with_logic(response, chunk_ids):
-        id_map = {}
-        for cid in chunk_ids:
-            # llm_client.py line 457 の正規表現
-            pattern = rf"<p2w_chunk_{cid}>(.*?)(?:</p2w_chunk_{cid}>|(?=<p2w_chunk_)|\s*$)"
-            match = re.search(pattern, response, re.DOTALL | re.IGNORECASE)
-            if match:
-                extracted = match.group(1).strip()
-                if extracted:
-                    id_map[str(cid)] = extracted
-        return id_map
+from core.llm_client import translate_batch, GeminiTier, apply_tier_settings, tier_manager
+from core.engine.p4_translate.parallel_translator import ParallelTranslator
 
-    # Test Case 1: 正常系
-    resp1 = "<p2w_chunk_101>こんにちは</p2w_chunk_101><p2w_chunk_102>世界</p2w_chunk_102>"
-    res1 = extract_with_logic(resp1, [101, 102])
-    print(f"Normal Case: {res1}")
-    assert res1 == {"101": "こんにちは", "102": "世界"}
 
-    # Test Case 2: 閉じタグ欠落（末尾）
-    resp2 = "<p2w_chunk_101>こんにちは</p2w_chunk_101><p2w_chunk_102>さようなら（ここで出力が途切れる..."
-    res2 = extract_with_logic(resp2, [101, 102])
-    print(f"Truncated End: {res2}")
-    assert res2 == {"101": "こんにちは", "102": "さようなら（ここで出力が途切れる..."}
+# ============================================================
+# XML パースロバスト性テスト
+# ============================================================
 
-    # Test Case 3: 中間の閉じタグ欠落（次の開始タグで救出）
-    # Gemini がたまにやる「閉じタグ忘れ」を想定
-    resp3 = "<p2w_chunk_101>本文1<p2w_chunk_102>本文2</p2w_chunk_102>"
-    res3 = extract_with_logic(resp3, [101, 102])
-    print(f"Missing Intermediate Close Tag: {res3}")
-    assert res3 == {"101": "本文1", "102": "本文2"}
+@pytest.mark.asyncio
+async def test_parse_truncated_last_chunk():
+    """末尾の閉じタグが欠落していても最後のチャンクが救出されること。"""
+    chunks = [
+        {"id": "101", "text": "Hello", "seq_index": 1.0},
+        {"id": "102", "text": "World", "seq_index": 2.0},
+    ]
+    # 102 の閉じタグなし（LLM 出力が途中で途切れたケース）
+    mock_response = (
+        "<p2w_chunk_101>こんにちは</p2w_chunk_101>"
+        "<p2w_chunk_102>さようなら（ここで途切れる..."
+    )
 
-    # Test Case 4: 大文字小文字混在
-    resp4 = "<P2W_CHUNK_101>Mixed Case</p2w_chunk_101>"
-    res4 = extract_with_logic(resp4, [101])
-    print(f"Case Insensitive: {res4}")
-    assert res4 == {"101": "Mixed Case"}
+    with patch("core.llm_client.call_gemini_async", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = mock_response
+        results = await translate_batch(
+            chunks=chunks,
+            glossary_content="", previous_translation="",
+            prompt_template="Test {chunk_json}", resume_content="",
+            section_name="Test", rate_limiter=AsyncLimiter(10, 1),
+        )
 
-    print("✅ Regex Robustness Tests Passed!")
+    assert results[0].text == "こんにちは"
+    assert results[1].text == "さようなら（ここで途切れる..."
 
-async def test_adaptive_batching_logic():
-    """ParallelTranslator がティア変更を検知してバッチサイズを変えるか検証する。"""
-    print("\n=== [2] Testing Adaptive Batching Logic ===")
-    
-    # ティアの初期化
+
+@pytest.mark.asyncio
+async def test_parse_missing_intermediate_close_tag():
+    """中間の閉じタグが欠落していても、次の開始タグによって内容が正しく区切られること。"""
+    chunks = [
+        {"id": "101", "text": "A", "seq_index": 1.0},
+        {"id": "102", "text": "B", "seq_index": 2.0},
+    ]
+    # 101 の閉じタグがなく、102 が直接続くケース
+    mock_response = (
+        "<p2w_chunk_101>本文A"
+        "<p2w_chunk_102>本文B</p2w_chunk_102>"
+    )
+
+    with patch("core.llm_client.call_gemini_async", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = mock_response
+        results = await translate_batch(
+            chunks=chunks,
+            glossary_content="", previous_translation="",
+            prompt_template="Test {chunk_json}", resume_content="",
+            section_name="Test", rate_limiter=AsyncLimiter(10, 1),
+        )
+
+    assert results[0].text == "本文A"
+    assert results[1].text == "本文B"
+
+
+@pytest.mark.asyncio
+async def test_parse_case_insensitive_tags():
+    """大文字の開始タグ（<P2W_CHUNK_101>）も正しく認識されること。"""
+    chunks = [{"id": "101", "text": "Hello", "seq_index": 1.0}]
+    mock_response = "<P2W_CHUNK_101>Mixed Case</p2w_chunk_101>"
+
+    with patch("core.llm_client.call_gemini_async", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = mock_response
+        results = await translate_batch(
+            chunks=chunks,
+            glossary_content="", previous_translation="",
+            prompt_template="Test {chunk_json}", resume_content="",
+            section_name="Test", rate_limiter=AsyncLimiter(10, 1),
+        )
+
+    assert results[0].text == "Mixed Case"
+
+
+@pytest.mark.asyncio
+async def test_parse_unknown_id_ignored():
+    """known_ids に含まれない ID のタグはパース結果に含まれないこと。"""
+    chunks = [{"id": "real_id", "text": "Hello", "seq_index": 1.0}]
+    # 実在しない ID のタグを混ぜる
+    mock_response = (
+        "<p2w_chunk_real_id>正しい翻訳</p2w_chunk_real_id>"
+        "<p2w_chunk_ghost_id>ゴースト</p2w_chunk_ghost_id>"
+    )
+
+    with patch("core.llm_client.call_gemini_async", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = mock_response
+        results = await translate_batch(
+            chunks=chunks,
+            glossary_content="", previous_translation="",
+            prompt_template="Test {chunk_json}", resume_content="",
+            section_name="Test", rate_limiter=AsyncLimiter(10, 1),
+        )
+
+    assert len(results) == 1
+    assert results[0].text == "正しい翻訳"
+
+
+# ============================================================
+# 適応バッチングテスト（ティアダウングレード対応）
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_adaptive_batching_after_tier_downgrade():
+    """ティアが PAID → FREE にダウングレードされた後、次のバッチから設定が反映されること。"""
     tier_manager.set_tier(GeminiTier.PAID)
     translator = ParallelTranslator(tier=GeminiTier.PAID)
-    
-    # PAID ティアの設定を確認 (10 chunks / 11000 chars)
+
+    # PAID 設定確認
     assert translator.settings["max_batch_chunks"] == 10
-    
-    # 15個の仮想チャンクを作成
-    mock_chunks = [{"id": i, "text": "Dummy text " * 10} for i in range(1, 16)]
-    
-    # ParallelTranslator.translate_section_chunks の内部ループを模擬
-    def simulate_loop(chunks):
-        remaining = list(chunks)
-        batch_log = []
-        batch_idx = 1
-        
-        while remaining:
-            # 1. バッチ作成前にダウングレードが発生したかチェック
-            if batch_idx == 2:
-                print(f"--- Simulating 429/503 error at Batch {batch_idx} ---")
-                tier_manager.downgrade()
-            
-            # parallel_translator.py line 69-71 のロジック
-            if tier_manager.was_downgraded:
-                _, _, translator.settings = apply_tier_settings(tier_manager.current_tier)
-                print(f"    [Logic] Tier changed to {tier_manager.current_tier.value}")
-                print(f"    [Logic] New max_batch_chunks: {translator.settings['max_batch_chunks']}")
-            
-            # バッチ切り出し
-            max_c = translator.settings.get("max_batch_chunks", 10)
-            batch = []
-            while remaining and len(batch) < max_c:
-                batch.append(remaining.pop(0))
-            
-            batch_log.append(len(batch))
-            print(f"Batch {batch_idx}: {len(batch)} chunks")
-            batch_idx += 1
-            
-        return batch_log
 
-    # 実行
-    # 最初のバッチ(PAID)で 10個、次(FREE)で残り5個が処理されるはず
-    results = simulate_loop(mock_chunks)
-    print(f"Execution sequence (batch sizes): {results}")
-    
-    assert results[0] == 10, "First batch should be 10 (PAID)"
-    assert results[1] == 5, "Second batch should be 5 (FREE after downgrade)"
-    
-    print("✅ Adaptive Batching Logic Tests Passed!")
+    # ダウングレードをシミュレート
+    tier_manager.downgrade()
 
-async def main():
-    test_regex_robustness()
-    await test_adaptive_batching_logic()
-    print("\n✨ All tests completed successfully!")
+    # translate_section_chunks 内の動的ティア反映ロジックを模擬:
+    # 実装は tier_manager.current_tier != self.tier を検知して apply_tier_settings を呼ぶ
+    if tier_manager.current_tier != translator.tier:
+        translator.tier = tier_manager.current_tier
+        translator.rate_limiter, _, translator.settings = apply_tier_settings(translator.tier)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    # FREE 設定に切り替わっていること
+    assert translator.settings["max_batch_chunks"] == 5
+    assert translator.settings["max_batch_chars"] == 6000
+
+    # クリーンアップ
+    tier_manager.set_tier(GeminiTier.PAID)

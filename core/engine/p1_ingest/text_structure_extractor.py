@@ -120,13 +120,21 @@ class TextStructureExtractor:
 
             for norm_head, orig_head in heading_pairs:
                 head_words = norm_head.split()
-                n = len(head_words)
-                if n > len(line_words):
+                # 正規化で番号が剥がれると語数が変わるため、元見出しの語数も試す。
+                # 例: "1. Introduction" → norm="introduction"(1語) だが元は2語。
+                n_norm = len(head_words)
+                n_orig = len(orig_head.split())
+                matched_n = None
+                for n in dict.fromkeys([n_orig, n_norm]):  # 重複排除・順序保持
+                    if n > len(line_words):
+                        continue
+                    candidate = " ".join(line_words[:n])
+                    if self._normalize(candidate) == norm_head:
+                        matched_n = n
+                        break
+                if matched_n is None:
                     continue
-
-                candidate = " ".join(line_words[:n])
-                if self._normalize(candidate) != norm_head:
-                    continue
+                n = matched_n
 
                 # 見出し直後の単語が大文字始まり、または行末
                 after_words = line_words[n:]

@@ -49,9 +49,12 @@ def test_analyze_dna_basic(mock_call, mock_page1_chunks):
 
 @patch("core.engine.meta_analyzer.call_gemini")
 def test_analyze_dna_error_handling(mock_call, mock_page1_chunks):
-    """LLM が壊れた JSON を返した場合のエラーハンドリング"""
+    """LLM が壊れた JSON を返した場合、例外を投げずフォールバック DNA が返されること。"""
     mock_call.return_value = "Invalid JSON response"
-    
+
     analyzer = MetaAnalyzer()
-    with pytest.raises(RuntimeError): # または MetaExtractionError
-        analyzer.analyze_dna(mock_page1_chunks)
+    dna = analyzer.analyze_dna(mock_page1_chunks)
+
+    # パイプライン継続優先のため例外は投げず、フォールバック値で戻る
+    assert dna["title"] == "Unknown Title"
+    assert dna["authors"] == []

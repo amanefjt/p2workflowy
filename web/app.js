@@ -72,13 +72,18 @@ form.addEventListener('submit', async (e) => {
     localStorage.setItem('p2workflowy_expertise', expertise);
 
     const isBook = document.getElementById('is_book').checked;
-    
+    const maxChaptersEl = document.getElementById('max_chapters');
+    const maxChapters = maxChaptersEl && maxChaptersEl.value ? parseInt(maxChaptersEl.value) : null;
+
     if (apiKey) {
         formData.set('api_key', apiKey);
     }
-    formData.set('expertise', expertise); 
+    formData.set('expertise', expertise);
     formData.set('export_mode', 'p2workflowy');
     formData.set('is_book', isBook ? 'true' : 'false');
+    if (isBook && maxChapters) {
+        formData.set('max_chapters', maxChapters);
+    }
 
     // UI Update
     submitBtn.disabled = true;

@@ -29,6 +29,13 @@ def main():
         help="書籍モード（章・節の階層を維持）",
     )
     parser.add_argument(
+        "--max-chapters",
+        type=int,
+        default=None,
+        dest="max_chapters",
+        help="書籍モード: 処理する最大章数（コスト削減・デバッグ用）",
+    )
+    parser.add_argument(
         "--paper",
         action="store_true",
         help="論文モード（デフォルト）",
@@ -176,6 +183,7 @@ def main():
                 tier="free" if (args.free or args.lite) else "paid",
                 heavy_ocr=args.heavy_ocr,
                 max_pages=args.max_pages,
+                max_chapters=args.max_chapters,
                 resume_only=args.resume_only,
                 structure_only=args.structure_only,
                 resume_from=args.resume

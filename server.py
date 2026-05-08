@@ -76,7 +76,7 @@ async def ronbun_page():
     return FileResponse(web_dir / "ronbun.html")
 
 # パイプラインを別スレッドで実行するための非同期ラッパー関数
-async def run_pipeline_in_background(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str, export_mode: str, is_book: bool):
+async def run_pipeline_in_background(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str, export_mode: str, is_book: bool, max_chapters: Optional[int] = None):
     semaphore = _get_pipeline_semaphore()
 
     # キューに追加して待機状態を通知
@@ -99,23 +99,35 @@ async def run_pipeline_in_background(task_id: str, input_path: str, glossary_pat
             print(f"Task {task_id}: バックグラウンドスレッドでパイプラインを開始します...")
 
             # asyncio.to_thread で同期関数である run_pipeline をスレッドプールにオフロード
-            await asyncio.to_thread(
-                run_pipeline,
-                input_path=input_path,
-                glossary_path=glossary_path,
-                title=title,
-                api_key=api_key,
-                session_id=task_id,
-                expertise=expertise,
-                export_mode=export_mode,
-                model=None,
-                thinking_level="High",
-                pdf_mode="hybrid",
-                tier="paid",
-                is_book=is_book,
-                structure_only=False,
-                resume_only=False
-            )
+            if is_book:
+                from core.book_manager import BookManager
+                manager = BookManager(input_path=input_path, api_key=api_key)
+                await asyncio.to_thread(
+                    manager.run,
+                    glossary_path=glossary_path,
+                    thinking_level="High",
+                    pdf_mode="hybrid",
+                    tier="paid",
+                    max_chapters=max_chapters,
+                )
+            else:
+                await asyncio.to_thread(
+                    run_pipeline,
+                    input_path=input_path,
+                    glossary_path=glossary_path,
+                    title=title,
+                    api_key=api_key,
+                    session_id=task_id,
+                    expertise=expertise,
+                    export_mode=export_mode,
+                    model=None,
+                    thinking_level="High",
+                    pdf_mode="hybrid",
+                    tier="paid",
+                    is_book=False,
+                    structure_only=False,
+                    resume_only=False
+                )
             task_status[task_id]["status"] = "completed"
             print(f"Task {task_id}: 処理が正常に完了しました。")
     except Exception as e:
@@ -137,6 +149,7 @@ async def process(
     pdf_file: Optional[UploadFile] = File(None),
     export_mode: str = Form("p2workflowy"),
     is_book: bool = Form(False),
+    max_chapters: Optional[int] = Form(None),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     task_id = str(uuid.uuid4())
@@ -205,7 +218,7 @@ async def process(
     }
 
     background_tasks.add_task(
-        run_pipeline_in_background, task_id, str(input_path), str(glossary_path) if glossary_path else None, title, api_key, expertise, export_mode, is_book
+        run_pipeline_in_background, task_id, str(input_path), str(glossary_path) if glossary_path else None, title, api_key, expertise, export_mode, is_book, max_chapters
     )
 
     _cleanup_task_status()

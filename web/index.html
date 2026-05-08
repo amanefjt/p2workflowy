@@ -87,9 +87,17 @@
                             </div>
                             <div class="form-group-checkbox" style="margin-top: 0.5rem; padding: 1rem; background: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1;">
                                 <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
-                                    <input type="checkbox" id="is_book" name="is_book" style="width: auto;">
+                                    <input type="checkbox" id="is_book" name="is_book" style="width: auto;" onchange="document.getElementById('book-options').style.display = this.checked ? 'block' : 'none'">
                                     <span><strong>書籍モード</strong> (章立て・目次抽出を有効にする)</span>
                                 </label>
+                                <div id="book-options" style="display: none; margin-top: 0.75rem;">
+                                    <label style="font-size: 0.85rem; color: #475569; display: flex; align-items: center; gap: 0.5rem;">
+                                        最大章数（省略で全章）:
+                                        <input type="number" id="max_chapters" name="max_chapters" min="1" max="99"
+                                            style="width: 70px; padding: 0.25rem 0.5rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.85rem;"
+                                            placeholder="全章">
+                                    </label>
+                                </div>
                                 <div class="important-note" style="margin-top: 0.5rem; font-size: 0.85rem; color: #64748b; line-height: 1.5;">
                                     <p>💡 <strong>スキャン書籍への対応:</strong> 高精度な視覚的解析エンジンにより、画像ベースのPDFでも論理構造（セクション等）を高い精度で抽出できます。</p>
                                 </div>

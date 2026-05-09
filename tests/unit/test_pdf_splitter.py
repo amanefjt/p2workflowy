@@ -339,3 +339,64 @@ class TestSplitRouting:
         # TOC がなければ全編単独章として返す
         assert len(result) == 1
         assert result[0]["path"] == "dummy.pdf"
+
+
+# ============================================================
+# _extract_toc: VLM フォールバック
+# ============================================================
+
+class TestExtractTocVlmFallback:
+    def test_vlm_fallback_triggered_when_few_chapters(self):
+        """テキスト抽出で章が 2 件以下のとき VLM フォールバックが呼ばれる。"""
+        s = make_splitter()
+        doc = make_mock_doc([""] * 5)
+
+        text_toc = [{"title": "Acknowledgments", "start_page": 1, "role": "preface"}]
+        vlm_toc = [
+            {"title": "Prologue", "start_page": 1, "role": "introduction"},
+            {"title": "Chapter 1", "start_page": 9, "role": "chapter"},
+            {"title": "Chapter 2", "start_page": 39, "role": "chapter"},
+        ]
+
+        with patch.object(s, "_extract_toc_vlm", return_value=vlm_toc) as mock_vlm, \
+             patch("core.llm_client.call_gemini", return_value=json.dumps({"toc": text_toc})):
+            result = s._extract_toc(doc)
+
+        mock_vlm.assert_called_once()
+        assert result == vlm_toc
+
+    def test_vlm_fallback_not_triggered_when_enough_chapters(self):
+        """テキスト抽出で 3 件以上の章が取れた場合は VLM を呼ばない。"""
+        s = make_splitter()
+        doc = make_mock_doc([""] * 5)
+
+        text_toc = [
+            {"title": "Chapter 1", "start_page": 1, "role": "chapter"},
+            {"title": "Chapter 2", "start_page": 20, "role": "chapter"},
+            {"title": "Chapter 3", "start_page": 40, "role": "chapter"},
+        ]
+
+        with patch.object(s, "_extract_toc_vlm") as mock_vlm, \
+             patch("core.llm_client.call_gemini", return_value=json.dumps({"toc": text_toc})):
+            result = s._extract_toc(doc)
+
+        mock_vlm.assert_not_called()
+        assert result == text_toc
+
+    def test_vlm_result_ignored_if_not_better(self):
+        """VLM の結果がテキスト抽出より改善していない場合はテキスト結果を維持する。"""
+        s = make_splitter()
+        doc = make_mock_doc([""] * 5)
+
+        text_toc = [
+            {"title": "Prologue", "start_page": 1, "role": "introduction"},
+            {"title": "Chapter 1", "start_page": 9, "role": "chapter"},
+        ]
+        vlm_toc = [{"title": "Prologue", "start_page": 1, "role": "introduction"}]
+
+        with patch.object(s, "_extract_toc_vlm", return_value=vlm_toc), \
+             patch("core.llm_client.call_gemini", return_value=json.dumps({"toc": text_toc})):
+            result = s._extract_toc(doc)
+
+        # VLM の結果（1件）より text_toc（2件）の方が多いので text_toc を維持
+        assert result == text_toc

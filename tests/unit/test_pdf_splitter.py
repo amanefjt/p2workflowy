@@ -270,6 +270,47 @@ class TestApplyContentScan:
         # 物理ページ14（0-indexed）にマッチする
         assert result[0]["start_page"] == 14
 
+    def test_fallback_skip_when_ordering_violation(self):
+        """フォールバックページが前章より前になる場合はエントリをスキップする。
+
+        例: Chapter 11 が物理P242 で見つかり、続く Concluded が
+        コンテンツスキャンで見つからず論理P233 → フォールバック物理P232 となる場合。
+        242 > 232 なので Concluded はスキップし、Chapter 11 の範囲に吸収される。
+        """
+        s = make_splitter()
+        # pages[241] に Chapter 11 見出し、Concluded 相当のタイトルは存在しない
+        pages = ["body"] * 242 + ["Concluded body text"] * 50
+        pages[241] = "The Ethnographic Effect II\n\nBody text..."
+        doc = make_mock_doc(pages)
+
+        llm_toc = [
+            {"title": "Chapter 11: The Ethnographic Effect II", "start_page": 229, "role": "chapter"},
+            {"title": "Writing societies, writing persons", "start_page": 233, "role": "chapter"},
+        ]
+        result = s._apply_content_scan(doc, llm_toc)
+
+        # Chapter 11 は物理P241（0-indexed）で見つかる
+        assert len(result) == 1
+        assert result[0]["title"] == "Chapter 11: The Ethnographic Effect II"
+        assert result[0]["start_page"] == 241
+
+    def test_fallback_ok_when_no_ordering_violation(self):
+        """フォールバックページが前章より後ならエントリを維持する。"""
+        s = make_splitter()
+        pages = ["body"] * 60
+        doc = make_mock_doc(pages)
+
+        llm_toc = [
+            {"title": "Chapter 1", "start_page": 10, "role": "chapter"},
+            {"title": "Invisible Chapter", "start_page": 40, "role": "chapter"},
+        ]
+        result = s._apply_content_scan(doc, llm_toc)
+
+        # Chapter 1 が見つからず論理P10→フォールバックP9, Invisible も見つからず論理P40→フォールバックP39
+        # 9 < 39 なので順序違反なし → 両方保持
+        assert len(result) == 2
+        assert result[1]["start_page"] == 39
+
 
 # ============================================================
 # _is_toc_page

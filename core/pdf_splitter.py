@@ -167,6 +167,7 @@ class PDFSplitter:
         total_pages = len(doc)
         all_titles = [e.get("title", "") for e in llm_toc]
         results = []
+        last_found_phys = -1
 
         for entry in llm_toc:
             title = entry.get("title", "")
@@ -198,9 +199,18 @@ class PDFSplitter:
                         f"  [Splitter] ページ補正: '{title}' "
                         f"論理P{logical_page} → 物理P{phys_display}"
                     )
+                last_found_phys = best_phys
                 results.append({**entry, "start_page": best_phys})
             else:
                 fallback = max(0, logical_page - 1)
+                if fallback <= last_found_phys:
+                    # フォールバックが前章より前になる場合、順序を壊すのでスキップ
+                    # そのエントリの内容は前章の範囲に吸収される
+                    print_log(
+                        f"  [Splitter] 警告: '{title}' が本文で見つからず、"
+                        f"フォールバックP{fallback+1}が前章P{last_found_phys+1}より前のためスキップします。"
+                    )
+                    continue
                 print_log(
                     f"  [Splitter] 警告: '{title}' が本文で見つかりません。"
                     f"論理ページ {logical_page} をフォールバックとして使用します。"

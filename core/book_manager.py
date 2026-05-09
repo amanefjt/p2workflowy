@@ -246,5 +246,27 @@ class BookManager:
             print_log("\n--- Consolidating Chapters ---")
             integrator = StateIntegrator(book_title=self.book_title, session_dir=str(self.session_dir))
             output_paths = integrator.integrate_to_book(chapter_sessions, global_resume=self.global_resume)
+            self._cleanup_old_book_sessions()
             return output_paths
         return []
+
+    MAX_BOOK_SESSIONS = 5
+
+    def _cleanup_old_book_sessions(self):
+        """book_sessions/ 以下の古いセッションを削除し MAX_BOOK_SESSIONS 以内に収める。"""
+        from .config import STATE_DIR
+        book_sessions_dir = STATE_DIR / "book_sessions"
+        if not book_sessions_dir.exists():
+            return
+        dirs = [d for d in book_sessions_dir.iterdir() if d.is_dir()]
+        if len(dirs) <= self.MAX_BOOK_SESSIONS:
+            return
+        dirs.sort(key=lambda d: d.stat().st_mtime)
+        to_delete = dirs[:len(dirs) - self.MAX_BOOK_SESSIONS]
+        print_log(f"  [BookManager] 古い書籍セッションを削除（保持上限: {self.MAX_BOOK_SESSIONS}）")
+        for d in to_delete:
+            try:
+                shutil.rmtree(d)
+                print_log(f"    削除: {d.name}")
+            except Exception as e:
+                print_log(f"    削除失敗 {d.name}: {e}")

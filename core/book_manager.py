@@ -139,9 +139,16 @@ class BookManager:
         glossary_path_str = str(glossary_path) if glossary_path.exists() else None
 
         # 1. PDF 分割
+        # 見開きスキャンPDFは分割してから章分割・処理に渡す
+        from .spread_splitter import is_spread_pdf, split_spread_pdf
+        pdf_for_splitting = str(self.input_path)
+        if is_spread_pdf(pdf_for_splitting):
+            print_log("  [BookManager] 見開きスキャンPDFを検出。単ページに分割します...")
+            pdf_for_splitting = split_spread_pdf(pdf_for_splitting)
+
         model_to_use = self.model or get_default_model("default")
         splitter = PDFSplitter(api_key=self.api_key, model=model_to_use)
-        chapters = splitter.split(str(self.input_path), self.session_dir / "chapters")
+        chapters = splitter.split(pdf_for_splitting, self.session_dir / "chapters")
         
         if not chapters:
             return []

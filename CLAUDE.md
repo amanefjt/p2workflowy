@@ -98,7 +98,7 @@ Phase 2 が抽出する DNA には `intro_pre_heading`（最初の節タイト�
 
 - **TierManager（シングルトン）**: 429/503 エラーで自動的に FREE ティア（Lite モデル）へダウンシフトする自己修復機構。
 - **モデル選択の真実ソース**: `docs/model_optimization.md` が意思決定の正本。`core/coreprompts.json` の `DEFAULT_MODEL` / `DEFAULT_MODEL_FREE` / `DEFAULT_MODEL_VLM` は runtime の設定値であり、`model_optimization.md` に合わせて更新する。実装とドキュメントが不一致の場合はドキュメント側に揃える。
-- **Phase 4 並列数**: `max_concurrent_sections=4` が最適値。**絶対に 1（直列化）にしてはならない**（API 側の 240 秒 TTFT キューイングを並列で相殺する設計。直列化すると全セクションが順繰りに 240 秒待たされ処理が 1 時間超になる）。
+- **Phase 4 並列数**: デフォルト `max_concurrent_sections=4`。直列化（=1）は実測で約 50% 遅く（338s vs 227s）避けるべき。`--concurrent 8` はさらに速いが高分散。詳細は `docs/model_optimization.md` Section 3 参照。
 
 ### プロンプト管理（`core/coreprompts.json`）
 

@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 # ── 設定（実行前に SESSION_ID を設定すること） ──────────────────────────────
-SESSION_ID = "FILL_IN_AFTER_PHASE1_3_RUN"   # 例: "20260510_123456"
+SESSION_ID = "20260511_070254"
 INPUT_FILE = "data/input/paperplain/AL/Arbitrarysample.txt"
 RESULTS_DIR = Path("data/benchmark_results")
 GLOBAL_METRICS_CSV = Path("state/ttft_metrics.csv")

@@ -592,9 +592,9 @@ def reset_pipeline_state() -> None:
     tier_manager.set_tier(GeminiTier.PAID)
 
 
-def apply_tier_settings(tier: str | GeminiTier) -> Tuple[AsyncLimiter, asyncio.Semaphore, dict]:
+def apply_tier_settings(tier: str | GeminiTier) -> Tuple[AsyncLimiter, dict]:
     """
-    ティアに応じたレートリミッター・セマフォ・設定を返す。
+    ティアに応じたレートリミッターと設定を返す。
     ティアの文字列表記を受け入れ、tier_manager のグローバル状態を更新する。
     """
     global _CACHED_LIMITERS
@@ -612,17 +612,13 @@ def apply_tier_settings(tier: str | GeminiTier) -> Tuple[AsyncLimiter, asyncio.S
     with _LIMITER_LOCK:
         if tier == GeminiTier.FREE:
             settings = {"max_batch_chunks": 5, "max_batch_chars": 6000}
-            semaphore_size = 1
             if tier not in _CACHED_LIMITERS:
                 _CACHED_LIMITERS[tier] = AsyncLimiter(1, 4.0)  # 1 request per 4 seconds
         else:
             settings = {"max_batch_chunks": 10, "max_batch_chars": 11000}
-            semaphore_size = 2
             if tier not in _CACHED_LIMITERS:
                 _CACHED_LIMITERS[tier] = AsyncLimiter(100, 60.0)  # 100 requests per minute
 
         rate_limiter = _CACHED_LIMITERS[tier]
-        # Semaphore は毎回新規作成（イベントループ依存のためキャッシュ不可）
-        semaphore = asyncio.Semaphore(semaphore_size)
 
-    return rate_limiter, semaphore, settings
+    return rate_limiter, settings

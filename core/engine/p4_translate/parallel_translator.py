@@ -26,7 +26,7 @@ class ParallelTranslator:
         self.model = model
         self.tier = tier
         self.semaphore = asyncio.Semaphore(max_concurrent_sections)
-        self.rate_limiter, _, self.settings = apply_tier_settings(tier)
+        self.rate_limiter, self.settings = apply_tier_settings(tier)
 
     def _create_batches(self, chunks: List[dict]) -> List[List[dict]]:
         """チャンク数と文字数に基づいてバッチを生成する。"""
@@ -69,7 +69,7 @@ class ParallelTranslator:
                 # 1. ティアの動的変更（ダウングレード対応）を反映 (P4-2: 変更があった時のみ適用)
                 if tier_manager.current_tier != self.tier:
                     self.tier = tier_manager.current_tier
-                    self.rate_limiter, _, self.settings = apply_tier_settings(self.tier)
+                    self.rate_limiter, self.settings = apply_tier_settings(self.tier)
 
                 # 2. 現在の設定に基づきバッチを切り出し
                 max_chunks = self.settings.get("max_batch_chunks", self.DEFAULT_MAX_BATCH_CHUNKS)

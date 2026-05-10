@@ -7,74 +7,104 @@ sdk: docker
 pinned: false
 ---
 
-# 📚 p2workflowy V3 (Stable Release)
+# 📚 p2workflowy
 
-[![Gemini](https://img.shields.io/badge/Model-Gemini%202.0%20/%201.5%20Pro-blue.svg)](https://deepmind.google/technologies/gemini/)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://www.python.org/)
+**学術論文・専門書籍を、Workflowy で深く読むための日本語アウトラインに変換するツール**
 
-**p2workflowy** は、学術論文や専門書籍の PDF/テキストを Gemini AI を活用して解析、Workflowy などのアウトライナーで扱いやすい高品質な Markdown 形式に変換・翻訳する強力なツールです。
-
----
-
-## ✨ V3 (Stable) 新機能と改善
-
-### 1. 認知透過性翻訳 (Cognitive Clarity Translation)
-- **サイトトランスレーション・リズム**: 英語固有の構文に囚われず、日本語として「前から後ろへ」流れるように訳す最新プロンプトを採用（Gemini 2.0 / 1.5 Pro 最適化）。
-- **論理的リズムの最適化**: 複雑な論理関係を意味のまとまりごとに分割し、論理展開が明快な prose（散文）を提供します。
-
-### 2. 論文モード (Paper Mode) の洗練
-- **H3/H2 非対称階層**: 英語パートを H3、日本語パートを H2 で出力。Workflowy 上で英語セクションを日本語見出しの直下に、論理的な親子関係として配置可能です。
-- **[Unlabeled Section] の解消**: Abstract 以前のメタデータやタイトルを自動識別。構造の不純物を排除し、即座に執筆・思考に活用できるクリーンな出力を実現。
-
-### 3. 書籍モード (Book Mode) & ハイブリッド Ingestion
-- **Book Mode**: 目次 (TOC) を LLM で抽出し、PyMuPDF と組み合わせて完全な章・節構造（Tree）を再構築。
-- **VLM-Assist OCR**: テキスト抽出が困難なスキャン書籍も、Gemini VLM を用いて高精度に OCR 処理します。
+Gemini AI が論文・書籍の構造を解析し、英語原文と日本語訳を対応させた階層 Markdown を生成します。PDF アップロードまたはテキスト貼り付けに対応。
 
 ---
 
-## 🚀 セットアップ
+## 🌐 Web 版で今すぐ使う
 
-### 必要条件
-- Python 3.10 以上 / Gemini API キー
+**[https://p2workflowy.pages.dev](https://p2workflowy.pages.dev)**
 
-### 導入手順
+ブラウザだけで利用できます。インストール不要です。
+
+### 使い方（Web 版）
+
+1. **[Google AI Studio](https://aistudio.google.com/app/apikey)** で Gemini API キーを取得する
+   - 無料枠で利用できますが、Googleの仕様上、支払い手段の登録が必要です
+   - 入力したキーはあなたのブラウザにのみ保存され、サーバーには送信されません
+2. Web UI でAPIキーと専門分野を入力する
+3. 論文 PDF をアップロード、またはテキストを貼り付ける
+4. 変換完了後、`.md`（英語+日本語）と `.txt`（Workflowy 用）をダウンロードする
+
+---
+
+## 📄 出力形式について
+
+生成されるファイルは **Workflowy** のアウトライン構造に最適化されています。
+
+```
+論文タイトル
+  ├─ 1. Introduction          ← 英語セクション見出し（H3）
+  │    └─ 1. はじめに          ← 日本語見出し（H2）
+  │         ├─ [英語原文段落]
+  │         └─ 【日本語訳段落】
+  └─ 2. Methods
+       └─ ...
+```
+
+- `.md` ファイル：Obsidian・Notion などでの閲覧に適した Markdown
+- `.txt` ファイル：Workflowy へのインポートに適したインデント形式
+
+---
+
+## ⚙️ 主な機能
+
+### 論文モード（デフォルト）
+学術論文の構造（Abstract → Introduction → Methods → ...）を自動認識し、各セクションを翻訳します。PDF または Acrobat でコピーしたテキストの貼り付けに対応。
+
+### 書籍モード
+目次（TOC）を AI で解析し、章・節ごとに分割して処理します。スキャン書籍（画像 PDF）も VLM（視覚言語モデル）による OCR で対応。
+
+### 用語集（グロッサリー）
+専門用語の翻訳ルールを CSV で事前登録すると、訳語が統一されます（任意）。
+
+---
+
+## 🖥 ローカル / CLI 版セットアップ
+
 ```bash
-git clone https://github.com/your-repo/p2workflowy.git
+git clone https://github.com/amanefjt/p2workflowy.git
 cd p2workflowy
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env # GEMINI_API_KEY / PASSCODE を設定
+cp .env.example .env   # GEMINI_API_KEY を設定
 ```
 
----
+### CLI での実行
 
-## 🛠 使い方
-
-### CLI版
 ```bash
-# 論文モード (デフォルト)
+# 論文モード（PDF）
 python3 main.py data/paper.pdf
 
-# 書籍モード (章・節構造の構築)
-python3 main.py data/book.pdf --book
-```
+# 論文モード（テキスト）
+python3 main.py data/paper.txt
 
-### Web版 (FastAPI)
-直感的なブラウザインターフェースからも利用可能です。
-```bash
+# 書籍モード
+python3 main.py data/book.pdf --book
+
+# Web サーバー起動（http://localhost:8000）
 python3 server.py
-# ブラウザで http://localhost:8000 にアクセス
 ```
 
 ---
 
 ## 📂 ディレクトリ構成
-- `core/`: 翻訳・構造化エンジンのコアロジック。
-- `web/`: WebUI フロントエンド（静的ファイル）。
-- `archive/`: 過去の安定版スナップショット（v3.x 系統）。
-- `docs/`: 仕様書・デザインドキュメント。
+
+```
+p2workflowy/
+├── core/          # パイプライン・翻訳エンジン（5フェーズ）
+├── web/           # Web UI フロントエンド
+├── docs/          # 仕様書・設計ドキュメント
+├── tests/         # ユニットテスト
+└── data/          # サンプル入力・テスト資産
+```
 
 ---
 
 ## 📄 ライセンス
-MIT License. 詳細は `LICENSE` ファイルを確認してください。
+
+MIT License

@@ -38,6 +38,7 @@ def run_pipeline(
     max_pages: Optional[int] = None,
     resume_content: Optional[str] = None,
     simple_mode: bool = False,
+    max_concurrent_sections: int = 4,
 ) -> List[Path]:
     """パイプライン全体を実行する。"""
     from .llm_client import tier_manager, GeminiTier, reset_pipeline_state
@@ -186,6 +187,7 @@ def run_pipeline(
                 resume_only=resume_only,
                 is_book=is_book,
                 pdf_mode=pdf_mode,
+                max_concurrent_sections=max_concurrent_sections,
             )
             print_log(f"  完了: {len(japanese_tree)} セクション翻訳完了\n")
 

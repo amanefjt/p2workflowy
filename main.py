@@ -120,8 +120,10 @@ def main():
         action="store_true",
         help="【推奨】テスト用の低コストモデル（Flash-Lite）を強制的に使用",
     )
-
-
+    parser.add_argument(
+        '--concurrent', type=int, default=4,
+        help='Phase 4 の並列セクション数（デフォルト: 4）'
+    )
 
     args = parser.parse_args()
 
@@ -234,6 +236,7 @@ def main():
                     resume_only=args.resume_only,
                     heavy_ocr=args.heavy_ocr,
                     max_pages=args.max_pages,
+                    max_concurrent_sections=args.concurrent,
                 )
             except Exception as e:
                 print(f"[{i}/{len(input_files)}] エラー発生: {e}")

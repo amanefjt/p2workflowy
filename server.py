@@ -76,7 +76,7 @@ async def ronbun_page():
     return FileResponse(web_dir / "ronbun.html")
 
 # パイプラインを別スレッドで実行するための非同期ラッパー関数
-async def run_pipeline_in_background(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str, export_mode: str, is_book: bool, max_chapters: Optional[int] = None):
+async def run_pipeline_in_background(task_id: str, input_path: str, glossary_path: Optional[str], title: Optional[str], api_key: Optional[str], expertise: str, export_mode: str, is_book: bool, max_chapters: Optional[int] = None):
     semaphore = _get_pipeline_semaphore()
 
     # キューに追加して待機状態を通知
@@ -142,7 +142,7 @@ async def run_pipeline_in_background(task_id: str, input_path: str, glossary_pat
 @app.post("/api/process")
 async def process(
     text: str = Form(""),
-    title: str = Form("Untitled"),
+    title: Optional[str] = Form(None),
     api_key: Optional[str] = Form(None),
     expertise: str = Form("文化人類学"),
     glossary: Optional[UploadFile] = File(None),

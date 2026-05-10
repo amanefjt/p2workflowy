@@ -270,6 +270,47 @@ class TestApplyContentScan:
         # 物理ページ14（0-indexed）にマッチする
         assert result[0]["start_page"] == 14
 
+    def test_fallback_skip_when_ordering_violation(self):
+        """フォールバックページが前章より前になる場合はエントリをスキップする。
+
+        例: Chapter 11 が物理P242 で見つかり、続く Concluded が
+        コンテンツスキャンで見つからず論理P233 → フォールバック物理P232 となる場合。
+        242 > 232 なので Concluded はスキップし、Chapter 11 の範囲に吸収される。
+        """
+        s = make_splitter()
+        # pages[241] に Chapter 11 見出し、Concluded 相当のタイトルは存在しない
+        pages = ["body"] * 242 + ["Concluded body text"] * 50
+        pages[241] = "The Ethnographic Effect II\n\nBody text..."
+        doc = make_mock_doc(pages)
+
+        llm_toc = [
+            {"title": "Chapter 11: The Ethnographic Effect II", "start_page": 229, "role": "chapter"},
+            {"title": "Writing societies, writing persons", "start_page": 233, "role": "chapter"},
+        ]
+        result = s._apply_content_scan(doc, llm_toc)
+
+        # Chapter 11 は物理P241（0-indexed）で見つかる
+        assert len(result) == 1
+        assert result[0]["title"] == "Chapter 11: The Ethnographic Effect II"
+        assert result[0]["start_page"] == 241
+
+    def test_fallback_ok_when_no_ordering_violation(self):
+        """フォールバックページが前章より後ならエントリを維持する。"""
+        s = make_splitter()
+        pages = ["body"] * 60
+        doc = make_mock_doc(pages)
+
+        llm_toc = [
+            {"title": "Chapter 1", "start_page": 10, "role": "chapter"},
+            {"title": "Invisible Chapter", "start_page": 40, "role": "chapter"},
+        ]
+        result = s._apply_content_scan(doc, llm_toc)
+
+        # Chapter 1 が見つからず論理P10→フォールバックP9, Invisible も見つからず論理P40→フォールバックP39
+        # 9 < 39 なので順序違反なし → 両方保持
+        assert len(result) == 2
+        assert result[1]["start_page"] == 39
+
 
 # ============================================================
 # _is_toc_page
@@ -339,3 +380,64 @@ class TestSplitRouting:
         # TOC がなければ全編単独章として返す
         assert len(result) == 1
         assert result[0]["path"] == "dummy.pdf"
+
+
+# ============================================================
+# _extract_toc: VLM フォールバック
+# ============================================================
+
+class TestExtractTocVlmFallback:
+    def test_vlm_fallback_triggered_when_few_chapters(self):
+        """テキスト抽出で章が 2 件以下のとき VLM フォールバックが呼ばれる。"""
+        s = make_splitter()
+        doc = make_mock_doc([""] * 5)
+
+        text_toc = [{"title": "Acknowledgments", "start_page": 1, "role": "preface"}]
+        vlm_toc = [
+            {"title": "Prologue", "start_page": 1, "role": "introduction"},
+            {"title": "Chapter 1", "start_page": 9, "role": "chapter"},
+            {"title": "Chapter 2", "start_page": 39, "role": "chapter"},
+        ]
+
+        with patch.object(s, "_extract_toc_vlm", return_value=vlm_toc) as mock_vlm, \
+             patch("core.llm_client.call_gemini", return_value=json.dumps({"toc": text_toc})):
+            result = s._extract_toc(doc)
+
+        mock_vlm.assert_called_once()
+        assert result == vlm_toc
+
+    def test_vlm_fallback_not_triggered_when_enough_chapters(self):
+        """テキスト抽出で 3 件以上の章が取れた場合は VLM を呼ばない。"""
+        s = make_splitter()
+        doc = make_mock_doc([""] * 5)
+
+        text_toc = [
+            {"title": "Chapter 1", "start_page": 1, "role": "chapter"},
+            {"title": "Chapter 2", "start_page": 20, "role": "chapter"},
+            {"title": "Chapter 3", "start_page": 40, "role": "chapter"},
+        ]
+
+        with patch.object(s, "_extract_toc_vlm") as mock_vlm, \
+             patch("core.llm_client.call_gemini", return_value=json.dumps({"toc": text_toc})):
+            result = s._extract_toc(doc)
+
+        mock_vlm.assert_not_called()
+        assert result == text_toc
+
+    def test_vlm_result_ignored_if_not_better(self):
+        """VLM の結果がテキスト抽出より改善していない場合はテキスト結果を維持する。"""
+        s = make_splitter()
+        doc = make_mock_doc([""] * 5)
+
+        text_toc = [
+            {"title": "Prologue", "start_page": 1, "role": "introduction"},
+            {"title": "Chapter 1", "start_page": 9, "role": "chapter"},
+        ]
+        vlm_toc = [{"title": "Prologue", "start_page": 1, "role": "introduction"}]
+
+        with patch.object(s, "_extract_toc_vlm", return_value=vlm_toc), \
+             patch("core.llm_client.call_gemini", return_value=json.dumps({"toc": text_toc})):
+            result = s._extract_toc(doc)
+
+        # VLM の結果（1件）より text_toc（2件）の方が多いので text_toc を維持
+        assert result == text_toc

@@ -167,6 +167,7 @@ class PDFSplitter:
         total_pages = len(doc)
         all_titles = [e.get("title", "") for e in llm_toc]
         results = []
+        last_found_phys = -1
 
         for entry in llm_toc:
             title = entry.get("title", "")
@@ -198,9 +199,18 @@ class PDFSplitter:
                         f"  [Splitter] ページ補正: '{title}' "
                         f"論理P{logical_page} → 物理P{phys_display}"
                     )
+                last_found_phys = best_phys
                 results.append({**entry, "start_page": best_phys})
             else:
                 fallback = max(0, logical_page - 1)
+                if fallback <= last_found_phys:
+                    # フォールバックが前章より前になる場合、順序を壊すのでスキップ
+                    # そのエントリの内容は前章の範囲に吸収される
+                    print_log(
+                        f"  [Splitter] 警告: '{title}' が本文で見つからず、"
+                        f"フォールバックP{fallback+1}が前章P{last_found_phys+1}より前のためスキップします。"
+                    )
+                    continue
                 print_log(
                     f"  [Splitter] 警告: '{title}' が本文で見つかりません。"
                     f"論理ページ {logical_page} をフォールバックとして使用します。"
@@ -278,7 +288,11 @@ class PDFSplitter:
         return ' '.join(t.lower().split())
 
     def _extract_toc(self, doc: fitz.Document) -> List[Dict[str, Any]]:
-        """LLM を用いて PDF から TOC を抽出・整理する（論理ページ番号を返す）。"""
+        """LLM を用いて PDF から TOC を抽出・整理する（論理ページ番号を返す）。
+
+        テキスト抽出が不十分（章が 2 件以下）の場合は VLM フォールバックを起動する。
+        これはスキャン PDF で TOC ページが OCR されていないケースに対応する。
+        """
         text_samples = ""
         for i in range(min(15, len(doc))):
             text_samples += f"--- Page {i+1} ---\n" + doc[i].get_text() + "\n"
@@ -287,6 +301,7 @@ class PDFSplitter:
         prompts = load_coreprompts()
         prompt = prompts.get("TOC_EXTRACTION_PROMPT", "").replace("{text}", text_samples)
 
+        toc = []
         try:
             from .llm_client import call_gemini
             response = call_gemini(
@@ -296,7 +311,77 @@ class PDFSplitter:
                 response_mime_type="application/json"
             )
             data = json.loads(response)
-            return data.get("toc", [])
+            toc = data.get("toc", [])
         except Exception as e:
-            print_log(f"  [Splitter] TOC 解析エラー: {e}")
+            print_log(f"  [Splitter] TOC テキスト解析エラー: {e}")
+
+        # テキスト抽出で十分な章が得られなかった場合は VLM フォールバック
+        # （スキャン PDF で TOC ページが OCR されていないケースに対応）
+        non_skip = [e for e in toc if e.get("role") != "skip"]
+        if len(non_skip) <= 2:
+            print_log(f"  [Splitter] テキスト抽出で章が {len(non_skip)} 件のみ。VLM フォールバック起動...")
+            vlm_toc = self._extract_toc_vlm(doc)
+            if len([e for e in vlm_toc if e.get("role") != "skip"]) > len(non_skip):
+                toc = vlm_toc
+
+        return toc
+
+    def _extract_toc_vlm(self, doc: fitz.Document) -> List[Dict[str, Any]]:
+        """ページ画像を VLM に渡して TOC を抽出する。
+
+        テキスト抽出が失敗するスキャン PDF（見開きスキャン・白抜き文字等）に対応する。
+        最初の 10 ページを画像化して Gemini Flash に渡す。
+        """
+        try:
+            from PIL import Image as PILImage
+        except ImportError:
+            print_log("  [Splitter] PIL が見つかりません。VLM フォールバックをスキップします。")
+            return []
+
+        from .llm_client import call_gemini, get_default_model
+
+        images = []
+        for i in range(min(10, len(doc))):
+            pix = doc[i].get_pixmap(dpi=150)
+            img = PILImage.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            images.append(img)
+
+        vlm_prompt = (
+            "以下の PDF ページ画像を見て、目次（Table of Contents / Contents）ページを探してください。\n"
+            "目次が見つかった場合、以下の JSON 形式で各章を出力してください。\n"
+            "目次がない場合は {\"toc\": []} を返してください。\n\n"
+            "【出力形式 (JSON Only)】\n"
+            "{\n"
+            "  \"toc\": [\n"
+            "    {\"title\": \"章タイトル\", \"start_page\": <目次に記載の印刷ページ番号（数値）>, \"role\": \"chapter|preface|introduction|appendix|skip\"}\n"
+            "  ]\n"
+            "}\n\n"
+            "【role の選択基準】\n"
+            "- preface: Preface / Acknowledgments / Foreword など前書き類\n"
+            "- introduction: Introduction / Prologue など\n"
+            "- chapter: 本編の各章\n"
+            "- appendix: Appendix / 付録など\n"
+            "- skip: Notes / Bibliography / Index など（翻訳不要）\n\n"
+            "解説や挨拶は不要です。純粋な JSON のみを出力してください。"
+        )
+
+        content = images + [vlm_prompt]
+
+        try:
+            vlm_model = get_default_model("vlm")
+            response = call_gemini(
+                prompt=content,
+                api_key=self.api_key,
+                model=vlm_model,
+                thinking_level="Low",
+            )
+            # コードブロック除去
+            response = re.sub(r"^```[a-zA-Z]*\n?", "", response.strip())
+            response = re.sub(r"\n?```$", "", response)
+            data = json.loads(response)
+            toc = data.get("toc", [])
+            print_log(f"  [Splitter] VLM TOC 抽出成功: {len(toc)} 件")
+            return toc
+        except Exception as e:
+            print_log(f"  [Splitter] VLM TOC 解析エラー: {e}")
             return []

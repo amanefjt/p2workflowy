@@ -107,7 +107,7 @@ async def run_pipeline_in_background(task_id: str, input_path: str, glossary_pat
                     glossary_path=glossary_path,
                     thinking_level="High",
                     pdf_mode="hybrid",
-                    tier="paid",
+                    tier="free",
                     max_chapters=max_chapters,
                 )
             else:
@@ -123,7 +123,7 @@ async def run_pipeline_in_background(task_id: str, input_path: str, glossary_pat
                     model=None,
                     thinking_level="High",
                     pdf_mode="hybrid",
-                    tier="paid",
+                    tier="free",
                     is_book=False,
                     structure_only=False,
                     resume_only=False
@@ -137,7 +137,7 @@ async def run_pipeline_in_background(task_id: str, input_path: str, glossary_pat
         if task_id in _pipeline_queue:
             _pipeline_queue.remove(task_id)
         task_status[task_id]["status"] = "failed"
-        task_status[task_id]["error"] = str(e)
+        task_status[task_id]["error"] = "処理中にエラーが発生しました。管理者にお問い合わせください。"
 
 @app.post("/api/process")
 async def process(
@@ -184,6 +184,8 @@ async def process(
     # ファイルの保存
     input_path = None
     if pdf_file and pdf_file.filename:
+        if not pdf_file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="PDFファイル（.pdf）のみ受け付けます。")
         input_path = _safe_upload_path(upload_dir, pdf_file.filename, "input.pdf")
         print(f"Saving PDF to {input_path.name}")
         content = await pdf_file.read()
@@ -199,6 +201,8 @@ async def process(
 
     glossary_path = None
     if glossary and glossary.filename:
+        if not glossary.filename.lower().endswith(".csv"):
+            raise HTTPException(status_code=400, detail="用語集はCSVファイル（.csv）のみ受け付けます。")
         glossary_path = _safe_upload_path(upload_dir, glossary.filename, "glossary.csv")
         print(f"Saving Glossary to {glossary_path.name}")
         content = await glossary.read()
@@ -273,7 +277,9 @@ async def get_status(task_id: str):
             task_status[task_id]["progress"] = "準備中..."
             task_status[task_id]["percentage"] = 15
             
-    return task_status[task_id]
+    info = dict(task_status[task_id])
+    info.pop("download_token", None)
+    return info
 
 @app.get("/api/download/{task_id}/{file_type}")
 async def download(task_id: str, file_type: str, token: str = ""):

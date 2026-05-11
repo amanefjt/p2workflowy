@@ -67,8 +67,12 @@ form.addEventListener('submit', async (e) => {
         formData.delete('text');
     }
 
-    // 設定の保存（空入力でも上書き保存を許可）
-    localStorage.setItem('p2workflowy_api_key', apiKey);
+    // 設定の保存
+    if (apiKey) {
+        localStorage.setItem('p2workflowy_api_key', apiKey);
+    } else {
+        localStorage.removeItem('p2workflowy_api_key');
+    }
     localStorage.setItem('p2workflowy_expertise', expertise);
 
     const isBook = document.getElementById('is_book').checked;

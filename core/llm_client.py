@@ -190,6 +190,18 @@ def _log_metrics(metrics_metadata: dict, prompt_len: int, p_tokens: int, c_token
         print_log(f"  [LLM] Metrics logging failed: {e_log}")
 
 
+def _calc_retry_wait(msg: str, attempt: int, retry_delay: float) -> tuple[float, bool]:
+    """429/503 ならダウンシフトしてバックオフ秒数を計算する。戻り値: (wait_seconds, is_resource_limit)"""
+    is_resource_limit = any(code in msg for code in ["429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE"])
+    if is_resource_limit:
+        tier_manager.downgrade()
+        match = re.search(r"retry in ([\d\.]+)s", msg)
+        base_wait = float(match.group(1)) + 1.0 if match else (10.0 * attempt)
+        jitter = random.uniform(0, base_wait * 0.3)
+        return base_wait + jitter, True
+    return retry_delay * attempt, False
+
+
 def call_gemini(
     prompt: str | list,
     model: str | None = None,
@@ -277,20 +289,9 @@ def call_gemini(
             print_log(f"  [LLM] リトライ {attempt}/{max_retries}: {type(e).__name__}: {msg}")
             
             if attempt < max_retries:
-                # 503 (Unavailable) と 429 (Resource Exhausted) は、強制ダウンシフト（無料版切り替え）の対象にする
-                is_resource_limit = any(code in msg for code in ["429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE"])
-                
+                wait_time, is_resource_limit = _calc_retry_wait(msg, attempt, retry_delay)
                 if is_resource_limit:
-                    tier_manager.downgrade()
-                    match = re.search(r"retry in ([\d\.]+)s", msg)
-                    base_wait = float(match.group(1)) + 1.0 if match else (10.0 * attempt)
-                    # ジッター: 複数タスクが同時に429を受けたとき同時リトライを防ぐ
-                    jitter = random.uniform(0, base_wait * 0.3)
-                    wait_time = base_wait + jitter
                     print_log(f"  [LLM] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
-                else:
-                    wait_time = retry_delay * attempt
-
                 time.sleep(wait_time)
     raise RuntimeError(f"Gemini API 呼び出し失敗: {last_error}")
 
@@ -385,20 +386,9 @@ async def call_gemini_async(
             print_log(f"  [LLM async] リトライ {attempt}/{max_retries}: {type(e).__name__}: {msg}")
             
             if attempt < max_retries:
-                # 503 (Unavailable) と 429 (Resource Exhausted) は、強制ダウンシフト（無料版切り替え）の対象にする
-                is_resource_limit = any(code in msg for code in ["429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE"])
-                
+                wait_time, is_resource_limit = _calc_retry_wait(msg, attempt, retry_delay)
                 if is_resource_limit:
-                    tier_manager.downgrade()
-                    match = re.search(r"retry in ([\d\.]+)s", msg)
-                    base_wait = float(match.group(1)) + 1.0 if match else (10.0 * attempt)
-                    # ジッター: 複数タスクが同時に429を受けたとき同時リトライを防ぐ
-                    jitter = random.uniform(0, base_wait * 0.3)
-                    wait_time = base_wait + jitter
                     print_log(f"  [LLM async] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
-                else:
-                    wait_time = retry_delay * attempt
-
                 await asyncio.sleep(wait_time)
 
     raise RuntimeError(f"Gemini API 非同期呼び出し失敗: {last_error}")

@@ -1,7 +1,9 @@
 import os
 import json
 import csv
+import logging as _logging
 import functools
+import sys
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -39,16 +41,32 @@ def load_coreprompts() -> Dict[str, str]:
             return json.load(f)
     return {}
 
-def print_log(msg: str):
-    """標準出力とログファイルにメッセージを記録する。"""
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    formatted_msg = f"[{timestamp}] {msg}"
-    print(formatted_msg)
-    
+_pipeline_logger: _logging.Logger | None = None
+
+def _get_pipeline_logger() -> _logging.Logger:
+    global _pipeline_logger
+    if _pipeline_logger is not None:
+        return _pipeline_logger
+    logger = _logging.getLogger("p2workflowy.pipeline")
+    logger.setLevel(_logging.DEBUG)
+    logger.propagate = False
+    fmt = _logging.Formatter("[%(asctime)s] %(message)s", datefmt="%H:%M:%S")
+    sh = _logging.StreamHandler(sys.stdout)
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOGS_DIR / f"pipeline_{datetime.now().strftime('%Y%m%d')}.log"
-    with open(log_file, "a", encoding="utf-8") as f:
-        f.write(formatted_msg + "\n")
+    fh = _logging.FileHandler(
+        LOGS_DIR / f"pipeline_{datetime.now().strftime('%Y%m%d')}.log",
+        encoding="utf-8",
+    )
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+    _pipeline_logger = logger
+    return logger
+
+def print_log(msg: str):
+    """標準出力とログファイルにメッセージを記録する（スレッドセーフ）。"""
+    _get_pipeline_logger().info(msg)
 
 class SessionState:
     """パイプラインの実行状態（中間データ、メタデータ）を管理するクラス。"""

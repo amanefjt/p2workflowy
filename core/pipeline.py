@@ -93,6 +93,7 @@ def run_pipeline(
             print_log(f"  完了: Phase 1 解析完了\n")
 
     # --- Phase 2: Meta-Generation ---
+    meta: dict = {}
     if start_phase <= 2:
         if state.phase2_meta.exists():
             print_log(f"  [Pipeline] Phase 2 (Meta) already finished. Skipping.")

@@ -1,7 +1,7 @@
 import re
 from typing import List
 from core.models import TreeNode
-from .formatter_utils import sanitize_wf_text, clean_heading_text
+from .formatter_utils import sanitize_wf_text, clean_heading_text, parse_resume_heading_line
 
 class WorkflowyEngine:
     """TreeNode ツリーを Workflowy 文字列 (タブインデント + "- ") に変換するエンジン。"""
@@ -46,26 +46,16 @@ class WorkflowyEngine:
                 continue
 
             # 1. 見出しの処理
-            heading_match = re.match(r"^(#+)\s+(.+)$", line_strip)
-            if heading_match:
-                level = len(heading_match.group(1))
-                text = heading_match.group(2)
-                cleaned_text = clean_heading_text(text)
-
-                if level == 1:
-                    in_section_expansion = "各セクション" in cleaned_text
+            heading_result = parse_resume_heading_line(line_strip, in_section_expansion)
+            if heading_result is not None:
+                level, cleaned_text, in_section_expansion, add_bracket = heading_result
+                if level == 1 or add_bracket:
                     depth = base_depth
-                    wf_lines.append(f"{'	' * depth}- {cleaned_text}")
-                    current_depth = depth + 1
-                elif level == 2 and in_section_expansion:
-                    # 「3. 各セクションの展開」内の節見出し: 兄弟ノード + ブラケット付き
-                    depth = base_depth
-                    wf_lines.append(f"{'	' * depth}- [{cleaned_text}]")
-                    current_depth = depth + 1
                 else:
                     depth = base_depth + (level - 1)
-                    wf_lines.append(f"{'	' * depth}- {cleaned_text}")
-                    current_depth = depth + 1
+                label = f"[{cleaned_text}]" if add_bracket else cleaned_text
+                wf_lines.append(f"{'	' * depth}- {label}")
+                current_depth = depth + 1
                 continue
 
             # 2. リスト（箇条書き）の処理

@@ -193,6 +193,7 @@ function calculateProgress(progressMsg) {
 // API Key Modal
 function openApiModal() {
     document.getElementById('api-modal').classList.add('is-open');
+    document.removeEventListener('keydown', handleModalEsc);
     document.addEventListener('keydown', handleModalEsc);
 }
 
@@ -202,7 +203,11 @@ function closeApiModal() {
 }
 
 function handleModalEsc(e) {
-    if (e.key === 'Escape') closeApiModal();
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeApiModal();
+    }
 }
 
 function handleOverlayClick(e) {

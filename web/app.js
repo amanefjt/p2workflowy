@@ -189,3 +189,22 @@ function calculateProgress(progressMsg) {
     if (progressMsg.includes('ファイル')) return 95;
     return 10;
 }
+
+// API Key Modal
+function openApiModal() {
+    document.getElementById('api-modal').classList.add('is-open');
+    document.addEventListener('keydown', handleModalEsc);
+}
+
+function closeApiModal() {
+    document.getElementById('api-modal').classList.remove('is-open');
+    document.removeEventListener('keydown', handleModalEsc);
+}
+
+function handleModalEsc(e) {
+    if (e.key === 'Escape') closeApiModal();
+}
+
+function handleOverlayClick(e) {
+    if (e.target === document.getElementById('api-modal')) closeApiModal();
+}

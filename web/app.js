@@ -136,7 +136,10 @@ async function pollStatus(taskId, downloadToken) {
     const interval = setInterval(async () => {
         try {
             const response = await fetch(`${API_BASE}/api/status/${taskId}`);
-            if (!response.ok) return;
+            if (!response.ok) {
+                if (response.status === 404) clearInterval(interval);
+                return;
+            }
 
             const data = await response.json();
 

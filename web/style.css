@@ -205,6 +205,15 @@ textarea:focus {
     background: var(--primary-hover);
 }
 
+.btn-api-modal:active {
+    transform: scale(0.99);
+}
+
+.btn-api-modal:focus {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
 .api-key-hint {
     font-size: 0.75rem;
     color: var(--text-muted);
@@ -268,6 +277,11 @@ textarea:focus {
 
 .modal-close:hover {
     opacity: 1;
+}
+
+.modal-close:focus {
+    outline: 2px solid white;
+    outline-offset: -2px;
 }
 
 .modal-body {

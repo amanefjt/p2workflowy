@@ -30,17 +30,13 @@
                     <!-- BYOK -->
                     <div class="setup-item">
                         <h3>1. Gemini APIキー</h3>
+                        <span class="api-badge">✅ 無料で使えます（カード登録不要）</span>
                         <div class="form-group">
-                            <input type="password" id="api_key" placeholder="あなたのAPIキーを入力してください...">
-                            <div class="api-note">
-                                <p>🔑 <strong>APIキーについて</strong>: <a href="https://aistudio.google.com/app/apikey"
-                                        target="_blank">Google AI
-                                        Studio</a>
-                                    から取得可能です。無料枠で利用可能なツールですが、Googleの仕様上、支払い手段の登録が必要です。登録したAPIキーはブラウザにのみ保存され、ツール制作者には送信されません。
-                                </p>
-                                <p>⚠️ <strong>学習への利用について</strong>:
-                                    無料枠のAPIキーを使用する場合、入力データはGoogleのモデル改善のために利用される可能性があります。機密性の高い資料を扱う際はご注意ください。</p>
+                            <div class="api-key-row">
+                                <input type="password" id="api_key" placeholder="APIキーを入力してください...">
+                                <button type="button" class="btn-api-modal" onclick="openApiModal()">🔑 取得方法を見る</button>
                             </div>
+                            <p class="api-key-hint">入力したAPIキーはブラウザにのみ保存されます。</p>
                         </div>
                     </div>
 
@@ -144,6 +140,51 @@
     <footer class="container">
         <p>&copy; 2026 p2workflowy. 人文社会科学系のためのデジタルツール.</p>
     </footer>
+
+    <!-- API Key Modal -->
+    <div id="api-modal" class="modal-overlay" onclick="handleOverlayClick(event)">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h4>🔑 Gemini APIキーについて</h4>
+                <button class="modal-close" onclick="closeApiModal()" aria-label="閉じる">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-free-badge">
+                    <div class="badge-title">✅ 無料で使えます</div>
+                    <div class="badge-sub">カード登録は不要です。Gmailアカウントだけで始められます。</div>
+                </div>
+
+                <div class="modal-section-title">📋 APIキーの取得手順</div>
+                <ol class="modal-steps">
+                    <li><a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio</a> をGmailで開く</li>
+                    <li>「<strong>APIキーを作成</strong>」ボタンをクリック</li>
+                    <li>「<strong>新しいプロジェクトでAPIキーを作成</strong>」を選択</li>
+                    <li>表示されたキー（<code>AIza...</code>）をコピー</li>
+                    <li>このページの入力欄に貼り付け</li>
+                </ol>
+
+                <hr class="modal-divider">
+
+                <div class="modal-section-title">💰 料金について</div>
+                <div class="plan-cards">
+                    <div class="plan-card free">
+                        <div class="plan-title">🟢 無料プラン（カード不要）</div>
+                        <div class="plan-desc">1日500リクエストまで無料。論文数本分の処理に相当します。</div>
+                    </div>
+                    <div class="plan-card paid">
+                        <div class="plan-title">🟡 有料プラン（より多く使いたい場合）</div>
+                        <div class="plan-desc">従量課金制。論文1本あたり数円〜10円程度の目安です。</div>
+                    </div>
+                </div>
+
+                <div class="modal-privacy">
+                    ⚠️ <strong>プライバシーについて：</strong>
+                    無料プランではGoogleの規約上、入力内容がモデル改善に使用される可能性があります。
+                    機密性の高い文書を扱う場合は有料プランをご検討ください。
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script src="/app.js"></script>
 </body>

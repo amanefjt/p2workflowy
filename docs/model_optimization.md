@@ -8,8 +8,8 @@ V3（Golden Rewrite）では、用途に応じたモデルの**動的ルーテ�
 
 | 処理フェーズ | 使用モデル | thinking | ポリシー |
 | :--- | :--- | :--- | :--- |
-| **Phase 1 — PDF VLM / OCR** | `DEFAULT_MODEL_VLM` = `gemini-3.1-flash-lite-preview` | Low | コスト・速度優先。大量の画像処理を並行するためLite固定。 |
-| **Phase 1 — テキスト構造解析** | `DEFAULT_MODEL_FREE` = `gemini-3.1-flash-lite-preview` | High | 見出し抽出（TextStructureExtractor）。Lite でも精度十分。 |
+| **Phase 1 — PDF VLM / OCR** | `DEFAULT_MODEL_VLM` = `gemini-3.1-flash-lite` | Low | コスト・速度優先。大量の画像処理を並行するためLite固定。 |
+| **Phase 1 — テキスト構造解析** | `DEFAULT_MODEL_FREE` = `gemini-3.1-flash-lite` | High | 見出し抽出（TextStructureExtractor）。Lite でも精度十分。 |
 | **Phase 2 — DNA / Resume / Keywords** | `DEFAULT_MODEL` = `gemini-3-flash-preview` | High | 品質主権。論文全体の構造と意味を決定づける最重要フェーズ。 |
 | **Phase 3 — 構造ツリー / TOC** | `DEFAULT_MODEL` = `gemini-3-flash-preview` | High | Phase 2 と同じモデルを継承。セクション境界の論理判断に使用。 |
 | **Phase 4 — 翻訳** | `DEFAULT_MODEL`（通常）/ `DEFAULT_MODEL_FREE`（`--lite` / フォールバック） | High | 通常は Flash、`--lite` 指定時や TierManager 発動時は Lite へ切替。 |
@@ -68,7 +68,7 @@ Hugging Face Spaces や ローカル運用時において、API の上限到達�
 
 - **429 RESOURCE_EXHAUSTED の神回避**: 
   - 無料枠 (Free Tier) 等で `gemini-3-flash` のクォータ（例: 20 requests/day）を超過して 429 エラーが発生した場合、システムは全体をパニック終了させない。
-  - **自動ダウングレード**: 即座に例外をキャッチし、軽量かつ制限の緩い `gemini-3.1-flash-lite-preview` へと内部状態を切り替え、そのまま次のリトライを実行する（**フォールバック**）。
+  - **自動ダウングレード**: 即座に例外をキャッチし、軽量かつ制限の緩い `gemini-3.1-flash-lite` へと内部状態を切り替え、そのまま次のリトライを実行する（**フォールバック**）。
   - この自己修復機能により、クラウドの過酷な環境でも処理を一度も取りこぼすことなく最終フェーズ（Markdown出力）まで到達（Production Ready）する。
 
 ## 5. 運用コストと実測パフォーマンス (2026-05 更新)
@@ -129,7 +129,7 @@ Phase 1 で画像1枚ごとに VLM API を呼び出すため、ページ数に�
 無料ユーザー（TierManagerの自動制御）:
   初回〜数回 → gemini-3-flash-preview を試みる
        ↓  429 RESOURCE_EXHAUSTED 発生（Flashの無料枠は早期に枯渇）
-  残り全体 → gemini-3.1-flash-lite-preview へ自動ダウングレード
+  残り全体 → gemini-3.1-flash-lite へ自動ダウングレード
 ```
 
 実態として、**無料ユーザーは1論文の処理中にTierManagerが発動し、以降の全処理がLiteモデルで実行される**。品質は下がるが完走は保証される設計。
@@ -145,7 +145,7 @@ Googleは制限値を公式テーブルとして一切公開していない。�
 | モデル | RPM | RPD | TPM | TPD |
 |---|---|---|---|---|
 | gemini-3-flash-preview（Flash） | 〜15 | 〜250〜1,500 ※ | 〜250,000 | 非公開 |
-| gemini-3.1-flash-lite-preview（Lite） | 〜30 | 〜1,000〜1,500 | 〜250,000〜1,000,000 | 非公開 |
+| gemini-3.1-flash-lite（Lite） | 〜30 | 〜1,000〜1,500 | 〜250,000〜1,000,000 | 非公開 |
 
 > ※ 2025年12月の無料枠改定でFlashのRPDが大幅削減（一部報告では250/dayまで低下）。Liteは相対的に余裕がある。公式制限は [AI Studioダッシュボード](https://aistudio.google.com) で自プロジェクトの現在値を確認すること。
 

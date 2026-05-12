@@ -15,12 +15,12 @@ Web版 p2workflowy のターゲットユーザーは、PCとGmailは持ってい
 
 ## 前提：Web版のモデル固定
 
-Web版は `gemini-3.1-flash-lite-preview` のみを使用する。
+Web版は `gemini-3.1-flash-lite` のみを使用する。
 
 - カード登録不要、無料で使用可能（1日500リクエストまで）
 - 有料プランに移行しても Flash Lite は料金ゼロ
 - 「実質無料」と明確に言い切れる根拠となる
-- CLI版は引き続き TierManager による `gemini-3-flash-preview` → `gemini-3.1-flash-lite-preview` 自動切り替えを維持
+- CLI版は引き続き TierManager による `gemini-3-flash-preview` → `gemini-3.1-flash-lite` 自動切り替えを維持
 
 ---
 
@@ -105,7 +105,7 @@ Web版は `gemini-3.1-flash-lite-preview` のみを使用する。
 - オーバーレイクリックでの閉じる処理
 
 ### `core/llm_client.py` または `server.py`（確認事項）
-- Web経由のリクエストが `gemini-3.1-flash-lite-preview` を使うよう、モデル選択ロジックを確認・修正
+- Web経由のリクエストが `gemini-3.1-flash-lite` を使うよう、モデル選択ロジックを確認・修正
 - 有料APIキーをWeb版に入力した場合も Flash Lite を使う（意図的な仕様）。ユーザーが高品質処理を望む場合はCLIを使うよう誘導するため、この制約はドキュメントまたはUI上に明示しない
 
 ---

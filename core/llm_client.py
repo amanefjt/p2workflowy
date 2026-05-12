@@ -45,9 +45,9 @@ def get_default_model(purpose: str = "default") -> str:
         effective_purpose = "free"
 
     if effective_purpose == "free":
-        return prompts.get("DEFAULT_MODEL_FREE", prompts.get("DEFAULT_MODEL", "gemini-3.1-flash-lite-preview"))
+        return prompts.get("DEFAULT_MODEL_FREE", prompts.get("DEFAULT_MODEL", "gemini-3.1-flash-lite"))
     elif effective_purpose == "vlm":
-        return prompts.get("DEFAULT_MODEL_VLM", "gemini-3.1-flash-lite-preview")
+        return prompts.get("DEFAULT_MODEL_VLM", "gemini-3.1-flash-lite")
     return prompts.get("DEFAULT_MODEL", "gemini-3-flash-preview")
 
 

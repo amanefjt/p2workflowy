@@ -29,7 +29,7 @@ python3 main.py data/paper.pdf
 # CLI: 書籍モード
 python3 main.py data/book.pdf --book
 
-# CLI: テスト用低コストモード（gemini-3.1-flash-lite-preview）
+# CLI: テスト用低コストモード（gemini-3.1-flash-lite）
 python3 main.py data/paper.txt --lite
 
 # CLI: 中断再開（フェーズ番号 1-5 を指定）

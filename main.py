@@ -181,7 +181,7 @@ def main():
             output_paths = manager.run(
                 glossary_path=args.glossary,
                 thinking_level=args.thinking,
-                pdf_mode=args.pdf_mode if args.pdf_mode else "full_vlm",
+                pdf_mode=args.pdf_mode if args.pdf_mode else "hybrid",
                 tier="free" if (args.free or args.lite) else "paid",
                 heavy_ocr=args.heavy_ocr,
                 max_pages=args.max_pages,
@@ -214,7 +214,7 @@ def main():
                 continue
 
             is_pdf = p.suffix.lower() == ".pdf"
-            pdf_mode = args.pdf_mode if args.pdf_mode else ("hybrid" if (args.hybrid_pdf or not is_pdf) else "full_vlm")
+            pdf_mode = args.pdf_mode if args.pdf_mode else "hybrid"
             export_mode = "ronbunnihongo" if args.ronbunnihongo else "p2workflowy"
             
             print(f"\n[{i}/{len(input_files)}] --- 構成: Paper / エンジン: {pdf_mode} / [Target: {p.name}] ---")

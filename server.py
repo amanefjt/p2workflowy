@@ -18,6 +18,36 @@ from core.pipeline import run_pipeline
 from core.config import DATA_DIR, STATE_DIR, PROJECT_ROOT, APP_ADMIN_PASSCODE, GEMINI_API_KEY
 from core.llm_client import get_default_model
 
+def _humanize_error(e: Exception) -> str:
+    """例外をユーザー向けメッセージに変換。詳細情報はサーバーログ出力済み。"""
+    error_str = str(e).lower()
+
+    # API キーエラー
+    if "invalid_argument" in error_str or "api key" in error_str or "authentication" in error_str:
+        return "API キーが正しくありません。設定を確認してください。"
+
+    # レート制限エラー
+    if "429" in error_str or "resource_exhausted" in error_str:
+        return "API の使用制限に達しました。しばらく待ってからお試しください。"
+
+    # サーバーエラー
+    if "503" in error_str or "service_unavailable" in error_str:
+        return "API サーバーが一時的に利用できません。しばらく待ってからお試しください。"
+
+    # リクエストエラー
+    if "400" in error_str:
+        return "リクエストが不正です。入力内容を確認してください。"
+
+    # 認可エラー
+    if "403" in error_str or "permission_denied" in error_str:
+        return "アクセス権限がありません。"
+
+    # その他 5xx エラー
+    if "500" in error_str or "internal" in error_str:
+        return "サーバーエラーが発生しました。少し時間をおいてからお試しください。"
+
+    return "処理中にエラーが発生しました。サーバーログを確認してください。"
+
 app = FastAPI(title="p2workflowy Web")
 
 # CORS 設定: Cloudflare Pages からの通信を許可
@@ -94,7 +124,7 @@ async def run_pipeline_in_background(task_id: str, input_path: str, glossary_pat
         error_msg = traceback.format_exc()
         print(f"Task {task_id}: エラーが発生しました - {error_msg}")
         task_status[task_id]["status"] = "failed"
-        task_status[task_id]["error"] = str(e)
+        task_status[task_id]["error"] = _humanize_error(e)
 
 @app.post("/api/process")
 async def process(

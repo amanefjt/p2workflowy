@@ -70,6 +70,17 @@ UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 MAX_TASK_STATUS_ENTRIES = 50
 task_status: Dict[str, dict] = {}
 
+# パイプライン直列化: 同時実行を1タスクに制限する
+# asyncio.Semaphore はイベントループ生成後に初期化する必要があるため遅延初期化
+_pipeline_semaphore: Optional[asyncio.Semaphore] = None
+_pipeline_queue: list = []  # 待機中のタスクIDを順番に保持
+
+def _get_pipeline_semaphore() -> asyncio.Semaphore:
+    global _pipeline_semaphore
+    if _pipeline_semaphore is None:
+        _pipeline_semaphore = asyncio.Semaphore(1)
+    return _pipeline_semaphore
+
 def _cleanup_task_status():
     """完了済みタスクが多すぎる場合、古いエントリを削除する。"""
     if len(task_status) <= MAX_TASK_STATUS_ENTRIES:
@@ -95,47 +106,80 @@ async def ronbun_page():
     return FileResponse(web_dir / "ronbun.html")
 
 # パイプラインを別スレッドで実行するための非同期ラッパー関数
-async def run_pipeline_in_background(task_id: str, input_path: str, glossary_path: Optional[str], title: str, api_key: Optional[str], expertise: str, export_mode: str, is_book: bool):
+async def run_pipeline_in_background(task_id: str, input_path: str, glossary_path: Optional[str], title: Optional[str], api_key: Optional[str], expertise: str, export_mode: str, is_book: bool, max_chapters: Optional[int] = None):
+    semaphore = _get_pipeline_semaphore()
+
+    # キューに追加して待機状態を通知
+    _pipeline_queue.append(task_id)
+    queue_pos = len(_pipeline_queue)
+    if queue_pos > 1:
+        task_status[task_id]["status"] = "queued"
+        task_status[task_id]["progress"] = f"待機中... (キュー位置: {queue_pos - 1})"
+        task_status[task_id]["percentage"] = 0
+        print(f"Task {task_id}: キュー待機中 (位置: {queue_pos - 1})")
+
     try:
-        print(f"Task {task_id}: バックグラウンドスレッドでパイプラインを開始します...")
-        
-        # asyncio.to_thread で同期関数である run_pipeline をスレッドプールにオフロード
-        await asyncio.to_thread(
-            run_pipeline,
-            input_path=input_path,
-            glossary_path=glossary_path,
-            title=title,
-            api_key=api_key,
-            session_id=task_id,
-            expertise=expertise,
-            export_mode=export_mode,
-            model=None,
-            thinking_level="High",
-            pdf_mode="hybrid",
-            tier="paid",
-            is_book=is_book,
-            structure_only=False,
-            resume_only=False
-        )
-        task_status[task_id]["status"] = "completed"
-        print(f"Task {task_id}: 処理が正常に完了しました。")
+        async with semaphore:
+            # キュー位置表示を更新
+            _pipeline_queue.remove(task_id)
+            task_status[task_id]["status"] = "processing"
+            task_status[task_id]["progress"] = "準備中..."
+            task_status[task_id]["percentage"] = 5
+
+            print(f"Task {task_id}: バックグラウンドスレッドでパイプラインを開始します...")
+
+            # asyncio.to_thread で同期関数である run_pipeline をスレッドプールにオフロード
+            if is_book:
+                from core.book_manager import BookManager
+                manager = BookManager(input_path=input_path, api_key=api_key)
+                await asyncio.to_thread(
+                    manager.run,
+                    glossary_path=glossary_path,
+                    thinking_level="High",
+                    pdf_mode="hybrid",
+                    tier="free",
+                    max_chapters=max_chapters,
+                )
+            else:
+                await asyncio.to_thread(
+                    run_pipeline,
+                    input_path=input_path,
+                    glossary_path=glossary_path,
+                    title=title,
+                    api_key=api_key,
+                    session_id=task_id,
+                    expertise=expertise,
+                    export_mode=export_mode,
+                    model=None,
+                    thinking_level="High",
+                    pdf_mode="hybrid",
+                    tier="free",
+                    is_book=False,
+                    structure_only=False,
+                    resume_only=False
+                )
+            task_status[task_id]["status"] = "completed"
+            print(f"Task {task_id}: 処理が正常に完了しました。")
     except Exception as e:
         import traceback
         error_msg = traceback.format_exc()
         print(f"Task {task_id}: エラーが発生しました - {error_msg}")
+        if task_id in _pipeline_queue:
+            _pipeline_queue.remove(task_id)
         task_status[task_id]["status"] = "failed"
         task_status[task_id]["error"] = _humanize_error(e)
 
 @app.post("/api/process")
 async def process(
     text: str = Form(""),
-    title: str = Form("Untitled"),
+    title: Optional[str] = Form(None),
     api_key: Optional[str] = Form(None),
     expertise: str = Form("文化人類学"),
     glossary: Optional[UploadFile] = File(None),
     pdf_file: Optional[UploadFile] = File(None),
     export_mode: str = Form("p2workflowy"),
     is_book: bool = Form(False),
+    max_chapters: Optional[int] = Form(None),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     task_id = str(uuid.uuid4())
@@ -170,6 +214,8 @@ async def process(
     # ファイルの保存
     input_path = None
     if pdf_file and pdf_file.filename:
+        if not pdf_file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="PDFファイル（.pdf）のみ受け付けます。")
         input_path = _safe_upload_path(upload_dir, pdf_file.filename, "input.pdf")
         print(f"Saving PDF to {input_path.name}")
         content = await pdf_file.read()
@@ -185,6 +231,8 @@ async def process(
 
     glossary_path = None
     if glossary and glossary.filename:
+        if not glossary.filename.lower().endswith(".csv"):
+            raise HTTPException(status_code=400, detail="用語集はCSVファイル（.csv）のみ受け付けます。")
         glossary_path = _safe_upload_path(upload_dir, glossary.filename, "glossary.csv")
         print(f"Saving Glossary to {glossary_path.name}")
         content = await glossary.read()
@@ -204,7 +252,7 @@ async def process(
     }
 
     background_tasks.add_task(
-        run_pipeline_in_background, task_id, str(input_path), str(glossary_path) if glossary_path else None, title, api_key, expertise, export_mode, is_book
+        run_pipeline_in_background, task_id, str(input_path), str(glossary_path) if glossary_path else None, title, api_key, expertise, export_mode, is_book, max_chapters
     )
 
     _cleanup_task_status()
@@ -220,8 +268,13 @@ async def get_status(task_id: str):
     if task_id not in task_status:
         raise HTTPException(status_code=404, detail="Task not found")
     
+    # キュー待機中はキュー位置を動的に更新
+    if task_status[task_id]["status"] == "queued":
+        pos = _pipeline_queue.index(task_id) if task_id in _pipeline_queue else 0
+        task_status[task_id]["progress"] = f"待機中... (キュー位置: {pos})"
+
     # プログレスの動的更新（status.json およびファイル存在チェック）
-    if task_status[task_id]["status"] == "processing":
+    elif task_status[task_id]["status"] == "processing":
         session_id = task_id
         session_dir = STATE_DIR / session_id
         
@@ -254,7 +307,9 @@ async def get_status(task_id: str):
             task_status[task_id]["progress"] = "準備中..."
             task_status[task_id]["percentage"] = 15
             
-    return task_status[task_id]
+    info = dict(task_status[task_id])
+    info.pop("download_token", None)
+    return info
 
 @app.get("/api/download/{task_id}/{file_type}")
 async def download(task_id: str, file_type: str, token: str = ""):

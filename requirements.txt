@@ -8,5 +8,6 @@ uvicorn[standard]
 python-multipart
 pymupdf
 pillow
+docling>=2.0.0
 python-docx
 opencv-python-headless

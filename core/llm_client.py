@@ -9,6 +9,7 @@ import asyncio
 import enum
 import re
 import csv
+import random
 from typing import Any, List, Tuple, Dict, Optional
 from datetime import datetime
 import threading
@@ -44,9 +45,9 @@ def get_default_model(purpose: str = "default") -> str:
         effective_purpose = "free"
 
     if effective_purpose == "free":
-        return prompts.get("DEFAULT_MODEL_FREE", prompts.get("DEFAULT_MODEL", "gemini-3.1-flash-lite-preview"))
+        return prompts.get("DEFAULT_MODEL_FREE", prompts.get("DEFAULT_MODEL", "gemini-3.1-flash-lite"))
     elif effective_purpose == "vlm":
-        return prompts.get("DEFAULT_MODEL_VLM", "gemini-3.1-flash-lite-preview")
+        return prompts.get("DEFAULT_MODEL_VLM", "gemini-3.1-flash-lite")
     return prompts.get("DEFAULT_MODEL", "gemini-3-flash-preview")
 
 
@@ -189,6 +190,18 @@ def _log_metrics(metrics_metadata: dict, prompt_len: int, p_tokens: int, c_token
         print_log(f"  [LLM] Metrics logging failed: {e_log}")
 
 
+def _calc_retry_wait(msg: str, attempt: int, retry_delay: float) -> tuple[float, bool]:
+    """429/503 ならダウンシフトしてバックオフ秒数を計算する。戻り値: (wait_seconds, is_resource_limit)"""
+    is_resource_limit = any(code in msg for code in ["429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE"])
+    if is_resource_limit:
+        tier_manager.downgrade()
+        match = re.search(r"retry in ([\d\.]+)s", msg)
+        base_wait = float(match.group(1)) + 1.0 if match else (10.0 * attempt)
+        jitter = random.uniform(0, base_wait * 0.3)
+        return base_wait + jitter, True
+    return retry_delay * attempt, False
+
+
 def call_gemini(
     prompt: str | list,
     model: str | None = None,
@@ -276,17 +289,9 @@ def call_gemini(
             print_log(f"  [LLM] リトライ {attempt}/{max_retries}: {type(e).__name__}: {msg}")
             
             if attempt < max_retries:
-                # 503 (Unavailable) と 429 (Resource Exhausted) は、強制ダウンシフト（無料版切り替え）の対象にする
-                is_resource_limit = any(code in msg for code in ["429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE"])
-                
+                wait_time, is_resource_limit = _calc_retry_wait(msg, attempt, retry_delay)
                 if is_resource_limit:
-                    tier_manager.downgrade()
-                    match = re.search(r"retry in ([\d\.]+)s", msg)
-                    wait_time = float(match.group(1)) + 1.0 if match else (10.0 * attempt)
                     print_log(f"  [LLM] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
-                else:
-                    wait_time = retry_delay * attempt
-                
                 time.sleep(wait_time)
     raise RuntimeError(f"Gemini API 呼び出し失敗: {last_error}")
 
@@ -381,17 +386,9 @@ async def call_gemini_async(
             print_log(f"  [LLM async] リトライ {attempt}/{max_retries}: {type(e).__name__}: {msg}")
             
             if attempt < max_retries:
-                # 503 (Unavailable) と 429 (Resource Exhausted) は、強制ダウンシフト（無料版切り替え）の対象にする
-                is_resource_limit = any(code in msg for code in ["429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE"])
-                
+                wait_time, is_resource_limit = _calc_retry_wait(msg, attempt, retry_delay)
                 if is_resource_limit:
-                    tier_manager.downgrade()
-                    match = re.search(r"retry in ([\d\.]+)s", msg)
-                    wait_time = float(match.group(1)) + 1.0 if match else (10.0 * attempt)
                     print_log(f"  [LLM async] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
-                else:
-                    wait_time = retry_delay * attempt
-                
                 await asyncio.sleep(wait_time)
 
     raise RuntimeError(f"Gemini API 非同期呼び出し失敗: {last_error}")
@@ -571,9 +568,23 @@ async def generate_section_resume(
 _CACHED_LIMITERS = {}
 _LIMITER_LOCK = threading.Lock()
 
-def apply_tier_settings(tier: str | GeminiTier) -> Tuple[AsyncLimiter, asyncio.Semaphore, dict]:
+
+def reset_pipeline_state() -> None:
     """
-    ティアに応じたレートリミッター・セマフォ・設定を返す。
+    パイプライン開始前に呼び出す。
+    AsyncLimiter は生成時のイベントループに紐付くため、新しいパイプライン（新しいループ）
+    が始まる前にキャッシュをクリアし、次の apply_tier_settings 呼び出しで再生成させる。
+    TierManager も paid にリセットして前回の downgrade 状態を引き継がないようにする。
+    """
+    global _CACHED_LIMITERS
+    with _LIMITER_LOCK:
+        _CACHED_LIMITERS.clear()
+    tier_manager.set_tier(GeminiTier.PAID)
+
+
+def apply_tier_settings(tier: str | GeminiTier) -> Tuple[AsyncLimiter, dict]:
+    """
+    ティアに応じたレートリミッターと設定を返す。
     ティアの文字列表記を受け入れ、tier_manager のグローバル状態を更新する。
     """
     global _CACHED_LIMITERS
@@ -591,17 +602,13 @@ def apply_tier_settings(tier: str | GeminiTier) -> Tuple[AsyncLimiter, asyncio.S
     with _LIMITER_LOCK:
         if tier == GeminiTier.FREE:
             settings = {"max_batch_chunks": 5, "max_batch_chars": 6000}
-            semaphore_size = 1
             if tier not in _CACHED_LIMITERS:
                 _CACHED_LIMITERS[tier] = AsyncLimiter(1, 4.0)  # 1 request per 4 seconds
         else:
             settings = {"max_batch_chunks": 10, "max_batch_chars": 11000}
-            semaphore_size = 2
             if tier not in _CACHED_LIMITERS:
                 _CACHED_LIMITERS[tier] = AsyncLimiter(100, 60.0)  # 100 requests per minute
 
         rate_limiter = _CACHED_LIMITERS[tier]
-        # Semaphore は毎回新規作成（イベントループ依存のためキャッシュ不可）
-        semaphore = asyncio.Semaphore(semaphore_size)
 
-    return rate_limiter, semaphore, settings
+    return rate_limiter, settings

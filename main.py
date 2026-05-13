@@ -29,6 +29,13 @@ def main():
         help="書籍モード（章・節の階層を維持）",
     )
     parser.add_argument(
+        "--max-chapters",
+        type=int,
+        default=None,
+        dest="max_chapters",
+        help="書籍モード: 処理する最大章数（コスト削減・デバッグ用）",
+    )
+    parser.add_argument(
         "--paper",
         action="store_true",
         help="論文モード（デフォルト）",
@@ -113,8 +120,10 @@ def main():
         action="store_true",
         help="【推奨】テスト用の低コストモデル（Flash-Lite）を強制的に使用",
     )
-
-
+    parser.add_argument(
+        '--concurrent', type=int, default=4,
+        help='Phase 4 の並列セクション数（デフォルト: 4）'
+    )
 
     args = parser.parse_args()
 
@@ -172,10 +181,11 @@ def main():
             output_paths = manager.run(
                 glossary_path=args.glossary,
                 thinking_level=args.thinking,
-                pdf_mode=args.pdf_mode if args.pdf_mode else "full_vlm",
+                pdf_mode=args.pdf_mode if args.pdf_mode else "hybrid",
                 tier="free" if (args.free or args.lite) else "paid",
                 heavy_ocr=args.heavy_ocr,
                 max_pages=args.max_pages,
+                max_chapters=args.max_chapters,
                 resume_only=args.resume_only,
                 structure_only=args.structure_only,
                 resume_from=args.resume
@@ -204,7 +214,7 @@ def main():
                 continue
 
             is_pdf = p.suffix.lower() == ".pdf"
-            pdf_mode = args.pdf_mode if args.pdf_mode else ("hybrid" if (args.hybrid_pdf or not is_pdf) else "full_vlm")
+            pdf_mode = args.pdf_mode if args.pdf_mode else "hybrid"
             export_mode = "ronbunnihongo" if args.ronbunnihongo else "p2workflowy"
             
             print(f"\n[{i}/{len(input_files)}] --- 構成: Paper / エンジン: {pdf_mode} / [Target: {p.name}] ---")
@@ -226,6 +236,7 @@ def main():
                     resume_only=args.resume_only,
                     heavy_ocr=args.heavy_ocr,
                     max_pages=args.max_pages,
+                    max_concurrent_sections=args.concurrent,
                 )
             except Exception as e:
                 print(f"[{i}/{len(input_files)}] エラー発生: {e}")

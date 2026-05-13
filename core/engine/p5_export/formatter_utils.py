@@ -22,6 +22,27 @@ def sanitize_wf_text(text: str) -> str:
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
+def parse_resume_heading_line(
+    stripped_line: str, in_section_expansion: bool
+) -> "tuple[int, str, bool, bool] | None":
+    """strip 済みの行を見出しとして解析する。
+    戻り値: (level, cleaned_text, new_in_section_expansion, add_bracket) または None。
+    「各セクション」を含む H1 の直下の H2 は add_bracket=True でフラット化対象を示す。
+    """
+    if not stripped_line.startswith("#"):
+        return None
+    m = re.match(r"^(#+)\s*(.*)", stripped_line)
+    if not m:
+        return None
+    level = len(m.group(1))
+    cleaned = clean_heading_text(m.group(2))
+    if level == 1:
+        return level, cleaned, "各セクション" in cleaned, False
+    if level == 2 and in_section_expansion:
+        return level, cleaned, in_section_expansion, True
+    return level, cleaned, in_section_expansion, False
+
+
 def format_resume_markdown(resume_content: str, shift: int = 2) -> str:
     """レジュメの見出しレベルを調整する。
     shift=2: H1→H3（書籍全体レジュメ・論文レジュメ）
@@ -34,19 +55,15 @@ def format_resume_markdown(resume_content: str, shift: int = 2) -> str:
     adjusted = []
     in_section_expansion = False
     for line in lines:
-        if line.strip().startswith("#"):
-            match = re.match(r"^\s*(#+)\s*(.*)$", line)
-            if match:
-                current_level = len(match.group(1))
-                title_text = clean_heading_text(match.group(2))
-                if current_level == 1:
-                    in_section_expansion = "各セクション" in title_text
-                    adjusted.append("#" * (1 + shift) + " " + title_text)
-                elif current_level == 2 and in_section_expansion:
-                    # 節見出しを H1+shift レベルにフラット化してブラケット付与
-                    adjusted.append("#" * (1 + shift) + " [" + title_text + "]")
-                else:
-                    adjusted.append("#" * (current_level + shift) + " " + title_text)
-                continue
+        result = parse_resume_heading_line(line.strip(), in_section_expansion)
+        if result is not None:
+            level, title, in_section_expansion, add_bracket = result
+            if add_bracket:
+                adjusted.append("#" * (1 + shift) + " [" + title + "]")
+            elif level == 1:
+                adjusted.append("#" * (1 + shift) + " " + title)
+            else:
+                adjusted.append("#" * (level + shift) + " " + title)
+            continue
         adjusted.append(line)
     return "\n".join(adjusted)

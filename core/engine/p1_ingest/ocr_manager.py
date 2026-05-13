@@ -143,7 +143,7 @@ class OCRManager:
         
         # スキャン画像判定
         page_area = page.rect.width * page.rect.height
-        image_area = sum((page.get_image_bbox(img).width * page.get_image_bbox(img).height) for img in page.get_images() if page_area > 0)
+        image_area = sum(((bbox := page.get_image_bbox(img)).width * bbox.height) for img in page.get_images() if page_area > 0)
         if page_area > 0 and (image_area / page_area) > 0.90: return True
 
         # テキスト量不足

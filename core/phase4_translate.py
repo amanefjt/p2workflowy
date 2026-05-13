@@ -78,6 +78,7 @@ async def _run_phase4_async(
     resume_only: bool = False,
     is_book: bool = False,
     pdf_mode: str = "default",
+    max_concurrent_sections: int = 4,
 ) -> List[TreeNode]:
     """Phase 4 メイン実行処理（オーケストレーター）。"""
     
@@ -104,7 +105,8 @@ async def _run_phase4_async(
     current_tier = GeminiTier.FREE if tier.lower() == "free" else GeminiTier.PAID
     tier_manager.set_tier(current_tier)
     
-    translator = ParallelTranslator(api_key=api_key, model=model, tier=current_tier)
+    translator = ParallelTranslator(api_key=api_key, model=model, tier=current_tier,
+                                     max_concurrent_sections=max_concurrent_sections)
     prompt_builder = TranslationPromptBuilder(prompts["TRANSLATION_PROMPT"], glossary=master_glossary)
     reconstructor = TreeReconstructor(is_book=is_book, resume_only=resume_only)
 

@@ -84,62 +84,59 @@ def run_phase5(
     output_dir = input_path.parent
     output_paths = []
 
-    # Paper Mode (Stage 1) のみの処理とする (Book 統合は StateIntegrator が担当)
-    # NOTE: Book Mode も含め、すべての章を Paper Mode（論文形式）として処理する。
+    # Book Mode も含め、すべての章を同一フォーマットで処理する。
     # Book 全体の統合は StateIntegrator が別途担当する（意図的な統一処理アーキテクチャ）。
-    if True:
-        # Paper Mode: 論文形式
-        if export_mode == "p2workflowy":
-            if resume_only:
-                # 要約 + 原文 (English) のみ
-                md_parts = [
-                    f"# {title}", "",
-                    "## [Chapter Summary]", "",
-                    format_resume_markdown(resume_content, shift=2), "",
-                    "## [English Text]", "",
-                    md_engine.render(english_tree, current_base=3)
-                ]
-                md_content = "\n".join(md_parts)
-                
-                wf_parts = [
-                    f"{title}",
-                    "- [Chapter Summary]",
-                    wf_engine.render_resume(resume_content, base_depth=1),
-                    "- [English Text]",
-                    wf_engine.render(english_tree, current_depth=1)
-                ]
-                wf_content = "\n".join(wf_parts)
-            else:
-                # 二言語出力 (通常)
-                md_parts = [f"# {title}", ""]
-                # レジュメ（空でない場合のみ追加）
-                if resume_content and resume_content.strip() not in ["", "Simple Mode", "...", "None"]:
-                    md_parts.extend(["## レジュメ", "", format_resume_markdown(resume_content, shift=2), ""])
-                
-                md_parts.extend([
-                    "## English text", "", 
-                    md_engine.render(english_tree, current_base=3), "",
-                    "## 日本語本文", "",
-                    md_engine.render(japanese_tree, current_base=2)
-                ])
-                
-                md_content = "\n".join(md_parts)
-                
-            # 4. Workflowy 構成
-            wf_parts = [f"{title}"]
+    if export_mode == "p2workflowy":
+        if resume_only:
+            # 要約 + 原文 (English) のみ
+            md_parts = [
+                f"# {title}", "",
+                "## [Chapter Summary]", "",
+                format_resume_markdown(resume_content, shift=2), "",
+                "## [English Text]", "",
+                md_engine.render(english_tree, current_base=3)
+            ]
+            md_content = "\n".join(md_parts)
+
+            wf_parts = [
+                f"{title}",
+                "- [Chapter Summary]",
+                wf_engine.render_resume(resume_content, base_depth=1),
+                "- [English Text]",
+                wf_engine.render(english_tree, current_depth=1)
+            ]
+            wf_content = "\n".join(wf_parts)
+        else:
+            # 二言語出力 (通常)
+            md_parts = [f"# {title}", ""]
             # レジュメ（空でない場合のみ追加）
             if resume_content and resume_content.strip() not in ["", "Simple Mode", "...", "None"]:
-                wf_parts.append("- レジュメ")
-                wf_parts.append(wf_engine.render_resume(resume_content, base_depth=1))
-            
-            wf_parts.append("- English text")
-            wf_parts.append(wf_engine.render(english_tree, current_depth=1))
-            wf_parts.append("- 日本語本文")
-            wf_parts.append(wf_engine.render(japanese_tree, current_depth=0))
-            
-            wf_content = "\n".join(wf_parts)
-        elif export_mode == "ronbunnihongo":
-            md_content = f"# {title}\n\n" + md_engine.render(japanese_tree, current_base=2)
+                md_parts.extend(["## レジュメ", "", format_resume_markdown(resume_content, shift=2), ""])
+
+            md_parts.extend([
+                "## English text", "",
+                md_engine.render(english_tree, current_base=3), "",
+                "## 日本語本文", "",
+                md_engine.render(japanese_tree, current_base=2)
+            ])
+
+            md_content = "\n".join(md_parts)
+
+        # Workflowy 構成
+        wf_parts = [f"{title}"]
+        # レジュメ（空でない場合のみ追加）
+        if resume_content and resume_content.strip() not in ["", "Simple Mode", "...", "None"]:
+            wf_parts.append("- レジュメ")
+            wf_parts.append(wf_engine.render_resume(resume_content, base_depth=1))
+
+        wf_parts.append("- English text")
+        wf_parts.append(wf_engine.render(english_tree, current_depth=1))
+        wf_parts.append("- 日本語本文")
+        wf_parts.append(wf_engine.render(japanese_tree, current_depth=0))
+
+        wf_content = "\n".join(wf_parts)
+    elif export_mode == "ronbunnihongo":
+        md_content = f"# {title}\n\n" + md_engine.render(japanese_tree, current_base=2)
 
     # 4. 書き出し
     if md_content:

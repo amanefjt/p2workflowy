@@ -159,24 +159,222 @@ textarea:focus {
     box-shadow: 0 0 0 4px rgba(73, 186, 242, 0.1);
 }
 
-.api-note {
-    margin-top: 0.75rem;
-    font-size: 0.75rem;
-    line-height: 1.4;
-    color: var(--text-muted);
-    background: #f1f5f9;
-    padding: 0.75rem;
-    border-radius: 0.5rem;
-}
-
-.api-note p:first-child {
-    margin-bottom: 0.5rem;
-}
-
-.api-note a {
-    color: var(--primary-color);
-    text-decoration: underline;
+/* API Key Section */
+.api-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: #dcfce7;
+    border: 1px solid #86efac;
+    border-radius: 20px;
+    padding: 0.25rem 0.75rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.8rem;
     font-weight: 600;
+    color: #15803d;
+}
+
+.api-key-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 0.4rem;
+}
+
+.api-key-row input[type="password"] {
+    flex: 1;
+    min-width: 0;
+    margin-bottom: 0;
+}
+
+.btn-api-modal {
+    white-space: nowrap;
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 0.75rem;
+    padding: 0.875rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    font-family: inherit;
+}
+
+.btn-api-modal:hover {
+    background: var(--primary-hover);
+}
+
+.btn-api-modal:active {
+    transform: scale(0.99);
+}
+
+.btn-api-modal:focus {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+.api-key-hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0;
+}
+
+/* Modal */
+.modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+
+.modal-overlay.is-open {
+    display: flex;
+}
+
+.modal-box {
+    background: white;
+    border-radius: 12px;
+    max-width: 520px;
+    width: 100%;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-header {
+    background: var(--primary-color);
+    color: white;
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.modal-header h4 {
+    font-family: 'Outfit', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    margin: 0;
+    color: white;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 1.25rem;
+    cursor: pointer;
+    opacity: 0.8;
+    padding: 0;
+    line-height: 1;
+}
+
+.modal-close:hover {
+    opacity: 1;
+}
+
+.modal-close:focus {
+    outline: 2px solid white;
+    outline-offset: -2px;
+}
+
+.modal-body {
+    padding: 1.25rem;
+}
+
+.modal-free-badge {
+    background: #dcfce7;
+    border: 1px solid #86efac;
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.25rem;
+    text-align: center;
+}
+
+.modal-free-badge .badge-title {
+    font-weight: 700;
+    color: #15803d;
+    font-size: 1rem;
+    margin-bottom: 0.2rem;
+}
+
+.modal-free-badge .badge-sub {
+    font-size: 0.82rem;
+    color: #166534;
+}
+
+.modal-section-title {
+    font-weight: 700;
+    color: var(--text-color);
+    margin-bottom: 0.6rem;
+    font-size: 0.9rem;
+}
+
+.modal-steps {
+    padding-left: 1.3rem;
+    margin: 0 0 1.25rem;
+    line-height: 2.2;
+    color: #475569;
+    font-size: 0.88rem;
+}
+
+.modal-steps a {
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+.modal-divider {
+    border: none;
+    border-top: 1px solid #f1f5f9;
+    margin: 0 0 1.25rem;
+}
+
+.plan-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+}
+
+.plan-card {
+    border-radius: 8px;
+    padding: 0.75rem 0.9rem;
+    font-size: 0.85rem;
+}
+
+.plan-card.free {
+    background: #f0fdf4;
+    border: 1px solid #86efac;
+}
+
+.plan-card.paid {
+    background: #fefce8;
+    border: 1px solid #fde68a;
+}
+
+.plan-card .plan-title {
+    font-weight: 700;
+    color: var(--text-color);
+    margin-bottom: 0.25rem;
+}
+
+.plan-card .plan-desc {
+    color: #475569;
+    line-height: 1.6;
+}
+
+.modal-privacy {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    line-height: 1.7;
+    border-top: 1px solid #f1f5f9;
+    padding-top: 0.75rem;
 }
 
 .file-row {

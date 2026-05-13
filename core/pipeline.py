@@ -38,9 +38,14 @@ def run_pipeline(
     max_pages: Optional[int] = None,
     resume_content: Optional[str] = None,
     simple_mode: bool = False,
+    max_concurrent_sections: int = 4,
 ) -> List[Path]:
     """パイプライン全体を実行する。"""
-    from .llm_client import tier_manager, GeminiTier
+    from .llm_client import tier_manager, GeminiTier, reset_pipeline_state
+    # 新しいパイプライン開始時に AsyncLimiter キャッシュと TierManager 状態をリセットする。
+    # AsyncLimiter は生成時のイベントループに紐付くため、前回実行分を引き継ぐと
+    # "Future attached to a different loop" エラーが発生する。
+    reset_pipeline_state()
     tier_manager.set_tier(GeminiTier.FREE if tier == "free" else GeminiTier.PAID)
 
     if simple_mode:
@@ -88,6 +93,7 @@ def run_pipeline(
             print_log(f"  完了: Phase 1 解析完了\n")
 
     # --- Phase 2: Meta-Generation ---
+    meta: dict = {}
     if start_phase <= 2:
         if state.phase2_meta.exists():
             print_log(f"  [Pipeline] Phase 2 (Meta) already finished. Skipping.")
@@ -126,6 +132,32 @@ def run_pipeline(
                 model=model,
                 input_path=phase3_input,
             )
+
+            # simple_mode（Preface / Coda 等）で 0 セクションが返った場合のフォールバック。
+            # Phase 2 がスタブのため見出しリストが空になり、全チャンクが未帰属になる。
+            # この場合は Phase 1 の全チャンクを単一セクションとしてまとめ直す。
+            if simple_mode and len(tree) == 0:
+                from .models import load_chunks_from_json, TreeNode
+                raw_chunks = load_chunks_from_json(str(state.phase1_preprocessor))
+                body_chunks = [c for c in raw_chunks if c.text.strip()]
+                section_id = "simple_body"
+                section_node = TreeNode(
+                    id=section_id, text=title, role="h2", seq_index=0.0,
+                    children=[
+                        TreeNode(id=c.id, text=c.text, role="p", seq_index=c.seq_index)
+                        for c in body_chunks
+                    ],
+                )
+                tree = [section_node]
+                sections = {
+                    f"{section_id}|{title}": [{"text": c.text, "id": c.id} for c in body_chunks]
+                }
+                from .models import save_tree_to_json
+                save_tree_to_json(tree, str(state.phase3_structure))
+                with open(state.phase3_sections, "w", encoding="utf-8") as _f:
+                    json.dump(sections, _f, ensure_ascii=False, indent=2)
+                print_log(f"  [Simple Mode] {len(body_chunks)} チャンクを単一セクションとして構成")
+
             print_log(f"  [Phase 3] 構造化完了: {len(tree)} セクション")
 
         if structure_only:
@@ -156,6 +188,7 @@ def run_pipeline(
                 resume_only=resume_only,
                 is_book=is_book,
                 pdf_mode=pdf_mode,
+                max_concurrent_sections=max_concurrent_sections,
             )
             print_log(f"  完了: {len(japanese_tree)} セクション翻訳完了\n")
 

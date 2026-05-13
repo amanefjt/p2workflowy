@@ -139,9 +139,16 @@ class BookManager:
         glossary_path_str = str(glossary_path) if glossary_path.exists() else None
 
         # 1. PDF 分割
+        # 見開きスキャンPDFは分割してから章分割・処理に渡す
+        from .spread_splitter import is_spread_pdf, split_spread_pdf
+        pdf_for_splitting = str(self.input_path)
+        if is_spread_pdf(pdf_for_splitting):
+            print_log("  [BookManager] 見開きスキャンPDFを検出。単ページに分割します...")
+            pdf_for_splitting = split_spread_pdf(pdf_for_splitting)
+
         model_to_use = self.model or get_default_model("default")
         splitter = PDFSplitter(api_key=self.api_key, model=model_to_use)
-        chapters = splitter.split(str(self.input_path), self.session_dir / "chapters")
+        chapters = splitter.split(pdf_for_splitting, self.session_dir / "chapters")
         
         if not chapters:
             return []
@@ -167,6 +174,8 @@ class BookManager:
         for key in explicit_keys:
             pipeline_kwargs.pop(key, None)
 
+        failed_chapters = []
+
         for i, ch in enumerate(target_chapters):
             ch_title = ch["title"]
             ch_role = ch.get("role", "chapter")
@@ -175,19 +184,32 @@ class BookManager:
 
             print_log(f"\n--- Processing [{ch_role}] {ch_title} ({i+1}/{len(target_chapters)}) ---")
 
+            # 章単位 resume: 完了済みの章はスキップして既存出力を再利用する。
+            # 出力パスは成功時に output_paths.json として保存し、次回起動時に参照する。
+            output_paths_cache = ch_state.session_dir / "output_paths.json"
+            if output_paths_cache.exists():
+                try:
+                    saved = json.loads(output_paths_cache.read_text(encoding="utf-8"))
+                    if saved and all(Path(p).exists() for p in saved):
+                        print_log(f"  [BookManager] スキップ（完了済み）: {ch_title}")
+                        chapter_sessions.append({"title": ch_title, "output_paths": saved})
+                        continue
+                except Exception:
+                    pass  # キャッシュ破損時は再処理
+
             try:
                 # シンプルモード判定（前書きや後書き用）
                 is_simple = "Coda" in ch_title or ch_role in ["preface", "appendix"]
-                
+
                 # パイプライン実行: 各章を独立した「論文」として完結させ、物理ファイルを出力させる
                 # 注意: resume_content に self.global_resume を渡すと章の要約が全体要約で上書きされるため None にする
                 processed_paths = run_pipeline(
                     input_path=ch["path"],
                     api_key=self.api_key,
                     session_id=ch_session_id,
-                    is_book=True, 
+                    is_book=True,
                     title=ch_title,
-                    resume_content=None, # 章は章の要約を自律生成させる
+                    resume_content=None,
                     glossary_path=glossary_path_str,
                     model=model_to_use,
                     pdf_mode="full_vlm",
@@ -201,24 +223,57 @@ class BookManager:
                     resume_from=resume_from,
                     **pipeline_kwargs
                 )
-                
-                # run_pipeline() が返した物理ファイルパスをそのまま記録
-                chapter_sessions.append({
-                    "title": ch_title,
-                    "output_paths": [str(p) for p in processed_paths],
-                })
+
+                str_paths = [str(p) for p in processed_paths]
+                # 次回実行時のスキップ用にパスを保存
+                output_paths_cache.write_text(
+                    json.dumps(str_paths, ensure_ascii=False), encoding="utf-8"
+                )
+                chapter_sessions.append({"title": ch_title, "output_paths": str_paths})
 
             except Exception as e:
-                print_log(f"  [Error] Chapter {ch_title} failed: {e}")
+                import traceback
+                print_log(f"  [Error] Chapter '{ch_title}' failed: {e}")
+                print_log(traceback.format_exc())
+                failed_chapters.append(ch_title)
                 chapter_sessions.append({
                     "title": ch_title,
                     "output_paths": [],
                 })
+
+        # 失敗章のサマリー
+        if failed_chapters:
+            print_log(f"\n  [BookManager] ⚠️ 失敗した章 ({len(failed_chapters)}件):")
+            for t in failed_chapters:
+                print_log(f"    - {t}")
+            print_log("  再実行すると完了済みの章はスキップされ、失敗した章のみ再処理されます。")
 
         # 3. 統合
         if chapter_sessions:
             print_log("\n--- Consolidating Chapters ---")
             integrator = StateIntegrator(book_title=self.book_title, session_dir=str(self.session_dir))
             output_paths = integrator.integrate_to_book(chapter_sessions, global_resume=self.global_resume)
+            self._cleanup_old_book_sessions()
             return output_paths
         return []
+
+    MAX_BOOK_SESSIONS = 5
+
+    def _cleanup_old_book_sessions(self):
+        """book_sessions/ 以下の古いセッションを削除し MAX_BOOK_SESSIONS 以内に収める。"""
+        from .config import STATE_DIR
+        book_sessions_dir = STATE_DIR / "book_sessions"
+        if not book_sessions_dir.exists():
+            return
+        dirs = [d for d in book_sessions_dir.iterdir() if d.is_dir()]
+        if len(dirs) <= self.MAX_BOOK_SESSIONS:
+            return
+        dirs.sort(key=lambda d: d.stat().st_mtime)
+        to_delete = dirs[:len(dirs) - self.MAX_BOOK_SESSIONS]
+        print_log(f"  [BookManager] 古い書籍セッションを削除（保持上限: {self.MAX_BOOK_SESSIONS}）")
+        for d in to_delete:
+            try:
+                shutil.rmtree(d)
+                print_log(f"    削除: {d.name}")
+            except Exception as e:
+                print_log(f"    削除失敗 {d.name}: {e}")

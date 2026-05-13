@@ -67,18 +67,27 @@ form.addEventListener('submit', async (e) => {
         formData.delete('text');
     }
 
-    // 設定の保存（空入力でも上書き保存を許可）
-    localStorage.setItem('p2workflowy_api_key', apiKey);
+    // 設定の保存
+    if (apiKey) {
+        localStorage.setItem('p2workflowy_api_key', apiKey);
+    } else {
+        localStorage.removeItem('p2workflowy_api_key');
+    }
     localStorage.setItem('p2workflowy_expertise', expertise);
 
     const isBook = document.getElementById('is_book').checked;
-    
+    const maxChaptersEl = document.getElementById('max_chapters');
+    const maxChapters = maxChaptersEl && maxChaptersEl.value ? parseInt(maxChaptersEl.value) : null;
+
     if (apiKey) {
         formData.set('api_key', apiKey);
     }
-    formData.set('expertise', expertise); 
+    formData.set('expertise', expertise);
     formData.set('export_mode', 'p2workflowy');
     formData.set('is_book', isBook ? 'true' : 'false');
+    if (isBook && maxChapters) {
+        formData.set('max_chapters', maxChapters);
+    }
 
     // UI Update
     submitBtn.disabled = true;
@@ -127,7 +136,10 @@ async function pollStatus(taskId, downloadToken) {
     const interval = setInterval(async () => {
         try {
             const response = await fetch(`${API_BASE}/api/status/${taskId}`);
-            if (!response.ok) return;
+            if (!response.ok) {
+                if (response.status === 404) clearInterval(interval);
+                return;
+            }
 
             const data = await response.json();
 
@@ -183,4 +195,28 @@ function calculateProgress(progressMsg) {
     if (progressMsg.includes('翻訳')) return 75;
     if (progressMsg.includes('ファイル')) return 95;
     return 10;
+}
+
+// API Key Modal
+function openApiModal() {
+    document.getElementById('api-modal').classList.add('is-open');
+    document.removeEventListener('keydown', handleModalEsc);
+    document.addEventListener('keydown', handleModalEsc);
+}
+
+function closeApiModal() {
+    document.getElementById('api-modal').classList.remove('is-open');
+    document.removeEventListener('keydown', handleModalEsc);
+}
+
+function handleModalEsc(e) {
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeApiModal();
+    }
+}
+
+function handleOverlayClick(e) {
+    if (e.target === document.getElementById('api-modal')) closeApiModal();
 }

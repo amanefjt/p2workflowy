@@ -1273,6 +1273,8 @@ def run_phase3(
         chunks = []
         headings = []
         exclude_keywords = []
+        dna = {}
+        intro_pre_heading = None
 
     else:
         # Paper Mode
@@ -1280,7 +1282,7 @@ def run_phase3(
         with open(phase2_state_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
         resume_content = meta.get("resume_content", "")
-        
+
         # アンカー検知によるスキップを廃止し、レジュメの見出しリストを唯一の基準にする
         anchors = {"metadata_ids": []}
         headings = extract_headings_from_resume(resume_content)

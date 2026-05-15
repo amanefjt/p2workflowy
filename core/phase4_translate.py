@@ -31,16 +31,7 @@ async def process_section_modular(
     # 1. セクション要約の生成 (Book Mode のみ)
     resume_text = ""
     if is_book:
-        # 既存のキャッシュ（existing_resume）の抽出
-        existing_resume = None
-        if chunks and isinstance(chunks[0], dict) and "existing_resume" in chunks[0]:
-            existing_resume = chunks[0]["existing_resume"]
-            chunks = chunks[1:]
-
-        if existing_resume:
-            resume_text = existing_resume
-        else:
-            resume_text = await generate_section_resume(
+        resume_text = await generate_section_resume(
                 section_name=section_name, chunks=chunks, resume_content=resume_context,
                 api_key=translator.api_key, model=translator.model,
                 rate_limiter=translator.rate_limiter, log_dir=state.logs_dir if state else None

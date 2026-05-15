@@ -136,7 +136,11 @@ def run_phase5(
 
         wf_content = "\n".join(wf_parts)
     elif export_mode == "ronbunnihongo":
-        md_content = f"# {title}\n\n" + md_engine.render(japanese_tree, current_base=2)
+        parts = [f"# {title}", ""]
+        if resume_content and resume_content.strip() not in ["", "Simple Mode", "...", "None"]:
+            parts.extend(["## レジュメ", "", format_resume_markdown(resume_content, shift=2), ""])
+        parts.extend(["## 日本語本文", "", md_engine.render(japanese_tree, current_base=2)])
+        md_content = "\n".join(parts)
 
     # 4. 書き出し
     if md_content:

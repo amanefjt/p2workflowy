@@ -264,7 +264,7 @@ def call_gemini(
                 if hasattr(chunk, 'text') and chunk.text:
                     full_response_text += chunk.text
             
-            if chunk is None:
+            if chunk is None and not full_response_text:
                 raise RuntimeError("APIから空のレスポンスが返されました。")
 
             end_time = time.time()

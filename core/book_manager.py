@@ -125,7 +125,7 @@ class BookManager:
             self._generate_global_context()
         else:
             print_log("  [BookManager] PDF破損につき事後生成ルートへ倒れます。")
-            self.global_resume = None
+            self.global_resume = ""
 
         # 用語集CSVの作成
         glossary_path = self.session_dir / "global_glossary.csv"
@@ -163,13 +163,11 @@ class BookManager:
         heavy_ocr = pipeline_kwargs.get("heavy_ocr", False)
         thinking_level = pipeline_kwargs.get("thinking_level", "High")
         tier = pipeline_kwargs.get("tier", "paid")
-        resume_only = pipeline_kwargs.get("resume_only", False)
-        structure_only = pipeline_kwargs.get("structure_only", False)
         resume_from = pipeline_kwargs.get("resume_from", None)
-        
+
         explicit_keys = [
-            "glossary_path", "pdf_mode", "thinking_level", "tier", 
-            "heavy_ocr", "max_pages", "resume_only", "structure_only", "api_key", "model", "resume_from"
+            "glossary_path", "pdf_mode", "thinking_level", "tier",
+            "heavy_ocr", "max_pages", "api_key", "model", "resume_from"
         ]
         for key in explicit_keys:
             pipeline_kwargs.pop(key, None)

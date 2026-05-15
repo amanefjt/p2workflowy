@@ -44,3 +44,50 @@ Phase 2 (Meta Generation) において、文献の第一ページからタイト
 `core/pipeline.py` において、ユーザー（または `BookManager`）が明示的に `title` を指定して `run_pipeline` を実行したかどうかを判定するフラグ (`explicit_title = title is not None`) を追加しました。
 以降の Phase 2 でタイトルを上書きする処理 (`title = meta["dna"]["title"]`) の実行条件に `not explicit_title` を紐付け、明示的なタイトルが既にある場合はDNAから推測したタイトルでの上書きを禁止しました。（※ 単発のPaper Modeなど、ファイル名から仮で生成したタイトルの場合は引き続き上書きを許可します。）
 
+---
+
+## 2026-05-15: コードレビュー全コードベース監査（バグ一括修正）
+
+全コードベースを対象にしたサブエージェントによるセキュリティ・品質監査を実施。以下の問題を検出・修正した。
+
+### C-1. ダウンロード 403 エラー（ronbunnihongo モード）
+- **事象**: `app_ronbun.js` でダウンロードボタンを押すと毎回 403 が返される。
+- **原因**: `pollStatus()` にダウンロードトークンを渡していなかったため、ダウンロード URL に `?token=` が付かず、`server.py` の `secrets.compare_digest()` が常に不一致を返していた。
+- **解決策**: `app_ronbun.js` の `pollStatus` / `showDownloads` にトークンを伝播し、URL に `?token=` を追加。
+
+### C-2. ronbunnihongo モードでレジュメが出力されない
+- **事象**: ronbunnihongo 出力ファイルにレジュメ（要約）が含まれない。
+- **原因**: `phase5_export.py` の `ronbunnihongo` 分岐が `resume_content` を使わず日本語ツリーのみ書き出していた。
+- **解決策**: `p2workflowy` モードと同じ条件でレジュメを先頭に追加するよう修正。
+
+### C-3. `--resume-only` / `--structure-only` が書籍モードで無視される
+- **事象**: CLI の `--resume-only` / `--structure-only` フラグが書籍モード時に効かず、常にフルパイプラインが走る。
+- **原因**: `book_manager.py:166-167` で `pipeline_kwargs` から再取得しようとしていたが、これらは `run()` の名前付き引数として既に受け取られており `pipeline_kwargs` には含まれない。常に `False` に上書きされていた。
+- **解決策**: `pipeline_kwargs` からの再取得行と `explicit_keys` からの当該エントリを削除し、名前付き引数をそのまま利用。
+
+### I-1. `resume_only=True` でも Phase 4 が再実行される
+- **事象**: `--resume-only` 指定時に翻訳済みキャッシュが無視され API コストが無駄に発生。
+- **原因**: `pipeline.py:169` の条件が `state.phase4_translate.exists() and not resume_only` であり、`resume_only=True` の場合にキャッシュを読まずに再翻訳していた。
+- **解決策**: 条件を `state.phase4_translate.exists()` に修正。キャッシュがあれば常に再利用。
+
+### I-2. 書籍モードで `dna` / `intro_pre_heading` が未初期化
+- **事象**: 将来のリファクタ時に `UnboundLocalError` が発生しうる潜在バグ。
+- **原因**: `phase3_structure.py` の書籍モード分岐で `dna` と `intro_pre_heading` が初期化されないまま `build_tree` の呼び出しで条件式の左辺に現れていた。
+- **解決策**: 書籍モード分岐の末尾に `dna = {}` / `intro_pre_heading = None` を追加。
+
+### I-3. `global_resume = None` による型不整合（book_manager）
+- **原因**: PDF 破損時に `self.global_resume = None` を設定していたが、下流は `str` 型を前提。
+- **解決策**: `""` に変更。
+
+### I-4. `existing_resume` デッドコード（phase4_translate）
+- **原因**: Phase 3 が `existing_resume` キーを sections_dict に注入するパスが存在しないにもかかわらず、Phase 4 にその抽出コードが残存していた。
+- **解決策**: 該当ブロックを削除。
+
+### I-5. 同期 LLM クライアントの空レスポンス検出が非同期版と不整合
+- **原因**: `call_gemini`（同期）は `chunk is None` で即エラーだったが、ストリーム末尾の metadata-only チャンクが `None` になるケースで誤ってエラーを投げていた。
+- **解決策**: `if chunk is None and not full_response_text:` に統一（非同期版と同じ条件）。
+
+### M-1. `phase2_meta.py` の例外型誤り
+- **原因**: チャンクが空の場合に `FileNotFoundError` を投げていたが、ファイルは存在しており内容が空なので意味が違う。
+- **解決策**: `ValueError` に変更。
+

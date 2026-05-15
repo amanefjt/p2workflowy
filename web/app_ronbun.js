@@ -39,8 +39,12 @@ form.addEventListener('submit', async (e) => {
         return;
     }
 
-    // 設定の保存（空入力でも上書き保存を許可）
-    localStorage.setItem('p2workflowy_api_key', apiKey);
+    // 設定の保存
+    if (apiKey) {
+        localStorage.setItem('p2workflowy_api_key', apiKey);
+    } else {
+        localStorage.removeItem('p2workflowy_api_key');
+    }
     localStorage.setItem('p2workflowy_expertise', expertise);
 
     if (apiKey) {
@@ -74,7 +78,7 @@ form.addEventListener('submit', async (e) => {
         console.log("Server response:", data);
         if (data.task_id) {
             logViewer.innerHTML += `Task ID: ${data.task_id}<br>Pipeline started...<br>`;
-            pollStatus(data.task_id);
+            pollStatus(data.task_id, data.download_token || '');
         } else {
             throw new Error('Failed to start process: No task ID received');
         }
@@ -92,7 +96,7 @@ function resetButton() {
     submitBtn.innerText = '翻訳を開始する';
 }
 
-async function pollStatus(taskId) {
+async function pollStatus(taskId, downloadToken) {
     const interval = setInterval(async () => {
         try {
             const response = await fetch(`${API_BASE}/api/status/${taskId}`);
@@ -110,7 +114,7 @@ async function pollStatus(taskId) {
                 clearInterval(interval);
                 updateProgress(100);
                 statusText.innerText = '完了！';
-                showDownloads(taskId);
+                showDownloads(taskId, downloadToken);
                 resetButton();
             } else if (data.status === 'failed') {
                 clearInterval(interval);
@@ -128,8 +132,9 @@ function updateProgress(percent) {
     percentText.innerText = `${percent}%`;
 }
 
-function showDownloads(taskId) {
-    document.getElementById('dl-ronbun').href = `${API_BASE}/api/download/${taskId}/ronbun`;
+function showDownloads(taskId, downloadToken) {
+    const t = encodeURIComponent(downloadToken || '');
+    document.getElementById('dl-ronbun').href = `${API_BASE}/api/download/${taskId}/ronbun?token=${t}`;
     downloadLinks.classList.remove('hidden');
     downloadLinks.scrollIntoView({ behavior: 'smooth' });
 }

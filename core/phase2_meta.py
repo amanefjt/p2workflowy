@@ -215,7 +215,7 @@ def run_phase2_v3(
     # 1. Phase 1 の出力を読み込み
     chunks = load_chunks_from_json(str(phase1_state_path))
     if not chunks:
-        raise FileNotFoundError(f"Phase 1 の出力が空または見つかりません: {phase1_state_path}")
+        raise ValueError(f"Phase 1 の出力が空または見つかりません: {phase1_state_path}")
 
     # 2. DNA 抽出 (1ページ目の物理チャンクを使用)
     page1_chunks = [c for c in chunks if getattr(c, 'page_idx', 0) <= 1]

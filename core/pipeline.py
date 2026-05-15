@@ -166,7 +166,7 @@ def run_pipeline(
 
     # --- Phase 4: Sliding-Window Translation ---
     if start_phase <= 4:
-        if state.phase4_translate.exists() and not resume_only:
+        if state.phase4_translate.exists():
             print_log(f"  [Pipeline] Phase 4 (Translate) already finished. Skipping.")
             from .models import TreeNode
             japanese_tree = [TreeNode.from_dict(d) for d in json.loads(state.phase4_translate.read_text(encoding="utf-8"))]

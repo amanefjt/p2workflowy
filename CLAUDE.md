@@ -97,7 +97,10 @@ Phase 2 が抽出する DNA には `intro_pre_heading`（最初の節タイト�
 ### LLM クライアント（`core/llm_client.py`）
 
 - **TierManager（シングルトン）**: 429/503 エラーで自動的に FREE ティア（Lite モデル）へダウンシフトする自己修復機構。
-- **モデル選択の真実ソース**: `docs/model_optimization.md` が意思決定の正本。`core/coreprompts.json` の `DEFAULT_MODEL` / `DEFAULT_MODEL_FREE` / `DEFAULT_MODEL_VLM` は runtime の設定値であり、`model_optimization.md` に合わせて更新する。実装とドキュメントが不一致の場合はドキュメント側に揃える。
+- **モデル情報の参照順序**: 
+  - **Gemini API 共通知識**（モデル一覧・thinking_level・無料枠・廃止情報）は `docs/gemini_models.md` を参照。これは `~/Code/shared/gemini_models.md` から同期された共通ドキュメント（直接編集禁止）。
+  - **p2workflowy 固有の運用**（フェーズ別ルーティング・ベンチマーク）は `docs/model_optimization.md` を参照。
+  - **runtime の設定値** `core/coreprompts.json` の `DEFAULT_MODEL` / `DEFAULT_MODEL_FREE` / `DEFAULT_MODEL_VLM` は `model_optimization.md` に合わせて更新する。実装とドキュメントが不一致の場合はドキュメント側に揃える。
 - **Phase 4 並列数**: デフォルト `max_concurrent_sections=4`。直列化（=1）は実測で約 50% 遅く（338s vs 227s）避けるべき。`--concurrent 8` はさらに速いが高分散。詳細は `docs/model_optimization.md` Section 3 参照。
 
 ### プロンプト管理（`core/coreprompts.json`）

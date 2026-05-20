@@ -42,7 +42,7 @@ class BookManager:
             import uuid
             return f"fallback_{uuid.uuid4().hex[:8]}"
 
-    def _generate_global_context(self):
+    def _generate_global_context(self, expertise: str = "文化人類学"):
         """PDF 全編をスキャンし、書籍全体のレジュメと用語集を事前生成する。"""
         print_log(f"\n--- Phase 0: Global Context Generation (Full Scan) ---")
         doc = fitz.open(self.input_path)
@@ -54,7 +54,7 @@ class BookManager:
             doc.close()
 
         # トークン制限対策
-        MAX_CHARS = 1_200_000 
+        MAX_CHARS = 1_200_000
         if len(full_text) > MAX_CHARS:
             print_log(f"  [BookManager] テキストサンプリング実行 ({len(full_text)} chars)")
             full_text = full_text[:800_000] + "\n\n[...Skipped...]\n\n" + full_text[-400_000:]
@@ -62,18 +62,18 @@ class BookManager:
             print_log(f"  [BookManager] フルテキスト抽出完了 ({len(full_text)} chars)")
 
         prompts = load_coreprompts()
-        
+
         # 1. 全体レジュメ生成
         print_log("  [BookManager] 書籍全体のレジュメを生成中...")
-        resume_prompt = prompts.get("GLOBAL_SUMMARY_PROMPT", "").replace("{expertise}", "文化人類学") \
+        resume_prompt = prompts.get("GLOBAL_SUMMARY_PROMPT", "").replace("{expertise}", expertise) \
                                      .replace("{context_guide}", "書籍全体の核心的問い、論理構成を俯瞰して下さい。") \
                                      .replace("{text}", full_text)
-        
+
         self.global_resume = call_gemini(resume_prompt, api_key=self.api_key, model=self.model, thinking_level="High")
 
         # 2. 全体用語集生成
         print_log("  [BookManager] 書籍全体の共通用語集を生成中...")
-        glossary_prompt = prompts.get("KEYWORD_EXTRACTION_PROMPT", "").replace("{expertise}", "文化人類学") \
+        glossary_prompt = prompts.get("KEYWORD_EXTRACTION_PROMPT", "").replace("{expertise}", expertise) \
                                          .replace("{text}", full_text)
         
         glossary_json = call_gemini(glossary_prompt, api_key=self.api_key, model=self.model, response_mime_type="application/json")
@@ -102,11 +102,12 @@ class BookManager:
         # ティア状態の初期化（get_default_model を呼ぶ前に必要）
         tier = pipeline_kwargs.get("tier", "paid")
         apply_tier_settings(tier)
-        
+        expertise = pipeline_kwargs.get("expertise", "文化人類学")
+
         can_use_full_scan = diagnose_pdf_quality(str(self.input_path))
-        
+
         global_context_path = self.session_dir / "global_context.json"
-        
+
         if global_context_path.exists():
             print_log(f"  [BookManager] 既存のキャッシュを確認中: {global_context_path.absolute()}")
             try:
@@ -117,12 +118,12 @@ class BookManager:
                     print_log("  [BookManager] 既存の Global Context を発見。Phase 0 をスキップします。")
                 else:
                     print_log("  [BookManager] キャッシュが不完全なため再解析を行います。")
-                    self._generate_global_context()
+                    self._generate_global_context(expertise=expertise)
             except Exception as e:
                 print_log(f"  [BookManager] キャッシュ読込エラー: {e}")
-                self._generate_global_context()
+                self._generate_global_context(expertise=expertise)
         elif can_use_full_scan:
-            self._generate_global_context()
+            self._generate_global_context(expertise=expertise)
         else:
             print_log("  [BookManager] PDF破損につき事後生成ルートへ倒れます。")
             self.global_resume = ""

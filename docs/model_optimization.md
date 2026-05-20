@@ -13,7 +13,7 @@ V3（Golden Rewrite）では用途別に**動的ルーティング**を採用。
 
 | キー | 現在値 |
 |---|---|
-| `DEFAULT_MODEL` | `gemini-3-flash-preview` |
+| `DEFAULT_MODEL` | `gemini-3.5-flash` |
 | `DEFAULT_MODEL_FREE` | `gemini-3.1-flash-lite` |
 | `DEFAULT_MODEL_VLM` | `gemini-3.1-flash-lite` |
 

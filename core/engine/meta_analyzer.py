@@ -50,9 +50,10 @@ class MetaAnalyzer:
         if not prompt_template:
             raise MetaExtractionError("coreprompts.json に DNA_EXTRACTION_PROMPT が定義されていません。")
 
-        # ヒントの補強
-        prompt_hint = "\n【論理的ヒント：VLM Labeling】\n- VLM が role='h1' を付与している場合、それはタイトルの最有力候補です。\n- role='metadata' のチャンクには、著者名や発行情報が含まれています。\n- これらを物理情報（font_size）よりも優先して解釈してください。"
-        prompt = prompt_template.format(chunks_json=chunks_json) + prompt_hint
+        # ヒントの補強（テンプレート内の {vlm_hint} に差し込む。末尾の最終指示より後ろに
+        # 回り込まないよう、文字列連結ではなくプレースホルダー経由で注入する）
+        vlm_hint = "【論理的ヒント：VLM Labeling】\n- VLM が role='h1' を付与している場合、それはタイトルの最有力候補です。\n- role='metadata' のチャンクには、著者名や発行情報が含まれています。\n- これらを物理情報（font_size）よりも優先して解釈してください。"
+        prompt = prompt_template.format(chunks_json=chunks_json, vlm_hint=vlm_hint)
 
         # Gemini API を呼び出し
         try:

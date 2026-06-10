@@ -14,7 +14,7 @@ from core.engine.p3_structure.heading_matcher import (
     normalize_heading,
     match_heading,
 )
-from core.phase3_structure import structure_nodes_by_headings
+from core.engine.p3_structure.tree_builder import structure_nodes_by_headings
 from core.models import TreeNode
 
 

@@ -9,12 +9,12 @@ Phase 3 構造構築のユニットテスト
 """
 
 import pytest
-from core.phase3_structure import (
+from core.engine.p3_structure.heading_matcher import (
     is_excluded_heading,
     normalize_heading,
     match_heading,
-    structure_nodes_by_headings,
 )
+from core.phase3_structure import structure_nodes_by_headings
 from core.models import TreeNode
 
 

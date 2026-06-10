@@ -12,7 +12,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch, PropertyMock
 
-from core.spread_splitter import (
+from core.engine.p1_ingest.spread_splitter import (
     is_spread_pdf,
     split_spread_pdf,
     _find_gutter_x,
@@ -170,7 +170,7 @@ class TestSplitSpreadPdf:
         src.close()
 
         # _find_gutter_x をモックして信頼性あり・中央で返す
-        with patch("core.spread_splitter._find_gutter_x", return_value=(400.0, True)):
+        with patch("core.engine.p1_ingest.spread_splitter._find_gutter_x", return_value=(400.0, True)):
             result = split_spread_pdf(src_path, output_path=output)
 
         out_doc = real_fitz.open(result)
@@ -189,7 +189,7 @@ class TestSplitSpreadPdf:
         src.save(src_path)
         src.close()
 
-        with patch("core.spread_splitter._find_gutter_x", return_value=(400.0, False)):
+        with patch("core.engine.p1_ingest.spread_splitter._find_gutter_x", return_value=(400.0, False)):
             result = split_spread_pdf(src_path, output_path=output)
 
         out_doc = real_fitz.open(result)

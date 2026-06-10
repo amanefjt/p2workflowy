@@ -141,7 +141,7 @@ class BookManager:
 
         # 1. PDF 分割
         # 見開きスキャンPDFは分割してから章分割・処理に渡す
-        from .spread_splitter import is_spread_pdf, split_spread_pdf
+        from .engine.p1_ingest.spread_splitter import is_spread_pdf, split_spread_pdf
         pdf_for_splitting = str(self.input_path)
         if is_spread_pdf(pdf_for_splitting):
             print_log("  [BookManager] 見開きスキャンPDFを検出。単ページに分割します...")

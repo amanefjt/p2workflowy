@@ -1,6 +1,6 @@
 """
 p2workflowy V2 Phase 1: Ingest Engine (Orchestrator)
-アトミック化されたエンジン群（OCRManager, LayoutEngine, PhysicalIngester）を
+アトミック化されたエンジン群（OCRManager, PhysicalIngester）を
 統合制御する、300行以下のスリムなオーケストレーター。
 """
 
@@ -11,93 +11,7 @@ from PIL import Image
 
 from .config import print_log
 from .engine.p1_ingest.ocr_manager import OCRManager
-from .engine.p1_ingest.layout_engine import LayoutEngine
 from .engine.p1_ingest.physical_ingester import PhysicalIngester
-
-async def run_pdf_ingestion_async(
-    pdf_path: str,
-    api_key: Optional[str] = None,
-    state: Any = None,
-    pdf_mode: str = "hybrid",
-    model: Optional[str] = None,
-    is_book: bool = False,
-    heavy_ocr: bool = False,
-) -> str:
-    """PDF からテキストを抽出する（ハイブリッド解析オーケストレーター）。"""
-    if state: state.update_status("PDF解析中 (Pass 1)...", 5)
-    
-    # 1. エンジンのインスタンス化
-    ocr = OCRManager(api_key=api_key, model=model)
-    layout = LayoutEngine(is_book=is_book)
-    ingester = PhysicalIngester()
-
-    doc = fitz.open(pdf_path)
-    if not doc:
-        print_log(f"  [ERROR] PDF を開けませんでした: {pdf_path}")
-        return ""
-    total_pages = len(doc)
-    
-    # 2. Pass 1: Global Layout Scan (Book mode のみ重複要素を検知)
-    ignored_patterns = set()
-    if is_book:
-        ignored_patterns = layout.detect_repeating_elements(doc)
-
-    # 3. ルーティング & 抽出判定
-    page_texts: Dict[int, str] = {}
-    vlm_tasks = []
-
-    for i in range(total_pages):
-        page = doc[i]
-        
-        # 脚注座標の特定
-        clip_y = layout.find_footnote_separator(page) if heavy_ocr else None
-        has_footnote = (clip_y is not None) or layout.has_footnotes_simple(page)
-
-        # 抽出ルートの決定
-        use_vlm = (pdf_mode == "full_vlm") or \
-                  (not is_book and ocr.should_use_vlm(page, i, is_book, heavy_ocr, has_footnote))
-
-        if use_vlm:
-            # VLM ルート (非同期タスクとして登録)
-            async def _vlm_job(idx: int):
-                text = await ocr.process_page_vlm(pdf_path, idx)
-                return idx, text
-            vlm_tasks.append(_vlm_job(i))
-        else:
-            # Python ルート (高速抽出)
-            text = ingester.extract_page_text(page, ignored_patterns=ignored_patterns, clip_y=clip_y)
-            page_texts[i] = text
-            print_log(f"  [Ingester] ページ {i+1}: Python ルート")
-
-    doc.close()
-
-    # 4. 非同期 VLM 処理の実行
-    if vlm_tasks:
-        print_log(f"  [OCR] {len(vlm_tasks)} ページの VLM 処理を開始します...")
-        results = await asyncio.gather(*vlm_tasks)
-        for idx, text in results:
-            page_texts[idx] = text
-            if state:
-                p = int((len(page_texts) / total_pages) * 100)
-                state.update_status(f"VLM OCR中... ({len(page_texts)}/{total_pages})", p)
-
-    # 5. ページ間結合 (Post-process)
-    final_text = ""
-    sorted_indices = sorted(page_texts.keys())
-    for i in sorted_indices:
-        current = page_texts[i].strip()
-        if not current: continue
-        
-        if is_book:
-            current = layout.remove_running_headers(current)
-            
-        if not final_text:
-            final_text = current
-        else:
-            action = ingester.join_page_boundary(final_text, current)
-            final_text += action + current
-            
-    return final_text
 
 async def run_pdf_ingestion_v3_async(
     pdf_path: str,
@@ -215,11 +129,6 @@ def run_pdf_ingestion_v3(pdf_path: str, **kwargs) -> List[Dict[str, Any]]:
     """run_pdf_ingestion_v3_async の同期版。"""
     from .llm_client import run_async
     return run_async(run_pdf_ingestion_v3_async(pdf_path, **kwargs))
-
-def run_pdf_ingestion(pdf_path: str, **kwargs) -> str:
-    """run_pdf_ingestion_async の同期版。"""
-    from .llm_client import run_async
-    return run_async(run_pdf_ingestion_async(pdf_path, **kwargs))
 
 def diagnose_pdf_quality(pdf_path: str) -> bool:
     """

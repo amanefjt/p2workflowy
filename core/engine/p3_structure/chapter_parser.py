@@ -34,7 +34,8 @@ class ChapterParser:
         Returns:
             List[ChapterBoundary]: 章境界リスト（ノイズ除去・TOC 補正済み）
         """
-        from core.phase3_structure import extract_book_chapters, apply_toc_titles
+        from .chapter_extractor import extract_book_chapters
+        from .toc_extractor import apply_toc_titles
 
         raw: List[dict] = extract_book_chapters(
             pdf_path=str(input_path),

@@ -7,34 +7,20 @@ indi_pre_scanner.md / indi_section_detector.md に完全準拠。
 import json
 import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict
 
-import fitz  # PyMuPDF
-
-import statistics
-
-from .config import (print_log, 
+from .config import (print_log,
     load_coreprompts,
 )
-from .models import RawChunk, TreeNode, load_chunks_from_json, save_tree_to_json
-from .text_utils import _SENTENCE_END_RE, _TRAILING_WORDS
-from .engine.p3_structure.heading_matcher import (
-    normalize_heading,
-    is_excluded_heading,
-    match_heading,
-    extract_headings_from_resume,
-)
+from .models import TreeNode, load_chunks_from_json, save_tree_to_json
+from .engine.p3_structure.heading_matcher import extract_headings_from_resume
 from .engine.p3_structure.tree_builder import (
-    structure_nodes_by_headings,
     build_tree,
     structure_nodes_by_markdown,
 )
 from .engine.p3_structure.toc_extractor import (
     extract_toc_via_llm,
     extract_toc_from_chunks,
-    apply_toc_titles,
-    _should_join_lines,
-    _matches_toc_entry,
 )
 
 

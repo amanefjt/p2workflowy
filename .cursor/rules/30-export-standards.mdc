@@ -1,0 +1,13 @@
+---
+description: Export invariants for Markdown and Workflowy outputs.
+globs: "{core/**/*.py,docs/export_spec/**}"
+alwaysApply: false
+---
+
+# Export Standards
+
+- 最終成果物は `_p2.md` / `_p2.txt` を標準とし、構造逸脱はバグとして扱う。
+- Workflowyでは英語ブロックを親子でネスト、日本語ブロックを並列展開する。
+- `References` 系の除外セクションは落とし、`Appendix` は保持する。
+- 注釈ノードは言語ブロック末尾へ再配置し、本文の可読性を優先する。
+- 書籍統合時は見出しシフトとインデントシフトの整合性を同時に確認する。

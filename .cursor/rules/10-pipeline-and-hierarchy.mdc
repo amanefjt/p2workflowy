@@ -1,0 +1,13 @@
+---
+description: Pipeline boundaries and hierarchy rules for paper/book processing.
+alwaysApply: true
+---
+
+# Pipeline And Hierarchy
+
+- 実装変更時は `main.py -> core/pipeline.py -> phaseN` の責務境界を崩さない。
+- `run_pipeline` はフェーズオーケストレーション専任とし、個別アルゴリズムは各フェーズへ閉じ込める。
+- 書籍モードは `core/book_manager.py` を入口にし、章処理後の統合は `state_integrator.py` で行う。
+- 階層ルールは非対称を維持する（英語は nested、日本語は parallel）。
+- 書籍統合では `chN_` プレフィックス、見出し昇格、重複タイトル除去を必ず担保する。
+- 既存ステート形式に互換性がない変更は、移行手順を同時に記載する。

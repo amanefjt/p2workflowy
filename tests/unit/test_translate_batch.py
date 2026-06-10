@@ -1,5 +1,5 @@
 """
-translate_batch のユニットテスト（旧 test_rtt_v34.py）
+translate_batch のユニットテスト
 
 テスト内容:
   - 末尾切断: レスポンスが途中で切れても解析済みチャンクは返る

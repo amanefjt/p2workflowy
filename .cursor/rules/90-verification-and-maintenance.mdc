@@ -1,0 +1,12 @@
+---
+description: Completion gates, verification evidence, and maintenance logs.
+alwaysApply: true
+---
+
+# Verification And Maintenance
+
+- 完了宣言の前に、実行した検証コマンドと結果を必ず確認する。
+- 仕様変更や判断根拠は `docs/management/requirements_log.md` に追記する。
+- 不具合の原因・再現手順・対策は `docs/management/troubleshooting_log.md` に追記する。
+- 機密情報を含む可能性があるファイル（例: `.env`）は不用意に読み書きしない。
+- ルール更新時は `.cursor/rules` を唯一の正本として更新する。

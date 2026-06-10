@@ -1,0 +1,12 @@
+---
+description: Decision order for VLM, physical evidence, and geometry.
+alwaysApply: true
+---
+
+# VLM Determinism
+
+- 構造判定の優先順位は `VLM logical role > physical evidence > geometry`。
+- VLMの判断が曖昧な場合のみ、フォント統計や座標近接を補助根拠として使う。
+- レイアウトが複雑なPDFでは Route C（全ページVLM）を優先し、中途半端な混在モードを避ける。
+- OCR補正は「VLMが特定した位置のNativeテキストで肉付けする」方針を守る。
+- 見出し判定の調整を入れた場合は、`phase3_structure.json` で抽出結果を検証する。

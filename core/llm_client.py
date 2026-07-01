@@ -272,10 +272,10 @@ def call_gemini(
             gen_duration = (end_time - first_token_time) if first_token_time > 0 else 0
             
             usage = getattr(chunk, 'usage_metadata', None)
-            p_tokens = usage.prompt_token_count if usage else 0
-            c_tokens = usage.candidates_token_count if usage else 0
+            p_tokens = (usage.prompt_token_count or 0) if usage else 0
+            c_tokens = (usage.candidates_token_count or 0) if usage else 0
             tps = c_tokens / gen_duration if gen_duration > 0 else 0
-            
+
             print_log(f"  [LLM] Success: Duration {duration:.1f}s (TTFT: {ttft:.1f}s, TPS: {tps:.1f}, Prompt: {p_tokens}tk, Output: {c_tokens}tk)")
             
             # メトリクス記録
@@ -369,10 +369,10 @@ async def call_gemini_async(
             gen_duration = (end_time - first_token_time) if first_token_time > 0 else 0
             
             usage = getattr(chunk, 'usage_metadata', None)
-            p_tokens = usage.prompt_token_count if usage else 0
-            c_tokens = usage.candidates_token_count if usage else 0
+            p_tokens = (usage.prompt_token_count or 0) if usage else 0
+            c_tokens = (usage.candidates_token_count or 0) if usage else 0
             tps = c_tokens / gen_duration if gen_duration > 0 else 0
-            
+
             print_log(f"  [LLM async] Success: Duration {duration:.1f}s (TTFT: {ttft:.1f}s, TPS: {tps:.1f}, Prompt: {p_tokens}tk, Output: {c_tokens}tk)")
             
             # メトリクス記録
@@ -572,13 +572,17 @@ _LIMITER_LOCK = threading.Lock()
 def reset_pipeline_state() -> None:
     """
     パイプライン開始前に呼び出す。
-    AsyncLimiter は生成時のイベントループに紐付くため、新しいパイプライン（新しいループ）
-    が始まる前にキャッシュをクリアし、次の apply_tier_settings 呼び出しで再生成させる。
+    AsyncLimiter・genai.Client の非同期トランスポートはいずれも生成時のイベントループに
+    紐付くため、新しいパイプライン（新しい asyncio.run() ループ）が始まる前にキャッシュを
+    クリアし、次回アクセス時に現在のループへ再生成させる。これを怠ると、前のパイプライン
+    の（すでに閉じた）ループに紐付いたクライアントを再利用してしまい、非同期呼び出しの
+    1回目が "RuntimeError: Event loop is closed" で失敗する。
     TierManager も paid にリセットして前回の downgrade 状態を引き継がないようにする。
     """
-    global _CACHED_LIMITERS
+    global _CACHED_LIMITERS, _CLIENTS
     with _LIMITER_LOCK:
         _CACHED_LIMITERS.clear()
+    _CLIENTS.clear()
     tier_manager.set_tier(GeminiTier.PAID)
 
 

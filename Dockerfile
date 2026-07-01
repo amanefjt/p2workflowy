@@ -2,8 +2,12 @@
 FROM python:3.11-slim
 
 # システムライブラリのインストール
+# libxcb1: opencv-python-headless 4.13.0.90 の退行 (libxcb.so.1 への意図しない依存追加) により
+# 必要。Docling が内部で使う OpenCV の import に失敗し、常に VLM フォールバックへ回っていた。
+# https://github.com/opencv/opencv-python/issues/1183
 RUN apt-get update && apt-get install -y \
     build-essential \
+    libxcb1 \
     && rm -rf /var/lib/apt/lists/*
 
 # 作業ディレクトリ

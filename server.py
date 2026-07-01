@@ -103,11 +103,11 @@ async def index():
 
 @app.get("/ronbun")
 async def ronbun_page():
-    return FileResponse(web_dir / "ronbun.html")
+    return FileResponse(web_dir / "ronbunnihongo.html")
 
 @app.get("/ronbunnihongo")
 async def ronbunnihongo_page():
-    return FileResponse(web_dir / "ronbun.html")
+    return FileResponse(web_dir / "ronbunnihongo.html")
 
 # パイプラインを別スレッドで実行するための非同期ラッパー関数
 async def run_pipeline_in_background(task_id: str, input_path: str, glossary_path: Optional[str], title: Optional[str], api_key: Optional[str], expertise: str, export_mode: str, is_book: bool, max_chapters: Optional[int] = None):

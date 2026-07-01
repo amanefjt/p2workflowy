@@ -38,12 +38,20 @@ def docling_pdf_to_chunks(pdf_path: str) -> List[RawChunk]:
     REFERENCES/NOTES 等のセクション以降はスキップ。
     """
     try:
-        from docling.document_converter import DocumentConverter
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
     except ImportError:
         raise ImportError("docling がインストールされていません: pip install docling")
 
     print_log("  [Docling] PDF を変換中...")
-    conv = DocumentConverter()
+    # is_docling_viable() が埋め込みテキストありのデジタル PDF のみを通しているため OCR は不要。
+    # OCR を有効にすると RapidOCR のエンジン自動選択（OcrAutoOptions）が torch バックエンドを
+    # 選び、PP-OCRv6 未対応で失敗して VLM フォールバックに落ちてしまう。
+    pipeline_options = PdfPipelineOptions(do_ocr=False)
+    conv = DocumentConverter(
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
+    )
     result = conv.convert(pdf_path)
     doc = result.document
 

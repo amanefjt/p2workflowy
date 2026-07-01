@@ -58,3 +58,27 @@ def test_analyze_dna_error_handling(mock_call, mock_page1_chunks):
     # パイプライン継続優先のため例外は投げず、フォールバック値で戻る
     assert dna["title"] == "Unknown Title"
     assert dna["authors"] == []
+
+
+@patch("core.engine.meta_analyzer.call_gemini")
+def test_analyze_dna_null_optional_fields(mock_call, mock_page1_chunks):
+    """プロンプト仕様上 LLM は欠落項目に null を返してよい。呼び出し側が
+    dna.get('authors', []) のような形で安全に扱えるよう、null は型に応じた
+    空値（[] / {}）へ正規化されなければならない。"""
+    mock_call.return_value = """
+    {
+      "title": "A Deep Dive into Anthropology",
+      "authors": null,
+      "abstract": null,
+      "keywords": null,
+      "intro_pre_heading": null
+    }
+    """
+
+    analyzer = MetaAnalyzer()
+    dna = analyzer.analyze_dna(mock_page1_chunks)
+
+    assert dna["authors"] == []
+    assert dna["abstract"] == {}
+    assert dna["keywords"] == {}
+    assert dna["intro_pre_heading"] == {}

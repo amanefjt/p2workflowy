@@ -69,7 +69,15 @@ class MetaAnalyzer:
             # 必須キーの検証 (最低限 title があれば成功とみなす)
             if "title" not in dna:
                 raise MetaExtractionError("LLM の応答に 'title' が含まれていません。")
-                
+
+            # プロンプト仕様上、該当情報がない項目には null が返り得る。
+            # 呼び出し側が dna.get(key, default) で安全に扱えるよう、
+            # null は型に応じた空値へ正規化する。
+            dna["authors"] = dna.get("authors") or []
+            dna["abstract"] = dna.get("abstract") or {}
+            dna["keywords"] = dna.get("keywords") or {}
+            dna["intro_pre_heading"] = dna.get("intro_pre_heading") or {}
+
             return dna
 
         except Exception as e:

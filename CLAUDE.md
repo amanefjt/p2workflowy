@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 英語学術論文・専門書籍の PDF/テキストを Gemini AI で解析し、Workflowy 向けの階層 Markdown に変換するツール。CLI (`main.py`) と Web API (`server.py`) の両モードを持つ。PDF（VLM OCR / Docling）とプレーンテキスト（Acrobat 抽出等）の両入力に対応。
 
+全体の設計思想・「なぜこうなっているか」を含む説明は `docs/ARCHITECTURE.md` を参照(本ファイルは Claude Code 向けの運用リファレンス、ARCHITECTURE.md は人間・AI 双方向けの設計解説という役割分担)。
+
 ## 環境セットアップ
 
 ```bash
@@ -62,12 +64,7 @@ python3 -m pytest tests/unit/test_json_pipeline.py -v
 
 各フェーズの内部ロジックは `core/engine/` 配下のサブパッケージに閉じ込められている。フェーズのファサード（`core/phaseN_*.py`）はオーケストレーションのみ担当し、アルゴリズムはエンジン層に置く。
 
-| サブパッケージ | 主要モジュール |
-|---|---|
-| `p1_ingest/` | `docling_ingester.py`（Docling ルート）, `physical_ingester.py`, `ocr_manager.py`, `text_structure_extractor.py`, `formatter.py` |
-| `p3_structure/` | `tree_constructor.py`, `heading_detector.py`, `chapter_parser.py`, `state_integrator.py`, `toc_manager.py` |
-| `p4_translate/` | `parallel_translator.py`, `prompt_builder.py`, `tree_reconstructor.py` |
-| `p5_export/` | `workflowy_engine.py`, `markdown_engine.py`, `text_book_integrator.py` |
+サブパッケージは `p1_ingest/`（PDF/テキスト取り込み）, `p3_structure/`（構造ツリー・章境界構築）, `p4_translate/`（並列翻訳）, `p5_export/`（Markdown/Workflowy出力）の4つ。個別モジュールの最新一覧・役割は **`docs/ARCHITECTURE.md` §2.3** を参照(このファイルには詳細を重複して書かない — 移設のたびに陳腐化するため)。
 
 ### Phase 1 の入力ルーティング
 
@@ -125,15 +122,18 @@ Phase 2 が抽出する DNA には `intro_pre_heading`（最初の節タイト�
 
 ## 設計原則
 
-- **判断優先順位**: `VLM の論理役割判断 > 物理証拠（フォント・座標）> 幾何的ヒント`
+- **判断優先順位**: `VLM の論理役割判断 > 物理証拠（フォント・座標）> 幾何的ヒント`。レイアウトが複雑な PDF では Route C（全ページ VLM）を優先し、中途半端な混在モードは避ける。OCR 補正は「VLM が特定した位置の Native テキストで肉付けする」方針を守る。
 - **責務境界**: `main.py` はエントリーポイント専任。`run_pipeline` はオーケストレーション専任。個別アルゴリズムは各フェーズモジュールに閉じ込める。
 - **出力形式**: `_p2.md` / `_p2.txt` が標準。Workflowy では英語ブロックを親子ネスト、日本語ブロックを並列展開する非対称階層を維持する。
 - **エクスポート不変条件**: `References` 系セクションは出力から除外し、`Appendix` は保持する。注釈ノードは言語ブロック末尾へ再配置する。
-- **ルール正本**: `.cursor/rules/` を唯一の正本として更新する（`.agent/` は凍結互換レイヤー）。
+- **設計の正本**: 実装変更の判断根拠は常に `core/` 配下の現行コードを優先する。本ファイルや `docs/ARCHITECTURE.md` はあくまで補助情報であり、コードと矛盾する場合はコードを信じてドキュメント側を直す。
+- **機密ファイルの扱い**: `.env` など機密情報を含みうるファイルは不用意に読み書きしない。
 
 ## 変更管理
 
-仕様変更や判断根拠は `docs/management/requirements_log.md` に追記する。不具合の原因・再現手順・対策は `docs/management/troubleshooting_log.md` に追記する。
+仕様変更や判断根拠は `docs/management/requirements_log.md` に追記する。不具合の原因・再現手順・対策は `docs/management/troubleshooting_log.md` に追記する（`core/` 変更を含むコミットでこの追記が漏れていないかは `.claude/hooks/check_management_logs.sh` が `git commit` 時に注意喚起する）。モデルティアの切替ロジックを変更した場合は、対象フェーズと理由もここに残す。
+
+完了宣言前の構造検証チェックリストは `golden-verification` skill、構造・翻訳まわりのデバッグ手順は `p2workflowy-debug` skill を参照（`.claude/skills/` 配下、Claude Code が状況に応じて自動候補に挙げる）。
 
 ## デプロイ
 

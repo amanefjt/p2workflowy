@@ -41,3 +41,13 @@ Anthropic 公式の long-context prompting tips・hallucination 低減ガイド�
 - **コンセプト**: 「人文系テクストを『読めた』とは何か」の再定義。(1) 問いの構造レイヤー（二層問いスキーマ: 個別の問い×理論の問い、レジュメ 1・2 を置換）、(2) 論証地図（要所 5〜10 箇所の精読マーク＋論証注釈、ヨミの緩急）、(3) 解釈開示ノート（分岐・翻訳不可能性・訳注、論文あたり最大 5 件）。
 - **主要判断**: オプトイン（Web トグル＋ `--deep`）／コスト上限 +30%／根拠なき推論の出力禁止／独立フェーズ追加（`phase_deep.json`、失敗時は通常出力に縮退）／Phase 4 プロンプトは 2 ルート化し通常ルートはバイト同一を維持／論文モードのみ先行。
 - **実装前の必須検証**: 二層問いスキーマの妥当性（プロンプト実験＋藤田氏レビュー）と翻訳品質干渉の A/B。詳細は `SPEC.md` §10〜11。
+
+### 2026-07-04: 全体リファクタリング（挙動不変）
+
+- デッドコード削除: p3_structure 孤児3モジュール / pdf_ingester 旧ルート / LayoutEngine / text_utils 旧関数
+- spread_splitter 二系統をノド検出コア共有で統合（信頼性判定はレンジベース基準に一本化）
+- phase3_structure(1360行) を run_phase3 専任ファサードに縮小、アルゴリズムは engine/p3_structure/ の heading_matcher / tree_builder / toc_extractor / chapter_extractor へ移設
+- chapter_parser のファサード逆 import を解消
+- pdf_ingester / pdf_splitter を engine/p1_ingest へ移動、v3 命名除去、core/base 解消、meta_analyzer を p2_meta へ
+- web フロント共通関数を common.js へ抽出
+- 根拠: CLAUDE.md 責務境界（ファサード=オーケストレーション専任）との乖離解消

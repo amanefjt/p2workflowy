@@ -169,11 +169,6 @@ async function pollStatus(taskId, downloadToken) {
     }, 2000);
 }
 
-function updateProgress(percent) {
-    progressFill.style.width = `${percent}%`;
-    percentText.innerText = `${percent}%`;
-}
-
 function showDownloads(taskId, downloadToken) {
     const t = encodeURIComponent(downloadToken);
     document.getElementById('dl-markdown').href = `${API_BASE}/api/download/${taskId}/markdown?token=${t}`;
@@ -181,20 +176,6 @@ function showDownloads(taskId, downloadToken) {
     downloadLinks.classList.remove('hidden');
     // Scroll to download section
     downloadLinks.scrollIntoView({ behavior: 'smooth' });
-}
-
-function getFriendlyStatus(progressMsg) {
-    if (!progressMsg) return '準備中...';
-    return progressMsg;
-}
-
-function calculateProgress(progressMsg) {
-    if (!progressMsg) return 5;
-    if (progressMsg.includes('準備')) return 20;
-    if (progressMsg.includes('解析') || progressMsg.includes('構築')) return 50;
-    if (progressMsg.includes('翻訳')) return 75;
-    if (progressMsg.includes('ファイル')) return 95;
-    return 10;
 }
 
 // API Key Modal

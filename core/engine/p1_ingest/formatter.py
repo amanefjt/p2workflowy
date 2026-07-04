@@ -6,7 +6,7 @@ p2workflowy 黄金の再構築: Preprocessor (Phase 1)
 import re
 from typing import List, Dict, Any, Optional
 from core.models import RawChunk
-from core.base.exceptions import PreprocessorError
+from core.exceptions import PreprocessorError
 
 # --- 物理判定定数 ---
 # 規約 03_unwrapper_sanctuary.md に準拠

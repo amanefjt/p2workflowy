@@ -10,7 +10,7 @@ from typing import List, Any, Optional
 from .config import load_coreprompts, load_glossary_csv, print_log
 from .models import load_chunks_from_json
 from .llm_client import call_gemini
-from .engine.meta_analyzer import MetaAnalyzer
+from .engine.p2_meta.meta_analyzer import MetaAnalyzer
 
 
 # サンプリング閾値 (仕様書に基づき調整)

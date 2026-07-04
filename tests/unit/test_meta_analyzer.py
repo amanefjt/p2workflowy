@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from core.engine.meta_analyzer import MetaAnalyzer
+from core.engine.p2_meta.meta_analyzer import MetaAnalyzer
 from core.models import RawChunk
 
 @pytest.fixture
@@ -14,7 +14,7 @@ def mock_page1_chunks():
         RawChunk(id="5", text="1. Introduction", page_idx=0, font_size=14.0, is_bold=True, seq_index=5.0),
     ]
 
-@patch("core.engine.meta_analyzer.call_gemini")
+@patch("core.engine.p2_meta.meta_analyzer.call_gemini")
 def test_analyze_dna_basic(mock_call, mock_page1_chunks):
     """LLM の応答に基づいた DNA 抽出の基本テスト"""
     # 期待される LLM の応答 (JSON)
@@ -47,7 +47,7 @@ def test_analyze_dna_basic(mock_call, mock_page1_chunks):
     assert dna["abstract"]["start_id"] == "2"
     assert dna["keywords"]["id"] == "4"
 
-@patch("core.engine.meta_analyzer.call_gemini")
+@patch("core.engine.p2_meta.meta_analyzer.call_gemini")
 def test_analyze_dna_error_handling(mock_call, mock_page1_chunks):
     """LLM が壊れた JSON を返した場合、例外を投げずフォールバック DNA が返されること。"""
     mock_call.return_value = "Invalid JSON response"
@@ -60,7 +60,7 @@ def test_analyze_dna_error_handling(mock_call, mock_page1_chunks):
     assert dna["authors"] == []
 
 
-@patch("core.engine.meta_analyzer.call_gemini")
+@patch("core.engine.p2_meta.meta_analyzer.call_gemini")
 def test_analyze_dna_null_optional_fields(mock_call, mock_page1_chunks):
     """プロンプト仕様上 LLM は欠落項目に null を返してよい。呼び出し側が
     dna.get('authors', []) のような形で安全に扱えるよう、null は型に応じた

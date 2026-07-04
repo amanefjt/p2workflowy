@@ -6,10 +6,10 @@ p2workflowy 黄金の再構築: Meta Analyzer (Phase 2)
 import json
 import re
 from typing import List, Dict, Any
-from ..models import RawChunk
-from ..llm_client import call_gemini, load_coreprompts
-from ..base.exceptions import MetaExtractionError
-from ..config import print_log
+from core.models import RawChunk
+from core.llm_client import call_gemini, load_coreprompts
+from core.exceptions import MetaExtractionError
+from core.config import print_log
 
 # DNA 抽出失敗時に返すフォールバック値
 _FALLBACK_DNA: Dict[str, Any] = {

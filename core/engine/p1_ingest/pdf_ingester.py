@@ -13,7 +13,7 @@ from core.config import print_log
 from .ocr_manager import OCRManager
 from .physical_ingester import PhysicalIngester
 
-async def run_pdf_ingestion_v3_async(
+async def run_pdf_ingestion_async(
     pdf_path: str,
     api_key: Optional[str] = None,
     state: Any = None,
@@ -23,7 +23,7 @@ async def run_pdf_ingestion_v3_async(
     heavy_ocr: bool = False,
     max_pages: Optional[int] = None, # 追加
 ) -> List[Dict[str, Any]]:
-    """PDF から詳細な要素（スパンまたは VLM ブロック）を抽出する (V3 対応)。"""
+    """PDF から詳細な要素（スパンまたは VLM ブロック）を抽出する。"""
     if state: state.update_status(1, "PDF解析中 (Pass 1)...", 5)
     
     from .spread_splitter import SpreadSplitter
@@ -37,7 +37,7 @@ async def run_pdf_ingestion_v3_async(
     all_elements = []
     
     if pdf_mode == "full_vlm":
-        print_log(f"  [Ingester] V3: Full VLM Route Enabled (Sliding Window)")
+        print_log(f"  [Ingester] Full VLM Route Enabled (Sliding Window)")
         session_dir = state.session_dir if state else None
         
         # 1. 全ページの画像を先にリスト化（高速。見開き分割を含む）
@@ -64,7 +64,7 @@ async def run_pdf_ingestion_v3_async(
             nonlocal completed_count
             try:
                 # 3ccac82 の ocr_manager はテキスト（Markdown）を返す
-                vlm_res = await ocr.process_page_vlm_v3(curr_img, prev_img=prev_img, page_idx=lc_idx, session_dir=session_dir)
+                vlm_res = await ocr.process_page_vlm(curr_img, prev_img=prev_img, page_idx=lc_idx, session_dir=session_dir)
                 if not vlm_res:
                     raise ValueError("VLM returned empty output.")
             except Exception as e:
@@ -125,10 +125,10 @@ async def run_pdf_ingestion_v3_async(
     doc.close()
     return all_elements
 
-def run_pdf_ingestion_v3(pdf_path: str, **kwargs) -> List[Dict[str, Any]]:
-    """run_pdf_ingestion_v3_async の同期版。"""
+def run_pdf_ingestion(pdf_path: str, **kwargs) -> List[Dict[str, Any]]:
+    """run_pdf_ingestion_async の同期版。"""
     from core.llm_client import run_async
-    return run_async(run_pdf_ingestion_v3_async(pdf_path, **kwargs))
+    return run_async(run_pdf_ingestion_async(pdf_path, **kwargs))
 
 def diagnose_pdf_quality(pdf_path: str) -> bool:
     """

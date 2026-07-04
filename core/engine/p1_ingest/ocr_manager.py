@@ -154,7 +154,7 @@ class OCRManager:
         
         return False
 
-    async def process_page_vlm_v3(self, current_img: Image.Image, prev_img: Optional[Image.Image] = None, page_idx: int = 0, session_dir: Optional[Path] = None) -> str:
+    async def process_page_vlm(self, current_img: Image.Image, prev_img: Optional[Image.Image] = None, page_idx: int = 0, session_dir: Optional[Path] = None) -> str:
         """
         見開き結合（2-up）方式でページを OCR 処理する。
         """

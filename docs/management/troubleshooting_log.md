@@ -109,7 +109,7 @@ Phase 2 (Meta Generation) において、文献の第一ページからタイト
 
 ## 2026-07-04: 全体リファクタリング（フェーズD/E/F）の E2E ゴールデン検証で発見した Phase 2/3 結合の脆弱性
 
-`docs/superpowers/plans/2026-06-10-codebase-refactoring.md` フェーズ D/E/F 完了後の E2E ゴールデン検証（`python3 main.py data/input/paperplain/NST/NSTsample.txt --lite` / `data/input/paperpdf/AL/ALpdf.pdf --lite`）で発見。**未解決・調査未着手**（原因の一次切り分けまで完了、根本対策は別タスクとして `systematic-debugging` スキルで着手予定）。
+`docs/superpowers/plans/2026-06-10-codebase-refactoring.md` フェーズ D/E/F 完了後の E2E ゴールデン検証（`python3 main.py data/input/paperplain/NST/NSTsample.txt --lite` / `data/input/paperpdf/AL/ALpdf.pdf --lite`）で発見。**対応済み**（`systematic-debugging` スキルで根本原因を特定し修正。詳細は下記 I-8 参照）。
 
 ### I-8. テキストルートで末尾の見出し（Conclusion）が本文扱いに格下げされ、セクションごと出力から欠落する
 

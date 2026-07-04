@@ -13,6 +13,7 @@ from core.engine.p3_structure.heading_matcher import (
     is_excluded_heading,
     normalize_heading,
     match_heading,
+    merge_role_headings,
 )
 from core.engine.p3_structure.tree_builder import structure_nodes_by_headings
 from core.models import TreeNode
@@ -164,6 +165,47 @@ class TestStructureNodesByHeadings:
         child_texts = [c.text for c in intro_node.children]
         assert any("This is the intro" in t for t in child_texts)
         assert any("More intro content" in t for t in child_texts)
+
+    def test_i8_conclusion_absorbed_when_missing_from_resume_headings(self):
+        """I-8 の再現: レジュメの見出しリストに Conclusion が漏れていると、
+        Conclusion セクション全体が前セクション（Discussion）の本文として吸収される。"""
+        nodes = [
+            _node("1", "Discussion\nThis is the discussion.", 1.0),
+            _node("2", "Conclusion\nThis is the conclusion text.", 2.0),
+        ]
+        headings = ["Discussion"]  # Conclusion がレジュメから漏れた状態
+        tree, _ = structure_nodes_by_headings(nodes, headings, [])
+
+        titles = [n.text for n in tree]
+        assert "Conclusion" not in titles
+        discussion_node = next(n for n in tree if n.text == "Discussion")
+        child_texts = [c.text for c in discussion_node.children]
+        assert any("This is the conclusion text" in t for t in child_texts)
+
+    def test_i8_fix_merge_role_headings_restores_conclusion_section(self):
+        """I-8 の修正確認: Phase1 が role=h2 で検出済みの Conclusion を
+        merge_role_headings でレジュメ見出しリストに合成すると、独立セクションとして復元される。"""
+        nodes = [
+            _node("1", "Discussion\nThis is the discussion.", 1.0),
+            _node("2", "Conclusion\nThis is the conclusion text.", 2.0),
+        ]
+        resume_headings = ["Discussion"]  # Conclusion がレジュメから漏れた状態
+        phase1_role_headings = ["Conclusion"]  # Phase1 は role=h2 として正しく検出済み
+
+        headings = merge_role_headings(phase1_role_headings, resume_headings)
+        tree, _ = structure_nodes_by_headings(nodes, headings, [])
+
+        titles = [n.text for n in tree]
+        assert "Discussion" in titles
+        assert "Conclusion" in titles
+
+        conclusion_node = next(n for n in tree if n.text == "Conclusion")
+        child_texts = [c.text for c in conclusion_node.children]
+        assert any("This is the conclusion text" in t for t in child_texts)
+
+        discussion_node = next(n for n in tree if n.text == "Discussion")
+        discussion_child_texts = [c.text for c in discussion_node.children]
+        assert not any("conclusion" in t.lower() for t in discussion_child_texts)
 
     def test_unlabeled_pre_section_nst_pattern(self):
         """最初の見出しより前にチャンクがある場合、[Unlabeled Section] が先頭に生成されること（NST パターン）。"""

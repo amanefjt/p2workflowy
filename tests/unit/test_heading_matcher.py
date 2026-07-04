@@ -11,6 +11,7 @@ from core.engine.p3_structure.heading_matcher import (
     is_excluded_heading,
     match_heading,
     extract_headings_from_resume,
+    merge_role_headings,
 )
 
 
@@ -65,3 +66,30 @@ def test_extract_headings_from_resume_brackets_and_markdown():
     """Markdown 見出しから、英語ブラケット見出しと通常見出しを抽出する。"""
     resume = "# Introduction\n## [Background]\n本文テキスト"
     assert extract_headings_from_resume(resume) == ["Introduction", "Background"]
+
+
+def test_merge_role_headings_appends_missing_heading():
+    """レジュメに無い role 由来の見出し（例: Conclusion）は末尾に追加される（I-8 回帰防止）。"""
+    assert merge_role_headings(["Conclusion"], ["Introduction", "Discussion"]) == [
+        "Introduction", "Discussion", "Conclusion",
+    ]
+
+
+def test_merge_role_headings_dedupes_against_resume_variants():
+    """番号プレフィックス・大小文字が違っても正規化一致すれば重複追加しない。"""
+    assert merge_role_headings(["3. conclusion"], ["Introduction", "Conclusion"]) == [
+        "Introduction", "Conclusion",
+    ]
+
+
+def test_merge_role_headings_empty_role_list_returns_resume_unchanged():
+    """role 由来の見出しが空ならレジュメのリストがそのまま返る。"""
+    assert merge_role_headings([], ["Introduction", "Conclusion"]) == [
+        "Introduction", "Conclusion",
+    ]
+
+
+def test_merge_role_headings_preserves_resume_order_first():
+    """出力順序: レジュメ由来が先頭、role 由来のみの見出しは後方に追記される。"""
+    result = merge_role_headings(["Background", "Conclusion"], ["Introduction"])
+    assert result == ["Introduction", "Background", "Conclusion"]

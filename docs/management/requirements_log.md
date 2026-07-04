@@ -51,3 +51,13 @@ Anthropic 公式の long-context prompting tips・hallucination 低減ガイド�
 - pdf_ingester / pdf_splitter を engine/p1_ingest へ移動、v3 命名除去、core/base 解消、meta_analyzer を p2_meta へ
 - web フロント共通関数を common.js へ抽出
 - 根拠: CLAUDE.md 責務境界（ファサード=オーケストレーション専任）との乖離解消
+
+### 2026-07-04: Phase 3 見出し判定基準を「レジュメ ∪ Phase1 role」に拡張（I-8 対応）
+
+`docs/management/troubleshooting_log.md` I-8（テキストルートで末尾見出し Conclusion が本文に格下げされ欠落）の根本対策として、Phase 3 の見出し判定基準を変更した。
+
+- **変更前**: `core/phase3_structure.py:146` の `extract_headings_from_resume(resume_content)` のみが見出しリストの生成元。Phase 2 が生成する要約（レジュメ）の箇条書きに見出し名の言及が漏れると、Phase 1 が `role="h1"/"h2"` として正しく検出済みのチャンクであっても Phase 3 で本文（`role="p"`）扱いのまま復元されない設計だった（2026-05-07 コミット `e345ffe` で「レジュメの見出しリストを唯一の基準にする」に一本化されて以来の状態）。
+- **変更後**: `core/engine/p3_structure/heading_matcher.py` に純関数 `merge_role_headings(role_headings, resume_headings)` を追加し、`phase3_structure.py` でレジュメ由来のリストに Phase 1 の `role="h1"/"h2"` チャンクのテキストを合成してから `build_tree` に渡すようにした。`tree_builder.py` / `heading_matcher.py` 側の既存マッチングロジック（見出しリストが唯一の基準、というアーキテクチャ）自体は変更していない。
+- **判断根拠**: レジュメの悉皆性は要約 LLM の品質・モデル Tier（`--lite` 等）に依存し保証できない。Phase 1 の role 判定は決定論的な専用 LLM 呼び出し（`TextStructureExtractor.extract_headings()`）の結果であり、これを見出しリストに合流させることでレジュメの取りこぼしをモデル Tier に依存せず補完できる。Phase 2 の要約プロンプトに悉皆性の指示を追加する対策（候補 (b)）は、確率的な改善に留まるため今回は見送った。
+- **スコープ**: PDF ルート（Book Mode・Route C の Markdown 構造化）には影響しない。Paper Mode（テキスト入力＋非 full_vlm PDF）の見出し判定にのみ適用。
+- **検証**: `tests/unit/test_heading_matcher.py` / `test_phase3_structure.py` に単体・回帰テスト計6件を追加（197件全合格）。`data/input/paperplain/NST/NSTsample.txt --lite` の実行で `Conclusion` セクションの復元を実地確認済み。詳細は `troubleshooting_log.md` の「I-8 対応済み（2026-07-04）」を参照。

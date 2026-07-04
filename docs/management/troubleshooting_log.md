@@ -119,3 +119,16 @@ Phase 2 (Meta Generation) において、文献の第一ページからタイト
 - **リファクタリングとの関係**: この結合（Phase 3 の見出し認識が Phase 2 のレジュメ網羅性に完全依存する設計）は今回のフェーズ D/E/F（ファイル配置・命名・ドキュメント同期のみ）が触れたコードパスではなく、既存の設計。PDF ルートでは理想出力と完全一致したことから、フェーズ D/E/F 自体が挙動を変えたわけではなく、レジュメ生成 LLM 呼び出しの出力ゆらぎ（`--lite` モデル使用時に顕在化しやすい）によって既存の脆弱性が露呈したものと判断する。
 - **次のステップ（未着手）**: 別タスクとして `systematic-debugging` スキルで着手する。候補となる対策方向（未検証）: (a) Phase 3 の見出し照合に Phase 1 の `role: h1/h2` 判定をフォールバックとして併用する、(b) Phase 2 の要約プロンプトに「本文中の全見出しを漏れなく箇条書きに含めること」という網羅性の明示的な指示を追加する。いずれも挙動を変える変更のため、リファクタリング計画のスコープ外（同計画の「スコープ外」節に「プロンプト内容・モデルルーティングの変更」と明記）。
 
+### I-8 対応済み（2026-07-04）
+
+`systematic-debugging` スキルで着手し、対策 **(a) のみ**を実装した（(b) のプロンプト変更は今回見送り）。
+
+- **確定した根本原因**: Phase 3 の Paper Mode 経路（`build_tree` の else 分岐、`core/engine/p3_structure/tree_builder.py:274-286`）は、渡された全チャンクを問答無用で `role="p"` に作り直しており、Phase 1（`TextStructureExtractor`）が既に決定論的に検出済みの `role="h1"/"h2"` を完全に握りつぶす設計だった。この「role を見ない」設計は 2026-05-07 のコミット `e345ffe`（テキスト入力対応の追加）で導入されたもので、それ以前のバージョン（`07d7784` 時点の `tree_constructor.py`）は `node.role in ["h1","h2",...]` を最優先の判定基準にしていた。`CLAUDE.md` の設計原則「VLM の論理役割判断 > 物理証拠 > 幾何的ヒント」と整合しない状態が `e345ffe` 以降続いていたことになる。
+- **実装した修正 (a)**: Phase 3 の「見出しリストが唯一の基準」というアーキテクチャ自体（`tree_builder.py` / `heading_matcher.py` のマッチングロジック）は変更せず、その基準となる `headings` リストの生成元を拡張した。
+  - `core/engine/p3_structure/heading_matcher.py` に純関数 `merge_role_headings(role_headings, resume_headings)` を追加。正規化比較（既存の `normalize_heading`）で重複を除きつつ、レジュメ由来のリストに Phase 1 の role 由来見出しを合成する。
+  - `core/phase3_structure.py` の Paper Mode 分岐（146行目付近）で、`extract_headings_from_resume` の直後に `chunks` から `role in ("h1","h2")` のチャンクテキストを抽出し `merge_role_headings` で合成するよう変更。
+  - `tree_builder.py` の `role="p"` 強制変換や `match_heading` のロジックには一切手を入れていない（変更範囲を最小化）。
+- **テスト**: `tests/unit/test_heading_matcher.py` に `merge_role_headings` の単体テスト4件、`tests/unit/test_phase3_structure.py` に I-8 の実シナリオ（Conclusion がレジュメから漏れるケース）を再現する回帰テスト2件（修正前の欠落挙動の確認＋修正後の復元確認）を追加。`python3 -m pytest tests/unit/ -q` で 197 件全合格（既存191件 + 新規6件、回帰なし）。
+- **実地検証**: `python3 main.py data/input/paperplain/NST/NSTsample.txt --lite` を実行し、`phase3_structure.json` で `Conclusion` が独立した `role: "h2"` トップレベルノードとして復元されていることを確認。最終出力 `_p2.md` / `_p2.txt` にも英語（nested）・日本語（parallel）双方に `Conclusion` セクションが出力され、`NSTsample_idealp2.txt` の階層構造と一致した。
+- **(b) を見送った理由**: レジュメの悉皆性向上（プロンプト改善）は要約 LLM の品質・モデル Tier に依存し保証にならないため、決定論的に解決する (a) のみで根本原因は解消済みと判断。(b) は将来 lite モデルでの他の見落としパターンが観測された場合に改めて検討する。
+

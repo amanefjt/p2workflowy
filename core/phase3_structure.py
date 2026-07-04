@@ -13,7 +13,7 @@ from .config import (print_log,
     load_coreprompts,
 )
 from .models import TreeNode, load_chunks_from_json, save_tree_to_json
-from .engine.p3_structure.heading_matcher import extract_headings_from_resume
+from .engine.p3_structure.heading_matcher import extract_headings_from_resume, merge_role_headings
 from .engine.p3_structure.tree_builder import (
     build_tree,
     structure_nodes_by_markdown,
@@ -141,9 +141,16 @@ def run_phase3(
             meta = json.load(f)
         resume_content = meta.get("resume_content", "")
 
-        # アンカー検知によるスキップを廃止し、レジュメの見出しリストを唯一の基準にする
+        # アンカー検知によるスキップを廃止し、レジュメの見出しリストを基準にする。
+        # ただしレジュメは要約 LLM の悉皆性に依存し漏れうるため（--lite 等）、
+        # Phase1 が role=h1/h2 として決定論的に検出済みの見出しをフォールバックとして合成する。
         anchors = {"metadata_ids": []}
         headings = extract_headings_from_resume(resume_content)
+        phase1_role_headings = [
+            c.text.strip() for c in chunks
+            if getattr(c, "role", None) in ("h1", "h2") and c.text.strip()
+        ]
+        headings = merge_role_headings(phase1_role_headings, headings)
 
         # 【重要】Abstract を見出し候補の先頭に強制追加（論文モードの標準構成を保証）
         if "Abstract" not in headings and "abstract" not in [h.lower() for h in headings]:

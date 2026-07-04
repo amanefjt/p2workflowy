@@ -82,6 +82,26 @@ def match_heading(text: str, headings: List[str]) -> Optional[tuple[str, str]]:
     return None
 
 
+def merge_role_headings(role_headings: List[str], resume_headings: List[str]) -> List[str]:
+    """
+    レジュメ由来の見出しリストに、Phase1 が role=h1/h2 と判定済みの見出しを
+    フォールバックとして合成する。
+
+    レジュメの箇条書きは要約 LLM の出力に依存し悉皆性を保証できないため
+    （--lite 等の弱いモデルで末尾の見出しが漏れることがある）、Phase1 が
+    既に決定論的に検出済みの見出しを補完する。resume 側の表記を優先し、
+    正規化比較で重複するものは追加しない。
+    """
+    merged = list(resume_headings)
+    seen = {normalize_heading(h) for h in merged if h}
+    for h in role_headings:
+        norm = normalize_heading(h)
+        if norm and norm not in seen:
+            merged.append(h)
+            seen.add(norm)
+    return merged
+
+
 def extract_headings_from_resume(resume: str) -> List[str]:
     """レジュメからセクション見出し候補を抽出する。"""
     headings = []

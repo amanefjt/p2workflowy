@@ -9,9 +9,9 @@ from typing import Any, List, Dict, Optional
 import fitz
 from PIL import Image
 
-from .config import print_log
-from .engine.p1_ingest.ocr_manager import OCRManager
-from .engine.p1_ingest.physical_ingester import PhysicalIngester
+from core.config import print_log
+from .ocr_manager import OCRManager
+from .physical_ingester import PhysicalIngester
 
 async def run_pdf_ingestion_v3_async(
     pdf_path: str,
@@ -26,7 +26,7 @@ async def run_pdf_ingestion_v3_async(
     """PDF から詳細な要素（スパンまたは VLM ブロック）を抽出する (V3 対応)。"""
     if state: state.update_status(1, "PDF解析中 (Pass 1)...", 5)
     
-    from .engine.p1_ingest.spread_splitter import SpreadSplitter
+    from .spread_splitter import SpreadSplitter
     ocr = OCRManager(api_key=api_key, model=model)
     ingester = PhysicalIngester()
     doc = fitz.open(pdf_path)
@@ -127,7 +127,7 @@ async def run_pdf_ingestion_v3_async(
 
 def run_pdf_ingestion_v3(pdf_path: str, **kwargs) -> List[Dict[str, Any]]:
     """run_pdf_ingestion_v3_async の同期版。"""
-    from .llm_client import run_async
+    from core.llm_client import run_async
     return run_async(run_pdf_ingestion_v3_async(pdf_path, **kwargs))
 
 def diagnose_pdf_quality(pdf_path: str) -> bool:

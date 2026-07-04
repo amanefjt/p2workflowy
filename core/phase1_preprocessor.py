@@ -14,7 +14,7 @@ from .config import load_glossary_csv, print_log, PROJECT_ROOT
 from .text_utils import _SENTENCE_END_RE, _TRAILING_WORDS
 from .engine.p1_ingest.formatter import Formatter
 from .engine.p1_ingest.docling_ingester import docling_pdf_to_chunks, is_docling_viable
-from .pdf_ingester import run_pdf_ingestion_v3
+from .engine.p1_ingest.pdf_ingester import run_pdf_ingestion_v3
 
 
 # ============================================================

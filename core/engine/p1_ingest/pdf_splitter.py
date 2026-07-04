@@ -4,8 +4,8 @@ import re
 import hashlib
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from .llm_client import call_gemini, get_default_model
-from .config import print_log, PROJECT_ROOT
+from core.llm_client import call_gemini, get_default_model
+from core.config import print_log, PROJECT_ROOT
 
 class PDFSplitter:
     """PDF を目次(TOC)に基づいて章ごとに分割する。"""
@@ -297,13 +297,13 @@ class PDFSplitter:
         for i in range(min(15, len(doc))):
             text_samples += f"--- Page {i+1} ---\n" + doc[i].get_text() + "\n"
 
-        from .llm_client import load_coreprompts
+        from core.llm_client import load_coreprompts
         prompts = load_coreprompts()
         prompt = prompts.get("TOC_EXTRACTION_PROMPT", "").replace("{text}", text_samples)
 
         toc = []
         try:
-            from .llm_client import call_gemini
+            from core.llm_client import call_gemini
             response = call_gemini(
                 prompt,
                 api_key=self.api_key,
@@ -338,7 +338,7 @@ class PDFSplitter:
             print_log("  [Splitter] PIL が見つかりません。VLM フォールバックをスキップします。")
             return []
 
-        from .llm_client import call_gemini, get_default_model
+        from core.llm_client import call_gemini, get_default_model
 
         images = []
         for i in range(min(10, len(doc))):

@@ -71,7 +71,7 @@ def run_pipeline(
         if pdf_mode == "full_vlm":
             print_log("  [Pipeline] Route C (full_vlm) が明示的に指定されています。")
         else:
-            from .pdf_ingester import diagnose_pdf_quality
+            from .engine.p1_ingest.pdf_ingester import diagnose_pdf_quality
             is_clean = diagnose_pdf_quality(input_path)
             if not is_clean:
                 print_log("  [Warning] PDF破損検知。Route C (Full VLM) を適用。")

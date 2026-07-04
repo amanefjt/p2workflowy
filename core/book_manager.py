@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from .config import SessionState, print_log
-from .pdf_splitter import PDFSplitter
+from .engine.p1_ingest.pdf_splitter import PDFSplitter
 from .engine.p3_structure.state_integrator import StateIntegrator
 from .llm_client import call_gemini, get_default_model, load_coreprompts, GeminiTier, apply_tier_settings
 
@@ -97,7 +97,7 @@ class BookManager:
         print_log(f"\n=== Book Mode Orchestration: {self.book_title} ===")
         
         # 0. 診断とグローバルコンテキストの判定（スキップ機能）
-        from .pdf_ingester import diagnose_pdf_quality
+        from .engine.p1_ingest.pdf_ingester import diagnose_pdf_quality
         
         # ティア状態の初期化（get_default_model を呼ぶ前に必要）
         tier = pipeline_kwargs.get("tier", "paid")

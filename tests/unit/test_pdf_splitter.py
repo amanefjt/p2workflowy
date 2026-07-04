@@ -14,7 +14,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch, mock_open
 
-from core.pdf_splitter import PDFSplitter
+from core.engine.p1_ingest.pdf_splitter import PDFSplitter
 
 
 def make_splitter() -> PDFSplitter:

@@ -64,7 +64,7 @@ python3 -m pytest tests/unit/test_json_pipeline.py -v
 
 各フェーズの内部ロジックは `core/engine/` 配下のサブパッケージに閉じ込められている。フェーズのファサード（`core/phaseN_*.py`）はオーケストレーションのみ担当し、アルゴリズムはエンジン層に置く。
 
-サブパッケージは `p1_ingest/`（PDF/テキスト取り込み）, `p3_structure/`（構造ツリー・章境界構築）, `p4_translate/`（並列翻訳）, `p5_export/`（Markdown/Workflowy出力）の4つ。個別モジュールの最新一覧・役割は **`docs/ARCHITECTURE.md` §2.3** を参照(このファイルには詳細を重複して書かない — 移設のたびに陳腐化するため)。
+サブパッケージは `p1_ingest/`（PDF/テキスト取り込み）, `p2_meta/`（DNA 抽出ロジック）, `p3_structure/`（構造ツリー・章境界構築）, `p4_translate/`（並列翻訳）, `p5_export/`（Markdown/Workflowy出力）の5つ。個別モジュールの最新一覧・役割は **`docs/ARCHITECTURE.md` §2.3** を参照(このファイルには詳細を重複して書かない — 移設のたびに陳腐化するため)。
 
 ### Phase 1 の入力ルーティング
 
@@ -72,7 +72,7 @@ python3 -m pytest tests/unit/test_json_pipeline.py -v
 
 - **PDF ルート** (`_run_phase1_pdf`):
   - まず `is_docling_viable()` で Docling 適用可否を判定し、デジタル PDF なら Docling（`docling_ingester.py`）を優先使用。
-  - Docling が不適なスキャン PDF 等は `run_pdf_ingestion_v3()` → VLM または物理抽出にフォールバック。
+  - Docling が不適なスキャン PDF 等は `run_pdf_ingestion()` → VLM または物理抽出にフォールバック。
 - **テキストルート** (`_run_phase1_text`): 段落分割 → `TextStructureExtractor` (LLM) で見出し抽出 → role 付き RawChunk
 
 **テキスト分割の自動判定**: `\n\n` 分割後チャンク数が `\n` 分割後の 1/10 未満なら、Acrobat 形式（1行=1段落）と判定して `\n` 分割を使う。

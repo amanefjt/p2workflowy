@@ -62,7 +62,7 @@ class PhysicalIngester:
             if width <= 0: continue
 
             # 重複要素（ヘッダー等）の判定
-            # (LayoutEngineの情報を利用するが、ここでは簡易的な文字列チェックを行う)
+            # (数字を正規化した上で ignored_patterns と一致するかを見る簡易的な文字列チェック)
             block_text = " ".join("".join(s["text"] for s in l["spans"]) for l in b["lines"]).strip()
             if ignored_patterns:
                 norm = re.sub(r'\d+', '', block_text).strip()

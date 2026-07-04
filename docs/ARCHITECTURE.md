@@ -68,11 +68,11 @@ server.py (Web API) ┴──> core/pipeline.py :: run_pipeline()
 
 | サブパッケージ | 主なモジュール | 役割 |
 |---|---|---|
-| `p1_ingest/` | `docling_ingester.py`, `physical_ingester.py`, `ocr_manager.py`, `text_structure_extractor.py`, `spread_splitter.py`, `formatter.py` | PDF/テキストの取り込みと正規化 |
+| `p1_ingest/` | `docling_ingester.py`, `pdf_ingester.py`, `pdf_splitter.py`, `physical_ingester.py`, `ocr_manager.py`, `text_structure_extractor.py`, `spread_splitter.py`, `formatter.py` | PDF/テキストの取り込みと正規化 |
+| `p2_meta/` | `meta_analyzer.py` | Phase 2 の DNA 抽出ロジック |
 | `p3_structure/` | `tree_builder.py`, `heading_matcher.py`, `chapter_parser.py`, `chapter_extractor.py`, `toc_extractor.py`, `state_integrator.py` | 論理構造ツリー・章境界の構築 |
 | `p4_translate/` | `parallel_translator.py`, `prompt_builder.py`, `tree_reconstructor.py` | 並列翻訳とツリーへの再統合 |
 | `p5_export/` | `workflowy_engine.py`, `markdown_engine.py`, `text_book_integrator.py`, `formatter_utils.py` | 最終出力形式への変換 |
-| （直下） | `meta_analyzer.py` | Phase 2 の DNA 抽出ロジック |
 
 ### 2.4 データモデル (`core/models.py`)
 
@@ -96,7 +96,7 @@ server.py (Web API) ┴──> core/pipeline.py :: run_pipeline()
 
 - **状態管理と再開**: `state/<session_id>/` への JSON 永続化と `--resume` は、全フェーズ共通の仕組みです。新しいフェーズやデータモデルを追加する際も、この永続化・復元の互換性を壊さないことが `.cursor/rules/` のルールとして明文化されています。
 - **物理データ主権**: OCR・構造抽出では「VLM（視覚言語モデルによる論理的判断） > 物理証拠（フォントサイズ・太字・座標） > 幾何的ヒント」という優先順位が徹底されています（`.cursor/rules/20-vlm-determinism.mdc`）。物理情報は VLM の判断を裏付ける証拠として使うのであって、物理情報だけで構造を決定しないという設計思想です。
-- **入力ルーティングの自動判定**: PDF はまず `is_docling_viable()`（`p1_ingest/docling_ingester.py`）でデジタル PDF かどうかを判定し、可能なら Docling を優先します。不向きなスキャン PDF は VLM または物理抽出（`pdf_ingester.py::run_pdf_ingestion_v3`）にフォールバックします。テキスト入力は段落分割の後、`TextStructureExtractor`（LLM）が見出しを推定します。
+- **入力ルーティングの自動判定**: PDF はまず `is_docling_viable()`（`p1_ingest/docling_ingester.py`）でデジタル PDF かどうかを判定し、可能なら Docling を優先します。不向きなスキャン PDF は VLM または物理抽出（`pdf_ingester.py::run_pdf_ingestion`）にフォールバックします。テキスト入力は段落分割の後、`TextStructureExtractor`（LLM）が見出しを推定します。
 - **書籍モードの統合**: 章ごとに独立した `run_pipeline()` 呼び出しの結果を `StateIntegrator` が後段で統合します。`chN_` プレフィックス付与・見出し昇格・重複タイトル除去は、章間の一貫性を保つための必須ステップです。
 
 ---

@@ -1,6 +1,6 @@
 # p2workflowy アーキテクチャ概要
 
-このドキュメントは、p2workflowy を初めて触る人（人間・AI 問わず）が、コード全体を読まずに設計の全体像とその理由を掴めるようにするためのものです。README がユーザー向けの使い方ガイド、CLAUDE.md が Claude Code 向けの運用リファレンスであるのに対し、本書は「なぜこう設計されているか」を含めた説明（explanation）に徹します。実装の正本は常に `core/` 配下のコードと `.cursor/rules/` であり、本書はそこへ入るための地図です。
+このドキュメントは、p2workflowy を初めて触る人（人間・AI 問わず）が、コード全体を読まずに設計の全体像とその理由を掴めるようにするためのものです。README がユーザー向けの使い方ガイド、CLAUDE.md が Claude Code 向けの運用リファレンスであるのに対し、本書は「なぜこう設計されているか」を含めた説明（explanation）に徹します。実装の正本は常に `core/` 配下のコード（CLAUDE.md の設計原則で明記）であり、本書はそこへ入るための地図です。
 
 読了目安: 10〜15分。
 
@@ -46,7 +46,7 @@ server.py (Web API) ┴──> core/pipeline.py :: run_pipeline()
                               └─ Phase 5: core/phase5_export.py
 ```
 
-`main.py` / `server.py` はエントリーポイント専任、`run_pipeline` はフェーズのオーケストレーション専任です。個別のアルゴリズムはここには置かず、各フェーズのファサード（`core/phaseN_*.py`）経由で `core/engine/` 配下のエンジン層に閉じ込めます。この責務境界は `.cursor/rules/10-pipeline-and-hierarchy.mdc` で明文化されたルールで、リファクタリング時も崩さないことが求められています。
+`main.py` / `server.py` はエントリーポイント専任、`run_pipeline` はフェーズのオーケストレーション専任です。個別のアルゴリズムはここには置かず、各フェーズのファサード（`core/phaseN_*.py`）経由で `core/engine/` 配下のエンジン層に閉じ込めます。この責務境界は `core/` のコード設計に組み込まれた必須要件で、リファクタリング時も崩さないことが求められています。
 
 書籍モードは `core/book_manager.py::BookManager` が入口で、章ごとに（通常モードと同じ）`run_pipeline()` を呼び出し、処理後の統合を `core/engine/p3_structure/state_integrator.py::StateIntegrator` が担当します。
 
@@ -94,8 +94,8 @@ server.py (Web API) ┴──> core/pipeline.py :: run_pipeline()
 
 個別のフェーズに属さない、システム全体を貫く仕組みです。
 
-- **状態管理と再開**: `state/<session_id>/` への JSON 永続化と `--resume` は、全フェーズ共通の仕組みです。新しいフェーズやデータモデルを追加する際も、この永続化・復元の互換性を壊さないことが `.cursor/rules/` のルールとして明文化されています。
-- **物理データ主権**: OCR・構造抽出では「VLM（視覚言語モデルによる論理的判断） > 物理証拠（フォントサイズ・太字・座標） > 幾何的ヒント」という優先順位が徹底されています（`.cursor/rules/20-vlm-determinism.mdc`）。物理情報は VLM の判断を裏付ける証拠として使うのであって、物理情報だけで構造を決定しないという設計思想です。
+- **状態管理と再開**: `state/<session_id>/` への JSON 永続化と `--resume` は、全フェーズ共通の仕組みです。新しいフェーズやデータモデルを追加する際も、この永続化・復元の互換性を壊さないことが、パイプライン設計の必須要件として各フェーズのコードに組み込まれています。
+- **物理データ主権**: OCR・構造抽出では「VLM（視覚言語モデルによる論理的判断） > 物理証拠（フォントサイズ・太字・座標） > 幾何的ヒント」という優先順位が徹底されています（CLAUDE.md の設計原則を参照）。物理情報は VLM の判断を裏付ける証拠として使うのであって、物理情報だけで構造を決定しないという設計思想です。
 - **入力ルーティングの自動判定**: PDF はまず `is_docling_viable()`（`p1_ingest/docling_ingester.py`）でデジタル PDF かどうかを判定し、可能なら Docling を優先します。不向きなスキャン PDF は VLM または物理抽出（`pdf_ingester.py::run_pdf_ingestion`）にフォールバックします。テキスト入力は段落分割の後、`TextStructureExtractor`（LLM）が見出しを推定します。
 - **書籍モードの統合**: 章ごとに独立した `run_pipeline()` 呼び出しの結果を `StateIntegrator` が後段で統合します。`chN_` プレフィックス付与・見出し昇格・重複タイトル除去は、章間の一貫性を保つための必須ステップです。
 
@@ -106,7 +106,7 @@ server.py (Web API) ┴──> core/pipeline.py :: run_pipeline()
 コードだけを読んでも意図が伝わりにくい判断を挙げます。
 
 - **英日の非対称階層**: 英語は原文の論理構造を保つためネスト、日本語は Workflowy 上で読み流せるよう並列展開。これは Workflowy というツールの UX（親子を畳んで俯瞰する／並列展開で流し読みする）を前提にした選択で、単なる見た目の違いではありません。
-- **References 除外・Appendix 保持**: 出力の実用性を優先し、参考文献リストは除外、付録は保持するという明示的な不変条件があります（`.cursor/rules/30-export-standards.mdc`）。
+- **References 除外・Appendix 保持**: 出力の実用性を優先し、参考文献リストは除外、付録は保持するという明示的な不変条件があります（CLAUDE.md の設計原則を参照）。
 - **VLM 主権**: OCR やレイアウト解析で物理証拠（フォント・座標）とテキストの論理的判断が食い違う場合、VLM の判断を優先します。学術 PDF はレイアウトが崩れがちで、物理情報だけに頼ると誤判定しやすいという実運用上の教訓に基づいています。
 - **[Unlabeled Section] は仕様**: 論文の Abstract 直後に見出しのない Introduction 本文が続くパターン（NST 論文などで顕著）は `[Unlabeled Section]` として独立させます。これはバグではなく、見出しなし本文の意味的まとまりを壊さないための正しい挙動です。問題になるのは、本来ある見出しが検出漏れで前セクションに吸収されるケースのみです。
 - **テキスト分割の自動判定**: `\n\n` 分割後のチャンク数が `\n` 分割後の 1/10 未満なら「Acrobat 形式（1行=1段落）」と判定し `\n` 分割に切り替えます。コピー元アプリによって改行の意味が変わることへの実務的な対処です。
@@ -123,7 +123,7 @@ server.py (Web API) ┴──> core/pipeline.py :: run_pipeline()
 ## 6. もっと詳しく知るには
 
 - 個々のフェーズ・モジュールの詳細な責務: 各 `core/phaseN_*.py` のモジュール docstring
-- 設計原則の正本（実装変更時に従うべきルール）: `.cursor/rules/*.mdc`
+- 設計原則の正本（実装変更時に従うべきルール）: CLAUDE.md の設計原則セクション、および各フェーズの `core/` コード実装
 - モデル選定・並列数などの運用パラメータの根拠: `docs/model_optimization.md`
 - 仕様変更・不具合の履歴: `docs/management/requirements_log.md`, `docs/management/troubleshooting_log.md`
 - Claude Code 向けの操作リファレンス（コマンド・環境変数など）: `CLAUDE.md`

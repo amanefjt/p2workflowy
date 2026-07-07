@@ -61,3 +61,21 @@ Anthropic 公式の long-context prompting tips・hallucination 低減ガイド�
 - **判断根拠**: レジュメの悉皆性は要約 LLM の品質・モデル Tier（`--lite` 等）に依存し保証できない。Phase 1 の role 判定は決定論的な専用 LLM 呼び出し（`TextStructureExtractor.extract_headings()`）の結果であり、これを見出しリストに合流させることでレジュメの取りこぼしをモデル Tier に依存せず補完できる。Phase 2 の要約プロンプトに悉皆性の指示を追加する対策（候補 (b)）は、確率的な改善に留まるため今回は見送った。
 - **スコープ**: PDF ルート（Book Mode・Route C の Markdown 構造化）には影響しない。Paper Mode（テキスト入力＋非 full_vlm PDF）の見出し判定にのみ適用。
 - **検証**: `tests/unit/test_heading_matcher.py` / `test_phase3_structure.py` に単体・回帰テスト計6件を追加（197件全合格）。`data/input/paperplain/NST/NSTsample.txt --lite` の実行で `Conclusion` セクションの復元を実地確認済み。詳細は `troubleshooting_log.md` の「I-8 対応済み（2026-07-04）」を参照。
+
+### 2026-07-07: 書籍モードのレジュメ／プロンプト整理の方針確定（Spec A 起案・実装未着手）
+
+「`coreprompts.json` の Summary 系プロンプトの用途が不明」という藤田氏の問いを起点に、書籍モードの情報受け渡しをコードで全面監査した。判明した意図と実装の乖離、および対策方針を確定した。詳細な調査結果は `troubleshooting_log.md` の I-9〜I-14、対策設計は `docs/superpowers/specs/2026-07-07-book-mode-resume-prompts-design.md`（Spec A）を参照。
+
+- **確定した課題認識（要旨）**: (1) Phase 0 の書籍全体レジュメ `global_resume` が章処理に渡らず断絶している（`resume_content=None`）。(2) 書籍 Phase 2 が全書籍用 `GLOBAL_SUMMARY_PROMPT` を 1 章に流用している。(3) 書籍モードでは章レジュメは構造化に使われず（構造は VLM Markdown が担う）、Phase 4 節レジュメと冗長に二重生成されている。(4) `state_integrator` に死コード（`BookExporter` 未定義で呼べば `NameError`）。(5) `SECTION_SUMMARY_PROMPT` の粒度（節ごと）と文言（章想定）・スロット名（`book_meta_reference` に章レジュメが入る）が乖離。
+- **ユーザーの意図（正典）**: 「書籍全体のレジュメを作り、各章はそれを背景に踏まえつつ**あたかも一つの論文であるかのように**レジュメ化し、書籍レジュメ＋章レジュメの両者を踏まえて各章を翻訳する」。
+- **Spec A の方針**: 書籍章レジュメを **Phase 2 に 1 本**へ統合（章全文＋`book_resume` 背景、新設 `CHAPTER_SUMMARY_PROMPT`）。`GLOBAL_SUMMARY_PROMPT` は全書籍専用にリネーム（`BOOK_SUMMARY_PROMPT`）。冗長な `generate_section_resume` / `SECTION_SUMMARY_PROMPT` は廃止。`resume_content=None` の断絶を復活。`state_integrator` の死コードと `llm_client.py:540` の 300 字フォールバック乖離を整理。プロンプトは**増えず、むしろ減る**。Phase 0→2→4→統合の順に段階実装。
+- **プロンプト整理の位置づけ**: 上流（VLM ルート分岐）と下流（プロンプト整理）は**疎結合**であることを検証済み（書籍モードの構造化は routing に関わらず VLM Markdown/ChapterParser が担い、レジュメは Phase 1 チャンクのテキストを消費するだけ）。したがってどちらを先にやっても手戻りは発生しない。リスク・検証容易性・複雑性削減の観点からプロンプト整理（Spec A）を先行させる判断。
+
+### 2026-07-07: 【候補改善・保留】書籍モードの VLM 適応ルーティング（Spec B, 未起案）
+
+書籍章処理が常に `pdf_mode="full_vlm"` に固定されている（`book_manager.py:214`）点について、藤田氏の対象が**デジタル書籍・スキャン書籍を同程度**扱うことを踏まえ、適応ルーティングの導入を候補改善として登録する。**本日は実装も詳細スペック化も行わない。**
+
+- **現状の意図性**: full_vlm 固定は `CLAUDE.md` 設計原則「複雑なレイアウトでは Route C を優先し中途半端な混在モードは避ける」と整合する意図的判断だが、その根拠は当時のテスト corpus が**見開きスキャン書籍中心**（`SpreadSplitter`・`corfrapdf` 等）だった経緯に引きずられた可能性が高い。
+- **改善余地**: 論文モードは既に `is_docling_viable()` で適応ルーティング（綺麗なデジタル→Docling、スキャン→VLM）している。書籍も同様にすれば、デジタル書籍で 10〜50 倍規模のコスト差を削減できる余地がある。
+- **着手条件**: 構造抽出品質に直結する上流変更のため、**コスト実測＋構造品質の A/B**（デジタル/スキャン両サンプル）を必須とする（深読モードで定めた「実装前に A/B 必須」方針と同様）。着手時に Spec B として起案する。
+- **Spec A との関係**: 疎結合。Spec A 完了後のクリーンな下流の上で着手するのが望ましい。

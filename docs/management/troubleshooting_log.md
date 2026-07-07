@@ -132,3 +132,43 @@ Phase 2 (Meta Generation) において、文献の第一ページからタイト
 - **実地検証**: `python3 main.py data/input/paperplain/NST/NSTsample.txt --lite` を実行し、`phase3_structure.json` で `Conclusion` が独立した `role: "h2"` トップレベルノードとして復元されていることを確認。最終出力 `_p2.md` / `_p2.txt` にも英語（nested）・日本語（parallel）双方に `Conclusion` セクションが出力され、`NSTsample_idealp2.txt` の階層構造と一致した。
 - **(b) を見送った理由**: レジュメの悉皆性向上（プロンプト改善）は要約 LLM の品質・モデル Tier に依存し保証にならないため、決定論的に解決する (a) のみで根本原因は解消済みと判断。(b) は将来 lite モデルでの他の見落としパターンが観測された場合に改めて検討する。
 
+## 2026-07-07: 書籍モードのレジュメ／プロンプト受け渡しの実データフロー監査（未対応・Spec A 起案）
+
+「`coreprompts.json` の Summary 系プロンプトの用途が不明」という問いを起点に、書籍モードの情報受け渡し（Phase 0→2→3→4→統合）をコードで端から端まで追跡した結果、**意図と実装の乖離が複数**見つかった。いずれも本日時点では**未修正**。対策方針は `docs/superpowers/specs/2026-07-07-book-mode-resume-prompts-design.md`（Spec A）に集約し、段階的に実装する。実装着手前の調査ベースラインとしてここに記録する。
+
+### I-9. Phase 0 の書籍全体レジュメ（global_resume）が章処理に渡っていない
+
+- **事象**: `book_manager._generate_global_context()`（Phase 0）が全書籍テキストから `GLOBAL_SUMMARY_PROMPT` で生成する `global_resume` は、各章の `run_pipeline()` に渡されていない。`core/book_manager.py:211` で `resume_content=None` が明示され、「渡すと章要約が全体要約で上書きされるため None にする」というコメント付き。
+- **影響**: 高コストな全書籍スキャンの成果（book_resume）が最終エクスポートの巻頭表示（`integrate_to_book` の `global_resume`）にしか使われず、**章レジュメ生成・翻訳の文脈に一切反映されていない**。ユーザーの意図（「書籍全体レジュメを踏まえて各章を論文のようにレジュメ化し、両者で翻訳する」）と食い違う。
+- **根本**: 旧「上書き」バグはプロンプト側で防ぐべき問題（後述 I-10）を、呼び出し側で `None` にして回避したもの。Spec A では専用プロンプトで book_resume を `<book_context>`（背景）として注入し、断絶を復活させる。
+
+### I-10. 書籍モード Phase 2 が「書籍全体用」プロンプトを 1 章に流用している
+
+- **事象**: `core/phase2_meta.py:64-69`、書籍モード分岐で `GLOBAL_SUMMARY_PROMPT` を使用。このプロンプト本文は「これから【書籍全体】の本文を提示します」「8000文字程度」「各章の論理展開」と**全書籍前提**で書かれているのに、実際には 1 章分のテキストしか渡らない（`_sample_text` の head+tail サンプル）。
+- **影響**: LLM に「これは書籍全体だ」という誤った前提で 1 章だけを見せているため、「各章の構成」「章間のつながり」といった項目が実態と噛み合わない出力を誘発しうる。
+- **対策方針**: 章専用の `CHAPTER_SUMMARY_PROMPT`（新設）に差し替え、`GLOBAL_SUMMARY_PROMPT` は本来の全書籍用途（Phase 0）だけに戻す（Spec A）。
+
+### I-11. 書籍モードでは章レジュメは構造化に使われない（Paper Mode 専用機能だった）
+
+- **事象**: 「Phase 2 の章レジュメは Phase 3 の見出し抽出に必要」という理解は**書籍モードでは誤り**。書籍章処理は常に `pdf_mode="full_vlm"`（`book_manager.py:214` でハードコード）であり、`run_phase3` は `pdf_mode=="full_vlm"` 分岐（`phase3_structure.py:50`）で `structure_nodes_by_markdown()`（VLM の Markdown 見出しから構造化）を通る。Markdown 見出しが無い場合も `is_book and input_path` 分岐（同 :77）で ChapterParser/TOC を使う。`extract_headings_from_resume`（同 :148）を含む resume ベースの見出し抽出は `else`（Paper Mode）分岐でしか到達しない。
+- **含意**: 書籍モードの章レジュメ（`resume_content`）は構造化に一切使われず、消費先は **Phase 4 の翻訳コンテキスト参照**と **Phase 5 の章「## レジュメ」描画**のみ。したがって書籍モードでは章レジュメと Phase 4 節レジュメが**冗長な二重生成**になっている。I-8 で修正した「レジュメ ∪ Phase1 role」の見出し判定は Paper Mode の話であり、書籍モードとは別系統である点に注意。
+
+### I-12. SECTION_SUMMARY_PROMPT の粒度・スロット名が実装と乖離
+
+- **事象**: `generate_section_resume`（`llm_client.py:519`）は Phase 4 で `sections_dict.items()` を回すループ内から**節ごとに**呼ばれる（`phase4_translate.py:106-111`）。一方 `SECTION_SUMMARY_PROMPT` 本文は「【セクション原文（章）】」「この章/セクションにおいて」と**章まるごと**を想定した書き方。さらにテンプレートの `<book_meta_reference>` スロットには書籍全体レジュメではなく **Phase 2 の章レジュメ**（`p2_data["resume_content"]`）が渡っている（`phase4_translate.py:85-89`）。
+- **対策方針**: 翻訳用レジュメを**章まるごと 1 回**の生成に変更（節間接続を正確に書けるようにする）。Spec A では `generate_section_resume` を廃止し、章レジュメ（Phase 2, book_resume 背景つき）を翻訳コンテキストに直接使う方向で整理。
+
+### I-13. state_integrator に死コード（呼べば即エラー）
+
+- **事象**: `core/engine/p3_structure/state_integrator.py` の `add_chapter` / `_generate_consolidated_resume` / `integrate` / `run_integration_test` は本番でもテストでも未使用。`integrate()` が参照する `BookExporter` はどこにも定義・import されておらず、呼べば `NameError`。本番の統合は `integrate_to_book`（各章の出力ファイルを積み上げ＋巻頭に Phase 0 の global_resume を付与）のみ。
+- **含意**: 「Phase 3 統合が `GLOBAL_SUMMARY_PROMPT` で章レジュメを集約する」という理解は誤り。`_generate_consolidated_resume`（GLOBAL_SUMMARY_PROMPT の 3 つ目の呼び出し）は死コード。Spec A で削除対象。
+
+### I-14. Phase 5 が章レジュメを出力に描画している（設計変更時の影響先）
+
+- **事象**: `core/phase5_export.py:113-141` は `resume_content`（Phase 2 の章レジュメ）を各章の「## レジュメ」セクションとして最終出力に描画する。
+- **含意**: 「書籍モードで Phase 2 章レジュメを廃止する」等の設計変更を行う場合、Phase 5 の章レジュメ表示が消えないよう、レジュメの供給元を付け替える配線が必要。Spec A の設計判断に織り込む。
+
+### （関連・スコープ外）書籍章処理が pdf_mode=full_vlm 固定
+
+- `--book` に渡した `pdf_mode`（既定 hybrid）は `book_manager.py:170,173-174` で `pipeline_kwargs` から pop され、`:214` で `pdf_mode="full_vlm"` にハードコードされるため、章処理では常に full_vlm になる。これは `CLAUDE.md` の設計原則「複雑なレイアウトでは Route C（全ページ VLM）を優先し中途半端な混在モードは避ける」および `requirements_log.md` の「Book Mode・Route C の Markdown 構造化」記述と整合する**意図的な設計**。ただしデジタル書籍にはコスト過剰であり、適応ルーティング（`is_docling_viable()` 併用）の余地がある。これは上流（VLM ルート分岐）の別課題として `requirements_log.md` に候補改善登録し、コスト実測＋構造品質 A/B を伴う独立スペック（Spec B, 未起案）で扱う。Spec A（プロンプト整理）とは疎結合であり、どちらを先にやっても手戻りは発生しない。
+

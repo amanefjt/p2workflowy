@@ -187,6 +187,7 @@ def run_pipeline(
                 tier=tier,
                 resume_only=resume_only,
                 is_book=is_book,
+                book_resume=(resume_content or "") if is_book else "",
                 pdf_mode=pdf_mode,
                 max_concurrent_sections=max_concurrent_sections,
             )

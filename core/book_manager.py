@@ -201,14 +201,13 @@ class BookManager:
                 is_simple = "Coda" in ch_title or ch_role in ["preface", "appendix"]
 
                 # パイプライン実行: 各章を独立した「論文」として完結させ、物理ファイルを出力させる
-                # 注意: resume_content に self.global_resume を渡すと章の要約が全体要約で上書きされるため None にする
                 processed_paths = run_pipeline(
                     input_path=ch["path"],
                     api_key=self.api_key,
                     session_id=ch_session_id,
                     is_book=True,
                     title=ch_title,
-                    resume_content=None,
+                    resume_content=self.global_resume or None,
                     glossary_path=glossary_path_str,
                     model=model_to_use,
                     pdf_mode="full_vlm",

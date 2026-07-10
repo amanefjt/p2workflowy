@@ -155,6 +155,50 @@ class TestChapterFailure:
 
 
 # ============================================================
+# 書籍全体レジュメの章パイプラインへの受け渡し
+# ============================================================
+
+class TestGlobalResumeHandoff:
+    def test_run_passes_global_resume_to_chapter_pipeline(self, tmp_path):
+        """Phase 0 で生成した global_resume が章の run_pipeline へ resume_content として渡る（I-9 断絶の解消）。"""
+        manager = make_manager(tmp_path)
+        manager.book_title = "resumebook"
+        manager.fingerprint = "resumefp"
+        manager.session_dir = tmp_path / "book_sessions" / "resumebook_resumefp"
+        manager.session_dir.mkdir(parents=True, exist_ok=True)
+
+        # Phase 0 キャッシュを用意して _generate_global_context をスキップさせる
+        (manager.session_dir / "global_context.json").write_text(
+            json.dumps({"resume": "GLOBAL_RESUME_TEXT", "glossary": [], "book_title": manager.book_title}),
+            encoding="utf-8",
+        )
+
+        ch_pdf = tmp_path / "ch1.pdf"
+        ch_pdf.write_bytes(b"%PDF-1.4 dummy")
+
+        splitter = MagicMock()
+        splitter.split.return_value = [{"title": "Ch1", "path": str(ch_pdf), "role": "chapter"}]
+
+        captured = {}
+
+        def fake_run_pipeline(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch("core.book_manager.PDFSplitter", return_value=splitter), \
+             patch("core.book_manager.apply_tier_settings"), \
+             patch("core.engine.p1_ingest.pdf_ingester.diagnose_pdf_quality", return_value=True), \
+             patch("core.engine.p1_ingest.spread_splitter.is_spread_pdf", return_value=False), \
+             patch("core.pipeline.run_pipeline", side_effect=fake_run_pipeline):
+            try:
+                manager.run(max_chapters=1)
+            except Exception:
+                pass  # 統合フェーズ以降の失敗は本テストの関心外
+
+        assert captured.get("resume_content") == "GLOBAL_RESUME_TEXT"
+
+
+# ============================================================
 # book_sessions クリーンアップ
 # ============================================================
 

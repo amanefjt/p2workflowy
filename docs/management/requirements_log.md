@@ -89,3 +89,15 @@ Anthropic 公式の long-context prompting tips・hallucination 低減ガイド�
 - **モデル戦略**: `gemini-3.5-flash` の GA 値上げ（$1.50/$9.00、Lite 比 6 倍。`model_optimization.md` §5）を受け、「レジュメ生成のみ 3.5-flash・他は lite」のハイブリッド構成を A/B の本命とする。切替は Stage 1 実装後の比較読みで判定（文脈とモデルの効果を切り分けるため順序厳守）。
 - **Stage 2/3**: 統合用語レイヤー（glossary＋local_definitions の一本化、G4-2 再定義）と argument_tree（G4-1、スキーマ実験先行）を各 Stage の比較読み後に別スペックで起案。
 - **Spec B の起案と再フレーム**: 前提調査で I-15（VLM OCR が二重定義バグで機能停止）・I-16（full_vlm 指定でも Docling 優先、書籍の実働経路は Docling＋TOC フォールバック）が判明し、「full_vlm 固定の適応ルーティング化」から「①VLM 経路修理 ②デジタル書籍の Docling 正式ルート化（role 見出し配線）③ルーティング明示化（書籍単位判定）」に再構成して起案。正本: `docs/superpowers/specs/2026-07-10-book-mode-vlm-routing-design.md`。実装は Stage 1 の後（比較読みベースライン保護）。
+
+### 2026-07-11: 翻訳コンテキスト Stage 1 実装完了（レジュメ配線・ウィンドウ連続化・死コード整理）
+
+`docs/superpowers/plans/2026-07-10-translation-context-stage1.md` を `subagent-driven-development` で実装完了（feature ブランチ `feature/translation-context-stage1`）。正本設計は `docs/superpowers/specs/2026-07-10-translation-context-architecture-design.md` の Stage 1。「レジュメを踏まえて翻訳する」を論文・書籍両モードで初めて実体化した。
+
+- **変更点（要旨）**:
+  - **プロンプト整理**: `GLOBAL_SUMMARY_PROMPT` を `BOOK_SUMMARY_PROMPT`（Phase 0 全書籍専用）へリネーム。章専用 `CHAPTER_SUMMARY_PROMPT` を新設（`{expertise}`/`{book_context}`/`{context_guide}`/`{text}`、`book_resume` を `<book_context>` 背景として注入）。冗長な `SECTION_SUMMARY_PROMPT` / `SUMMARY_PROMPT` を削除し、Summary 系を `BOOK`→`CHAPTER`→`SUMMARY_PROMPT_ronbun` に整理。
+  - **配線**: Phase 0 の `global_resume` を各章 `run_pipeline()` へ復活（I-9）。両モードで Phase 2 レジュメを Phase 4 翻訳コンテキストへ配線する `build_translation_context(book_resume, document_resume, is_book)` を新設（論文=章/論文レジュメそのもの、書籍=書籍全体＋章レジュメを `【書籍全体の要約】`→`【この章の要約】` の順で結合）。論文モードの `{resume_content}` 配線漏れも同時解消。
+  - **廃止**: Phase 4 節レジュメ生成 `generate_section_resume`（I-12）、`translate_batch` の `context_guide` 引数、`state_integrator` 死コード（I-13）を削除。削除は挙動変更コミットと分離。
+  - **ウィンドウ連続化**: 直前訳ウィンドウを断片 3 件×200 字トリムから連続 ~2,000 字（段落丸ごと、`WINDOW_MAX_CHARS=2000`、末尾から遡り最低 1 段落保証）へ変更。根拠は `docs/superpowers/specs/2026-07-10-translation-context-research-notes.md`。
+- **検証**: 単体テスト 197→211 件全合格（回帰なし、新規 14 件）。論文モードのゴールデン検証で構造回帰なし＋`<resume_content>` への実レジュメ注入を確認（`troubleshooting_log.md` の「I-9〜I-14 対応済み」参照）。
+- **次ステップ（ユーザー実施・本 Plan スコープ外）**: (1) 比較読み（`docs/translation_review_checklist.md`、NST で Stage 1 前後比較）、(2) モデル A/B（現行 lite vs 「レジュメ生成のみ gemini-3.5-flash」ハイブリッド）。この結果を持って Stage 2（統合用語レイヤー）/Stage 3（argument_tree）の Spec/Plan 起案へ。

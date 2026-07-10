@@ -168,6 +168,21 @@ Phase 2 (Meta Generation) において、文献の第一ページからタイト
 - **事象**: `core/phase5_export.py:113-141` は `resume_content`（Phase 2 の章レジュメ）を各章の「## レジュメ」セクションとして最終出力に描画する。
 - **含意**: 「書籍モードで Phase 2 章レジュメを廃止する」等の設計変更を行う場合、Phase 5 の章レジュメ表示が消えないよう、レジュメの供給元を付け替える配線が必要。Spec A の設計判断に織り込む。
 
+### I-9〜I-14 対応済み（2026-07-11, 翻訳コンテキスト Stage 1 実装）
+
+`docs/superpowers/plans/2026-07-10-translation-context-stage1.md` を `subagent-driven-development` で実装し、I-9〜I-14 を一括で解消した（正本設計は `docs/superpowers/specs/2026-07-10-translation-context-architecture-design.md` の Stage 1）。単体テストは着手前 197 件 → 211 件全合格（回帰なし）。各項目の対応:
+
+- **I-9 対応済み**（Task 2, commit `b1016e2`）: `book_manager.py` の章ループを `resume_content=self.global_resume or None` に戻し、旧「上書き回避で None」コメントを削除。Phase 0 の書籍全体レジュメが各章 `run_pipeline()`→Phase 2→Phase 4 に流れるようになった。
+- **I-10 対応済み**（Task 1+3, commits `090b1ce`/`05ba97e`）: 章専用 `CHAPTER_SUMMARY_PROMPT` を新設し、書籍 Phase 2 分岐をこれに差し替え。`book_resume` は `<book_context>`（背景、無ければ「なし」）として注入。旧 `GLOBAL_SUMMARY_PROMPT` は本来の全書籍用途向けに `BOOK_SUMMARY_PROMPT` へリネーム（Phase 0 専用）。
+- **I-11 整理済み**（Task 4, commit `0e3204a`）: 「書籍モードでは章レジュメは構造化に使われない」という事実自体は不変（構造化は VLM Markdown/ChapterParser が担う）。冗長だった Phase 4 節レジュメ（`generate_section_resume`）との二重生成を解消し、Phase 2 章レジュメを直接 Phase 4 翻訳コンテキストへ供給する一本化に変更。
+- **I-12 対応済み**（Task 4+5, commits `0e3204a`/`835af29`）: 粒度・文言・スロットが乖離していた `generate_section_resume` と `SECTION_SUMMARY_PROMPT` を廃止。翻訳用レジュメは章まるごと 1 回生成（Phase 2）に集約。
+- **I-13 対応済み**（Task 5, commit `835af29`）: `state_integrator.py` の死コード（`add_chapter` / `_generate_consolidated_resume` / `integrate` / `run_integration_test` / `_apply_prefix_to_ids` と専用フィールド）を削除。本番経路 `integrate_to_book` は不変。
+- **I-14 反映済み**（Task 4 で配線維持）: Phase 5 の章「## レジュメ」描画（`phase5_export.py`）は `resume_content`（Phase 2 章レジュメ）供給を維持したまま存続。供給元の付け替えは不要だった（章レジュメは Phase 2 で今も生成され、Phase 4 と Phase 5 の両方へ流れる）。※書籍モードの Phase 5 描画の実 E2E 確認は本セッションでは未実施（書籍スモークはユーザー実施予定）。
+
+**あわせて実施**: 翻訳の直前訳ウィンドウを断片 3 件×200 字トリムから連続 ~2,000 字（段落丸ごと・末尾から遡り WINDOW_MAX_CHARS 上限）へ変更（Task 6, commit `2a175bd`）。論文モードの `{resume_content}` 配線漏れも `build_translation_context` の新設で解消（両モード統一）。
+
+**E2E 検証**: 論文モードのゴールデン検証を実施（`data/input/paperplain/NST/NSTsample.txt --lite`）。`phase3_structure.json` で期待 14 見出し（`Conclusion` 独立 h2 含む、I-8 修正維持）を確認、Phase 4 デバッグプロンプトの `<resume_content>` に 4,227 字の論文レジュメが実注入されていることを確認（Stage 1 配線が実走行で機能）。書籍スモークとモデル A/B・比較読みはユーザー実施予定（Stage 1 のスコープ外）。
+
 ### （関連・スコープ外）書籍章処理が pdf_mode=full_vlm 固定
 
 - `--book` に渡した `pdf_mode`（既定 hybrid）は `book_manager.py:170,173-174` で `pipeline_kwargs` から pop され、`:214` で `pdf_mode="full_vlm"` にハードコードされるため、章処理では常に full_vlm になる。これは `CLAUDE.md` の設計原則「複雑なレイアウトでは Route C（全ページ VLM）を優先し中途半端な混在モードは避ける」および `requirements_log.md` の「Book Mode・Route C の Markdown 構造化」記述と整合する**意図的な設計**。ただしデジタル書籍にはコスト過剰であり、適応ルーティング（`is_docling_viable()` 併用）の余地がある。これは上流（VLM ルート分岐）の別課題として `requirements_log.md` に候補改善登録し、コスト実測＋構造品質 A/B を伴う独立スペック（Spec B, 未起案）で扱う。Spec A（プロンプト整理）とは疎結合であり、どちらを先にやっても手戻りは発生しない。

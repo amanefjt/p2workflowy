@@ -4,6 +4,7 @@ google-genai SDK を使用したリトライ付き LLM 呼び出しラッパー�
 """
 
 import json
+import os
 import time
 import asyncio
 import enum
@@ -38,7 +39,13 @@ def get_default_model(purpose: str = "default") -> str:
         purpose: "default" (CLI/高品質), "free" (無料ティア/Web), "vlm" (OCR/画像認識)
     """
     prompts = _get_prompts()
-    
+
+    if purpose == "resume":
+        override = os.environ.get("DEFAULT_MODEL_RESUME") or prompts.get("DEFAULT_MODEL_RESUME", "")
+        if override:
+            return override
+        purpose = "default"  # 空 → 通常の tier 追従にフォールバック
+
     # ティア状態のチェック: FREE であれば "default" リクエストも "free" 用に振り分ける
     effective_purpose = purpose
     if purpose == "default" and tier_manager.current_tier == GeminiTier.FREE:

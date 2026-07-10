@@ -9,7 +9,7 @@ from typing import List, Any, Optional
 
 from .config import load_coreprompts, load_glossary_csv, print_log
 from .models import load_chunks_from_json
-from .llm_client import call_gemini
+from .llm_client import call_gemini, get_default_model
 from .engine.p2_meta.meta_analyzer import MetaAnalyzer
 
 
@@ -87,8 +87,11 @@ def generate_resume(text: str, api_key: str | None = None, expertise: str = "文
 
     print_log(f"  [Phase 2] レジュメ生成中... (入力: {len(text)} 文字)")
     # 長文出力を許可
+    # レジュメ生成専用のモデルルーティング（DEFAULT_MODEL_RESUME）。
+    # 明示的な model 指定があればそちらを優先する。
+    resume_model = model or get_default_model("resume")
     resume = call_gemini(
-        prompt, api_key=api_key, temperature=0.3, model=model,
+        prompt, api_key=api_key, temperature=0.3, model=resume_model,
         thinking_level=thinking_level, max_output_tokens=8192,
         log_dir=state.logs_dir if state else None,
         metrics_metadata={"section": "chapter_resume" if is_book else "paper_resume"}

@@ -409,7 +409,6 @@ async def translate_batch(
     thinking_level: str = "High",
     state: Any = None,
     rate_limiter: AsyncLimiter = None,
-    context_guide: str = "",
     log_dir: Optional[Any] = None,
     max_parse_retries: int = 2,
 ) -> List["TreeNode"]:
@@ -463,7 +462,6 @@ async def translate_batch(
     # 2. プロンプト構築
     base_prompt = prompt_template.format(
         expertise=expertise,
-        context_guide=context_guide,
         glossary_content=glossary_content or "なし",
         resume_content=resume_content or "なし",
         previous_translation=previous_translation or "なし",
@@ -515,55 +513,6 @@ async def translate_batch(
 
     return results
 
-
-async def generate_section_resume(
-    section_name: str,
-    chunks: List[Any],
-    resume_content: str,
-    api_key: str | None = None,
-    expertise: str = "文化人類学",
-    model: str | None = None,
-    rate_limiter: Any | None = None,
-    log_dir: Optional[Any] = None
-):
-    """セクション（章）の要約と論理展開（h3見出し候補）を生成する。"""
-    full_text = "\n".join([c.get("text", "") for c in chunks])
-    limit_text = full_text # 制約なく全テキストをプロンプトに込める
-    
-    prompts = _get_prompts()
-    prompt_template = prompts.get("SECTION_SUMMARY_PROMPT")
-    
-    if not prompt_template:
-        # フォールバック
-        prompt = f"""あなたは{expertise}の専門家です。以下の章の内容を読み、2つのセクションに分けて出力してください。
-
-1. 【要約】: この章の核心的な議論を300字程度で簡潔にまとめてください。
-2. 【詳細な論理展開】: この章の内部構造（節見出しに相当する議論の区切り）を抽出し、以下の形式で列挙してください。
-   - # [見出し1]
-   - # [見出し2]
-   ...
-
----
-章のタイトル: {section_name}
-本全体の要約（参考）: {resume_content}
-本文（冒頭4万文字）:
-{limit_text}
-"""
-    else:
-        # SECTION_SUMMARY_PROMPT を使用
-        prompt = prompt_template.format(
-            expertise=expertise,
-            section_name=section_name,
-            resume_content=resume_content or "なし",
-            text=limit_text
-        )
-
-    async with rate_limiter:
-        response = await call_gemini_async(
-            prompt, model=model, api_key=api_key, thinking_level="Low",
-            log_dir=log_dir
-        )
-    return response
 
 _CACHED_LIMITERS = {}
 _LIMITER_LOCK = threading.Lock()

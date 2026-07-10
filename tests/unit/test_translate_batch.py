@@ -24,7 +24,7 @@ def _make_limiter():
 COMMON = dict(
     glossary_content="",
     previous_translation="",
-    prompt_template="{expertise}{context_guide}{glossary_content}{resume_content}{previous_translation}{chunk_json}",
+    prompt_template="{expertise}{glossary_content}{resume_content}{previous_translation}{chunk_json}",
     resume_content="",
     section_name="sec",
     max_parse_retries=0,

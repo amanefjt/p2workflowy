@@ -105,18 +105,18 @@ class StateIntegrator:
             self._apply_prefix_to_ids(child, prefix)
 
     def _generate_consolidated_resume(self) -> str:
-        """各章のレジュメから、GLOBAL_SUMMARY_PROMPT を用いて書籍全体の要約を生成する。"""
+        """各章のレジュメから、BOOK_SUMMARY_PROMPT を用いて書籍全体の要約を生成する。"""
         if not self.api_key or not any(self.chapter_resumes):
             return "..."
 
-        print_log("  [Integrator] 書籍全体のレジュメを AI で生成中 (GLOBAL_SUMMARY_PROMPT)...")
-        
+        print_log("  [Integrator] 書籍全体のレジュメを AI で生成中 (BOOK_SUMMARY_PROMPT)...")
+
         from core.config import load_coreprompts
         prompts = load_coreprompts()
-        base_prompt = prompts.get("GLOBAL_SUMMARY_PROMPT", "")
-        
+        base_prompt = prompts.get("BOOK_SUMMARY_PROMPT", "")
+
         if not base_prompt:
-            print_log("  [Integrator] 警告: GLOBAL_SUMMARY_PROMPT が見つかりません。")
+            print_log("  [Integrator] 警告: BOOK_SUMMARY_PROMPT が見つかりません。")
             return "..."
 
         combined_text = ""

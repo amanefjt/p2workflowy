@@ -126,3 +126,14 @@ async def test_translate_batch_empty_response():
 
         assert len(results) == 1
         assert "【翻訳失敗】" in results[0].text
+
+
+def test_summary_prompt_keys_renamed_and_added():
+    from core.config import load_coreprompts
+    prompts = load_coreprompts()
+    assert "BOOK_SUMMARY_PROMPT" in prompts
+    assert "CHAPTER_SUMMARY_PROMPT" in prompts
+    assert "GLOBAL_SUMMARY_PROMPT" not in prompts
+    # CHAPTER_SUMMARY_PROMPT は必要なスロットをすべて持つ
+    for slot in ("{expertise}", "{book_context}", "{context_guide}", "{text}"):
+        assert slot in prompts["CHAPTER_SUMMARY_PROMPT"], f"missing slot: {slot}"

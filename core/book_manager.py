@@ -65,7 +65,7 @@ class BookManager:
 
         # 1. 全体レジュメ生成
         print_log("  [BookManager] 書籍全体のレジュメを生成中...")
-        resume_prompt = prompts.get("GLOBAL_SUMMARY_PROMPT", "").replace("{expertise}", expertise) \
+        resume_prompt = prompts.get("BOOK_SUMMARY_PROMPT", "").replace("{expertise}", expertise) \
                                      .replace("{context_guide}", "書籍全体の核心的問い、論理構成を俯瞰して下さい。") \
                                      .replace("{text}", full_text)
 

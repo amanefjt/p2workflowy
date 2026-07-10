@@ -46,7 +46,7 @@ def _sample_text(full_text: str, is_book: bool = False) -> str:
 
 def generate_resume(text: str, api_key: str | None = None, expertise: str = "文化人類学", model: str | None = None, thinking_level: str = "High", is_book: bool = False, state: Any = None, resume_context: Optional[str] = None) -> str:
     """
-    SUMMARY_PROMPT または GLOBAL_SUMMARY_PROMPT を使ってレジュメ（構造化要約）を生成する。
+    SUMMARY_PROMPT または BOOK_SUMMARY_PROMPT を使ってレジュメ（構造化要約）を生成する。
 
     Args:
         text: 全文テキスト（必要に応じてサンプリング済み）
@@ -62,8 +62,8 @@ def generate_resume(text: str, api_key: str | None = None, expertise: str = "文
     
     # モードに応じてプロンプトテンプレートを切り替え
     if is_book:
-        # 書籍モード: GLOBAL_SUMMARY_PROMPT を優先使用
-        prompt_tpl = prompts.get("GLOBAL_SUMMARY_PROMPT", prompts["SUMMARY_PROMPT"])
+        # 書籍モード: BOOK_SUMMARY_PROMPT を優先使用
+        prompt_tpl = prompts.get("BOOK_SUMMARY_PROMPT", prompts["SUMMARY_PROMPT"])
     else:
         # 論文モード: SUMMARY_PROMPT_ronbun を優先使用
         prompt_tpl = prompts.get("SUMMARY_PROMPT_ronbun", prompts["SUMMARY_PROMPT"])

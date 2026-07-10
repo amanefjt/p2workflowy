@@ -58,7 +58,7 @@ Phase 5: resume_content を各章「## レジュメ」として出力に描画�
 **非ゴール**
 - VLM 適応ルーティング（Spec B）。full_vlm 固定は本スペックでは触らない。
 - Paper Mode の挙動変更。
-- 深読モード（別 SPEC.md）との統合。
+- 深読モード（`docs/superpowers/specs/2026-06-10-deep-reading-mode-shelved.md`、旧ルート SPEC.md）との統合。
 
 ---
 

@@ -171,4 +171,21 @@ Phase 2 (Meta Generation) において、文献の第一ページからタイト
 ### （関連・スコープ外）書籍章処理が pdf_mode=full_vlm 固定
 
 - `--book` に渡した `pdf_mode`（既定 hybrid）は `book_manager.py:170,173-174` で `pipeline_kwargs` から pop され、`:214` で `pdf_mode="full_vlm"` にハードコードされるため、章処理では常に full_vlm になる。これは `CLAUDE.md` の設計原則「複雑なレイアウトでは Route C（全ページ VLM）を優先し中途半端な混在モードは避ける」および `requirements_log.md` の「Book Mode・Route C の Markdown 構造化」記述と整合する**意図的な設計**。ただしデジタル書籍にはコスト過剰であり、適応ルーティング（`is_docling_viable()` 併用）の余地がある。これは上流（VLM ルート分岐）の別課題として `requirements_log.md` に候補改善登録し、コスト実測＋構造品質 A/B を伴う独立スペック（Spec B, 未起案）で扱う。Spec A（プロンプト整理）とは疎結合であり、どちらを先にやっても手戻りは発生しない。
+- **追記（2026-07-10）**: Spec B 前提調査で、この「full_vlm 固定」は実際には機能していないことが判明した（下記 I-15/I-16）。
+
+## 2026-07-10: 翻訳コンテキスト再設計の前提調査（Spec B）で発見した Phase 1 ルーティングの重大バグ 2 件（未対応・Spec B で対処予定）
+
+書籍モードの VLM 適応ルーティング（Spec B）の設計前調査として Phase 1 の実働経路を静的解析＋実行時検証した結果、「全ページ VLM（Route C）」という前提そのものが崩れていることが判明した。対策は `docs/superpowers/specs/` の Spec B（2026-07-10 起案）で扱う。
+
+### I-15. VLM スライディング OCR が二重定義バグで全ページ必ず失敗し、ネイティブテキストへ静かにフォールバックしている
+
+- **事象**: `core/engine/p1_ingest/ocr_manager.py` の `OCRManager` に `process_page_vlm` が**同一クラス内で二重定義**されている（`:157` 画像引数版 / `:214` pdf_path 引数版）。Python の規則で後者が生存する（`inspect.signature` により実行時確認済み: `(self, pdf_path: str, page_num: int)`）。ところが唯一の呼び出し元 `pdf_ingester.py:67` は前者のシグネチャ（`curr_img, prev_img=..., page_idx=..., session_dir=...`）で呼ぶため、**毎ページ必ず TypeError** となり、`pdf_ingester.py:70-80` の except で握りつぶされてネイティブ PDF テキスト抽出にフォールバックする。テキスト層のないスキャン PDF では「[VLM抽出失敗]」が並ぶ。
+- **影響**: full_vlm モードは、二重定義がファイル初出コミット a4c7fa4（2026-04-03, Stable V3.2.1）から存在するため、**エンジン層の現行構成では一度も VLM OCR を実行していない可能性が高い**。Route C（Markdown 構造化）の前提となる VLM Markdown 見出しは生成されない。CLAUDE.md の設計原則「VLM の論理役割判断が最優先」は現状コードでは実態を持たない。
+- **対策方針**: Spec B で修理する。スキャン書籍（見開き含む）は今後も処理予定のため必須項目。修理後にスキャン PDF での実動作確認（VLM が実際に呼ばれ Markdown が返ること）を行う。
+
+### I-16. pdf_mode=full_vlm 指定でも Docling が優先される（書籍モードの実働経路は Docling＋TOC フォールバック）
+
+- **事象**: `phase1_preprocessor.py:141` の Docling 分岐は `max_pages is None and is_docling_viable(pdf_path)` のみを見て **`pdf_mode` を参照しない**。したがって書籍モードの full_vlm 固定にかかわらず、デジタル PDF は Docling ルートに入る。`data/input/Booksample/` の 3 冊はすべて `is_docling_viable=True` を実測確認（corfra 106p / pse 175p / relations 282p、テキスト層クリーン）。さらに Docling 出力（`docling_ingester.py:70-81`）は `role` 属性のみで本文に `#` Markdown を付与しないため、Phase 3 の Route C（`structure_nodes_by_markdown` の Markdown 正規表現）は空振りし、`phase3_structure.py:70-77` の TOC/ChapterParser フォールバックが実働経路になっている。
+- **含意**: 書籍モードの構造化品質は、意図された「VLM Markdown 経路」ではなく **Docling＋TOC フォールバック経路**の産物。requirements_log（2026-07-07）が見込んだ「デジタル書籍で 10〜50 倍のコスト削減余地」は、VLM が動いていない以上、事実上すでに享受されている。I-15 と合わせて、Phase 1（Docling 優先）と Phase 3（full_vlm 前提の Route C）の**前提不一致**が Spec B の技術的核心。
+- **対策方針**: Spec B で「デジタル書籍＝ Docling を正式ルート化（role 見出しを書籍 Phase 3 に配線）／スキャン書籍＝ VLM（I-15 修理後）」として公式化し、Phase 3 の分岐条件を「指定された pdf_mode」ではなく「Phase 1 が実際に使ったルート」参照に改める。
 

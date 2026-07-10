@@ -204,3 +204,14 @@ Phase 2 (Meta Generation) において、文献の第一ページからタイト
 - **含意**: 書籍モードの構造化品質は、意図された「VLM Markdown 経路」ではなく **Docling＋TOC フォールバック経路**の産物。requirements_log（2026-07-07）が見込んだ「デジタル書籍で 10〜50 倍のコスト削減余地」は、VLM が動いていない以上、事実上すでに享受されている。I-15 と合わせて、Phase 1（Docling 優先）と Phase 3（full_vlm 前提の Route C）の**前提不一致**が Spec B の技術的核心。
 - **対策方針**: Spec B で「デジタル書籍＝ Docling を正式ルート化（role 見出しを書籍 Phase 3 に配線）／スキャン書籍＝ VLM（I-15 修理後）」として公式化し、Phase 3 の分岐条件を「指定された pdf_mode」ではなく「Phase 1 が実際に使ったルート」参照に改める。
 
+
+## 2026-07-11: モデル A/B（Stage 1 後）の下ごしらえ中に発見したレジュメ切断バグ
+
+### I-17. thinking モデル（gemini-3.5-flash）でレジュメが MAX_TOKENS 途中切断される（本番有料モードにも影響）
+
+- **事象**: `phase2_meta.py::generate_resume` は `max_output_tokens=8192` 固定でレジュメを生成していた。`gemini-3.5-flash`（thinking モデル）を `thinking_level="High"` で呼ぶと、**thinking トークンが 8192 枠を食い尽くし、レジュメ本文が MAX_TOKENS で途中切断**される。Stage 1 後のモデル A/B（`DEFAULT_MODEL_RESUME=gemini-3.5-flash` の「レジュメのみ 3.5-flash」ハイブリッド腕）を NST で実走行した際、生成レジュメが **533 字**で `# 2. 核心的主張` の途中（「…補完」）で途切れているのを発見。同条件の lite 腕（`gemini-3.1-flash-lite`）は thinking が軽く **4,347 字**で完結していた。
+- **影響範囲（重要）**: `coreprompts.json` の `DEFAULT_MODEL` は `gemini-3.5-flash` であるため、**`--lite`/free ティアを使わない通常の有料モードでは、以前からレジュメが同様に切断されていた**（`--lite` 運用で長く隠れていた潜在バグ）。切断されたレジュメは Phase 4 の翻訳コンテキスト（`{resume_content}`）に注入されるため、翻訳品質にも影響しうる。
+- **根本原因**: `_build_gemini_config`（`llm_client.py`）が `max_output_tokens` に thinking トークンを含む枠を渡す仕様。resume 呼び出しの 8192 は、thinking を持たない/軽いモデル時代の値で、thinking モデルには過小。
+- **対策（実施済み）**: `generate_resume` の `max_output_tokens` を `8192 → 32768` に引き上げ（thinking＋目標 4000〜5000 字＋余裕を確保）。修正後の再実行で 3.5-flash レジュメは **11,450 字**で完結（section 3「各セクションの展開」含む、末尾正常）。lite 腕は元々 8192 内で完結していたため挙動不変。単体テスト 218 件全合格（テストは call_gemini をモックするため値変更の影響なし）。
+- **観測メモ（A/B の設計入力）**: 3.5-flash レジュメは 11,450 字と lite（4,347 字）の約 2.6 倍で、プロンプトの目標「4000〜5000 字」を大きく超える。文脈としては richer だが、毎バッチ注入されるためコスト・文脈長への影響は比較読みで評価対象。
+- **フォローアップ候補（未実施）**: `call_gemini`/`call_gemini_async` で finish_reason == MAX_TOKENS を検出した際に警告ログを出す（レジュメ以外でも silent truncation を早期検知するため）。

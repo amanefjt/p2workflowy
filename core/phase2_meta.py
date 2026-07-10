@@ -90,9 +90,12 @@ def generate_resume(text: str, api_key: str | None = None, expertise: str = "文
     # レジュメ生成専用のモデルルーティング（DEFAULT_MODEL_RESUME）。
     # 明示的な model 指定があればそちらを優先する。
     resume_model = model or get_default_model("resume")
+    # max_output_tokens は thinking トークンも含む枠。gemini-3.5-flash など thinking モデルは
+    # HIGH thinking で 8192 を食い尽くしレジュメ本文が MAX_TOKENS で途切れるため、十分な枠を確保する
+    # （lite は thinking が軽く従来 8192 でも完結していたが、DEFAULT_MODEL=3.5-flash の本番/ハイブリッドで顕在化）。
     resume = call_gemini(
         prompt, api_key=api_key, temperature=0.3, model=resume_model,
-        thinking_level=thinking_level, max_output_tokens=8192,
+        thinking_level=thinking_level, max_output_tokens=32768,
         log_dir=state.logs_dir if state else None,
         metrics_metadata={"section": "chapter_resume" if is_book else "paper_resume"}
     )

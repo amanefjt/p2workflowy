@@ -101,3 +101,13 @@ Anthropic 公式の long-context prompting tips・hallucination 低減ガイド�
   - **ウィンドウ連続化**: 直前訳ウィンドウを断片 3 件×200 字トリムから連続 ~2,000 字（段落丸ごと、`WINDOW_MAX_CHARS=2000`、末尾から遡り最低 1 段落保証）へ変更。根拠は `docs/superpowers/specs/2026-07-10-translation-context-research-notes.md`。
 - **検証**: 単体テスト 197→211 件全合格（回帰なし、新規 14 件）。論文モードのゴールデン検証で構造回帰なし＋`<resume_content>` への実レジュメ注入を確認（`troubleshooting_log.md` の「I-9〜I-14 対応済み」参照）。
 - **次ステップ（ユーザー実施・本 Plan スコープ外）**: (1) 比較読み（`docs/translation_review_checklist.md`、NST で Stage 1 前後比較）、(2) モデル A/B（現行 lite vs 「レジュメ生成のみ gemini-3.5-flash」ハイブリッド）。この結果を持って Stage 2（統合用語レイヤー）/Stage 3（argument_tree）の Spec/Plan 起案へ。
+
+### 2026-07-11: Stage 1 比較読み＋モデル A/B 完了 → ハイブリッド採用決定
+
+Stage 1（レジュメ配線・ウィンドウ連続化）実装後、NST 論文で「全 lite（Arm A）」vs「レジュメのみ gemini-3.5-flash・他 lite（Arm B）」のモデル A/B を実走行・比較読みした。
+
+- **決定**: **Arm B（ハイブリッド）を採用**。訳質が Arm A より良い（藤田氏判定）。用途別ルーティングは実装済み（`DEFAULT_MODEL_RESUME`, commit 3c747ba）。※採用の既定化（`coreprompts.json` に `DEFAULT_MODEL_RESUME=gemini-3.5-flash` を設定）は未実施——Stage 2 起案時にレジュメ目標長の調整とあわせて判断する。
+- **付随バグ修正**: A/B 準備中に thinking モデルでレジュメが MAX_TOKENS 途中切断されるバグ（`max_output_tokens=8192` 過小）を発見・修正（8192→32768, I-17, commit f761f5d）。本番有料モードにも影響していた潜在バグ。
+- **観測（Stage 2 設計入力）**: 3.5-flash レジュメは 11,450 字と目標「4000〜5000 字」を大きく超過（lite の約 2.6 倍）。訳質向上と引き換えに文脈長・コストが増える。→ Stage 2 起案時に (a) 用語レイヤーの抽出積極性、(b) レジュメ目標長の締め直し、を検討事項とする。
+- **A/B 成果物**: `data/input/paperplain/NST/ab_stage1_model/armA_lite_p2.*` / `armB_hybrid_p2.*`（git 管理外）。
+- **次**: Stage 2（統合用語レイヤー）を Fable セッションで起案（Spec＋Plan）。

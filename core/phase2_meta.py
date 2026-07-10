@@ -46,7 +46,8 @@ def _sample_text(full_text: str, is_book: bool = False) -> str:
 
 def generate_resume(text: str, api_key: str | None = None, expertise: str = "文化人類学", model: str | None = None, thinking_level: str = "High", is_book: bool = False, state: Any = None, resume_context: Optional[str] = None) -> str:
     """
-    SUMMARY_PROMPT または BOOK_SUMMARY_PROMPT を使ってレジュメ（構造化要約）を生成する。
+    CHAPTER_SUMMARY_PROMPT（書籍モード）または SUMMARY_PROMPT_ronbun（論文モード）を
+    使ってレジュメ（構造化要約）を生成する。
 
     Args:
         text: 全文テキスト（必要に応じてサンプリング済み）
@@ -54,31 +55,30 @@ def generate_resume(text: str, api_key: str | None = None, expertise: str = "文
         expertise: 専門分野
         is_book: 書籍モードかどうか。False の場合は論文用プロンプトを使用。
         resume_context: 外部から注入するコンテキスト（書籍全体の要約など）。
+            書籍モードでは CHAPTER_SUMMARY_PROMPT の <book_context> スロットに注入する
+            （未指定時は「なし」）。
 
     Returns:
         str: 生成されたレジュメ（Markdown）
     """
     prompts = load_coreprompts()
-    
-    # モードに応じてプロンプトテンプレートを切り替え
-    if is_book:
-        # 書籍モード: BOOK_SUMMARY_PROMPT を優先使用
-        prompt_tpl = prompts.get("BOOK_SUMMARY_PROMPT", prompts["SUMMARY_PROMPT"])
-    else:
-        # 論文モード: SUMMARY_PROMPT_ronbun を優先使用
-        prompt_tpl = prompts.get("SUMMARY_PROMPT_ronbun", prompts["SUMMARY_PROMPT"])
 
-    # プロンプト構築
-    context_guide = "論文全体の構造、各セクションの論理構成を抽出してください。"
+    if is_book:
+        # 書籍モード: 章専用プロンプト。book_resume は <book_context> として背景注入する
+        prompt_tpl = prompts["CHAPTER_SUMMARY_PROMPT"]
+        context_guide = "この章の論理構成、節ごとの議論の展開を抽出してください。"
+    else:
+        # 論文モード: 論文専用プロンプト
+        prompt_tpl = prompts["SUMMARY_PROMPT_ronbun"]
+        context_guide = "論文全体の構造、各セクションの論理構成を抽出してください。"
+
     if "[untitled section]" in text:
         context_guide += "\n注意: '# [untitled section]' は、アブストラクト直後の明示的な見出しのない序論を表します。これを「序論」として適切に要約に含めてください。"
-    
-    # 外部コンテキスト（書籍全体の要約等）がある場合は、ガイドの冒頭に追加
-    if resume_context:
-        context_guide = f"【背景知識：書籍全体の要約】\n{resume_context}\n\n上記に基づき、この章のより詳細な要約を作成してください。\n" + context_guide
 
     prompt = prompt_tpl.replace(
         "{expertise}", expertise
+    ).replace(
+        "{book_context}", resume_context or "なし"
     ).replace(
         "{context_guide}", context_guide
     ).replace(
@@ -88,10 +88,10 @@ def generate_resume(text: str, api_key: str | None = None, expertise: str = "文
     print_log(f"  [Phase 2] レジュメ生成中... (入力: {len(text)} 文字)")
     # 長文出力を許可
     resume = call_gemini(
-        prompt, api_key=api_key, temperature=0.3, model=model, 
+        prompt, api_key=api_key, temperature=0.3, model=model,
         thinking_level=thinking_level, max_output_tokens=8192,
         log_dir=state.logs_dir if state else None,
-        metrics_metadata={"section": "global_resume"}
+        metrics_metadata={"section": "chapter_resume" if is_book else "paper_resume"}
     )
     print_log(f"  [Phase 2] レジュメ生成完了 ({len(resume)} 文字)")
 

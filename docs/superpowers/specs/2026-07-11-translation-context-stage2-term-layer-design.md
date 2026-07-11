@@ -141,6 +141,7 @@ def format_term_layer(entries: list[TermEntry]) -> str:
 - **型変更の波及**: `dict[str,str]` → `list[TermEntry]` は `phase4_translate` / `prompt_builder` に波及。`load_glossary_csv` は現状維持で後方互換を保つことで波及を最小化。
 - **書籍モードの検証**: 定義配線（判断保留 ②）は書籍モードに固有。Booksample での完走＋用語レイヤーへの定義注入を実地確認する（比較読みは論文 NST が主）。
 - **モデル既定変更の影響**: 有料パスが「全部 3.5-flash」→「ハイブリッド」に変わり、翻訳出力が変化する。これは A/B で採用済みの意図した変化。ゴールデンは構造で判定し、訳質は比較読みで判定する。
+- **書籍モードの resume ルーティング（実装 Plan で対処）**: `DEFAULT_MODEL` を lite に落とすと、書籍全体レジュメ（`book_manager.py:72` の `model=self.model=None` → `get_default_model("default")`）と章レジュメ（`book_manager.py:212` が concrete な default を各章へ渡し `generate_resume` の resume ルーティングをバイパス）が lite に落ちる。現状は `DEFAULT_MODEL=3.5-flash` のため偶然 3.5-flash になっており、既定化がこの conflation を露呈させる。正本「レジュメのみ 3.5-flash」を書籍でも成立させるため、両箇所を purpose ルーティングへ載せ直す（論文 NST の比較読みでは検知不能なサイレント書籍リグレッションのため要注意）。
 - **管理ログ**: `core/` 変更を含むため `requirements_log.md` / `troubleshooting_log.md` への追記を実装コミットに含める（`.claude/hooks/check_management_logs.sh` が注意喚起）。
 
 ---

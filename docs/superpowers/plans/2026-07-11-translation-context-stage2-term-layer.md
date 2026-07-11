@@ -27,7 +27,7 @@
 2. **書籍 global_glossary の定義配線方式**: **確定済み** — `load_glossary_entries`（新設・3 列対応ローダ）を追加し、書籍で既に `glossary_path` に渡っている `global_glossary.csv`（definition 列付き）から定義を読む。新たな pipeline シグネチャ変更は不要（Task 1）。
 3. **format の並び順**: **定義あり先頭 → 定義なし**を既定（Task 3）。比較読みで不都合なら source 順へ。
 4. **定義文の長さ**: プロンプトで「1 文・目安 60 字」（Task 6）。逸脱時の機械的切り詰めはしない（縮退時のノイズ増を避ける）。
-5. **Web 無料枠のレジュメ 3.5-flash 消費**: 管理者パスコード経由でサーバ側キーを使う無料モードでレジュメが 3.5-flash 無料枠（~10 RPM / ~250 RPD）を消費する。レジュメ呼び出しは論文 1 回・書籍 1＋章数回で収まる想定のため**本 Plan では許容**し、Task 8 の管理ログに明記する。ユーザー自身のキー利用時は当人の枠なので問題なし。
+5. **Web 無料枠のレジュメ 3.5-flash 消費**: 管理者パスコード経由でサーバ側キーを使う無料モードでレジュメが 3.5-flash 無料枠（~10 RPM / ~250 RPD）を消費する。レジュメ呼び出しは論文 1 回・書籍 1＋章数回で収まる想定のため**本 Plan では許容**し、Task 9 の管理ログに明記する。ユーザー自身のキー利用時は当人の枠なので問題なし。
 
 ---
 
@@ -38,9 +38,10 @@
 - **Modify** `core/engine/p4_translate/prompt_builder.py` — `TranslationPromptBuilder.glossary` を `list[TermEntry]` 化。`format_glossary` を `format_term_layer` へ委譲。
 - **Modify** `core/phase4_translate.py` — 用語集組み立てインライン（:88-98, :106）を `load_glossary_entries` + `build_term_layer` へ置換。
 - **Modify** `core/coreprompts.json` — `KEYWORD_EXTRACTION_PROMPT` 改修、`DEFAULT_MODEL` / `DEFAULT_MODEL_RESUME` の 2 値変更。
+- **Modify** `core/book_manager.py:72, :212` — 書籍全体レジュメと章レジュメを resume ルーティングへ載せる（Task 7 の DEFAULT_MODEL→lite が露呈させる書籍レジュメの lite 落ち対策）。
 - **Modify** `docs/model_optimization.md` — ハイブリッド既定化を反映。
 - **Modify** `docs/management/requirements_log.md` / `troubleshooting_log.md` — Stage 2 実装追記。
-- **Create/Modify tests** `tests/unit/test_term_layer.py`（新）、`tests/unit/test_glossary_entries.py`（新）、`tests/unit/test_prompt_builder.py`（追記）、`tests/unit/test_coreprompts_stage2.py`（新）。
+- **Create/Modify tests** `tests/unit/test_term_layer.py`（新）、`tests/unit/test_glossary_entries.py`（新）、`tests/unit/test_prompt_builder.py`（追記）、`tests/unit/test_coreprompts_stage2.py`（新）、`tests/unit/test_book_resume_routing.py`（新）。
 
 ---
 
@@ -642,7 +643,7 @@ Expected: FAIL（現行プロンプトに「特殊」「30」等が無い）
 上記テキストから、上記ルールに従って専門用語・特殊用法語を抽出し、JSON 配列のみを出力してください。
 ```
 
-> 注意（判断保留 ①④）: `最大 30 語` と `60 字` は既定値。比較読み（Task 8 後）で調整可。`{}` を含む出力形式例（`[{"en": ...}]`）は JSON 内では `[{\"en\": ...}]` となる。既存プロンプト同様のエスケープを踏襲すること。差し替え後、`python3 -c "import json; json.load(open('core/coreprompts.json'))"` で JSON 妥当性を確認する。
+> 注意（判断保留 ①④）: `最大 30 語` と `60 字` は既定値。比較読み（Task 9 後）で調整可。`{}` を含む出力形式例（`[{"en": ...}]`）は JSON 内では `[{\"en\": ...}]` となる。既存プロンプト同様のエスケープを踏襲すること。差し替え後、`python3 -c "import json; json.load(open('core/coreprompts.json'))"` で JSON 妥当性を確認する。
 
 - [ ] **Step 4: JSON 妥当性とテストを確認**
 
@@ -730,7 +731,141 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-### Task 8: 全体検証・管理ログ追記・ゴールデン確認
+### Task 8: 書籍レジュメの resume ルーティング修正（Task 7 のリグレッション対策）
+
+**Files:**
+- Modify: `core/book_manager.py:72`（書籍全体レジュメ）, `:212`（章レジュメ）
+- Test: `tests/unit/test_book_resume_routing.py`（新規）
+
+**背景（必読）:** Task 7 で `DEFAULT_MODEL` を lite に落とすと、書籍モードの 2 種のレジュメが resume ルーティング（`get_default_model("resume")`=3.5-flash）を通らず lite に落ちる。正本設計「レジュメ生成（論文／書籍全体／章）のみ 3.5-flash」に反するサイレント書籍リグレッション。原因:
+- **書籍全体レジュメ**: `book_manager.py:72` が `call_gemini(model=self.model=None)` → 内部で `get_default_model("default")`（=lite）に解決される（`llm_client.py:240-241`）。
+- **章レジュメ**: `book_manager.py:212` が concrete な `model_to_use`（=`self.model or get_default_model("default")`=lite）を各章 `run_pipeline` に渡し、`generate_resume` の `model or get_default_model("resume")`（`phase2_meta.py:92`）で resume ルーティングをバイパスさせる。
+
+**修正方針:** 論文モードと同じく「purpose ルーティングに委ねる」に揃える。
+- Phase 0 は `get_default_model("resume")` を明示解決してレジュメ呼び出しに渡す。
+- 章は `model=self.model`（未指定時 None）を `run_pipeline` に渡す。非レジュメ相（翻訳・抽出・Phase 1）は `None → get_default_model("default")`=lite となり **現状の `model_to_use`=lite と実効同一**、章レジュメのみ `None → get_default_model("resume")`=3.5-flash に正しく振れる。`model_to_use`（:150）は PDFSplitter（:151）用途に限定されるので残す。
+
+**Interfaces:**
+- Consumes: `get_default_model`（`book_manager` は既に import 済み, :12）。
+- Produces: 挙動変更のみ。書籍全体・章レジュメが resume モデル（既定 3.5-flash）で生成される。
+
+- [ ] **Step 1: 失敗するテストを書く**
+
+`tests/unit/test_book_resume_routing.py`（新規）:
+
+```python
+import os
+import pytest
+from core import book_manager
+from core.book_manager import BookManager
+
+
+class _FakePage:
+    def get_text(self):
+        return "book body text. "
+
+
+class _FakeDoc:
+    def __iter__(self):
+        return iter([_FakePage(), _FakePage()])
+    def close(self):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _restore_env():
+    original = os.environ.get("DEFAULT_MODEL_RESUME")
+    yield
+    if original is None:
+        os.environ.pop("DEFAULT_MODEL_RESUME", None)
+    else:
+        os.environ["DEFAULT_MODEL_RESUME"] = original
+
+
+def test_global_resume_uses_resume_routing(monkeypatch, tmp_path):
+    """書籍全体レジュメは resume ルーティング（DEFAULT_MODEL_RESUME）で生成される。"""
+    os.environ["DEFAULT_MODEL_RESUME"] = "gemini-3.5-flash"
+    monkeypatch.setattr(book_manager.fitz, "open", lambda p: _FakeDoc())
+
+    captured = []
+    def fake_call_gemini(prompt, **kw):
+        captured.append(kw.get("model"))
+        # 2 回目（用語集）は JSON を返す
+        return "[]" if kw.get("response_mime_type") == "application/json" else "RESUME"
+    monkeypatch.setattr(book_manager, "call_gemini", fake_call_gemini)
+
+    dummy_pdf = tmp_path / "book.pdf"
+    dummy_pdf.write_bytes(b"%PDF-1.4 dummy")
+    bm = BookManager(input_path=str(dummy_pdf), api_key="k", model=None)
+    bm.session_dir = tmp_path  # 実 state/ ではなく tmp に書かせる
+
+    bm._generate_global_context()
+
+    # 1 回目の呼び出し（全体レジュメ）が resume ルーティング先モデル
+    assert captured[0] == "gemini-3.5-flash"
+```
+
+- [ ] **Step 2: テストが失敗することを確認**
+
+Run: `python3 -m pytest tests/unit/test_book_resume_routing.py -q`
+Expected: FAIL（現行 `:72` は `model=self.model`=None を渡し、fake_call_gemini は `None` を記録するため `captured[0] == "gemini-3.5-flash"` が偽）
+
+- [ ] **Step 3: Phase 0 レジュメ呼び出しを resume ルーティングへ**
+
+`core/book_manager.py:72` の:
+
+```python
+        self.global_resume = call_gemini(resume_prompt, api_key=self.api_key, model=self.model, thinking_level="High")
+```
+
+を:
+
+```python
+        resume_model = self.model or get_default_model("resume")
+        self.global_resume = call_gemini(resume_prompt, api_key=self.api_key, model=resume_model, thinking_level="High")
+```
+
+に変更（用語集生成 `:79` は変更しない＝キーワード抽出は lite で正しい）。
+
+- [ ] **Step 4: 章レジュメの purpose ルーティングを回復**
+
+`core/book_manager.py:212` の:
+
+```python
+                    model=model_to_use,
+```
+
+を:
+
+```python
+                    model=self.model,
+```
+
+に変更（`model_to_use` は :151 の PDFSplitter 用途にのみ残る）。
+
+- [ ] **Step 5: テストと回帰を確認**
+
+Run: `python3 -m pytest tests/unit/test_book_resume_routing.py -q`
+Expected: PASS
+
+Run: `python3 -m pytest tests/unit/ -q`
+Expected: PASS（全件緑）
+
+- [ ] **Step 6: コミット**
+
+```bash
+git add core/book_manager.py tests/unit/test_book_resume_routing.py
+git commit -m "fix: 書籍全体・章レジュメを resume ルーティングへ載せる（Stage 2 ハイブリッド既定化のリグレッション対策）
+
+DEFAULT_MODEL→lite で書籍レジュメが lite に落ちるのを防ぎ、正本の
+「レジュメのみ 3.5-flash」を書籍モードでも成立させる。
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 9: 全体検証・管理ログ追記・ゴールデン確認
 
 **Files:**
 - Modify: `docs/management/requirements_log.md`, `docs/management/troubleshooting_log.md`
@@ -738,14 +873,16 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - [ ] **Step 1: 全ユニットテスト**
 
 Run: `python3 -m pytest tests/unit/ -q`
-Expected: PASS（全件緑。新規テスト: glossary_entries 4 + term_layer 10 + prompt_builder 2 + coreprompts_stage2 2）
+Expected: PASS（全件緑。新規テスト: glossary_entries 4 + term_layer 10 + prompt_builder 2 + coreprompts_stage2 2 + book_resume_routing 1）
 
-- [ ] **Step 2: ゴールデン構造回帰（論文モード）**
+- [ ] **Step 2: ゴールデン構造回帰（論文モード）＋書籍スモーク**
 
 `golden-verification` skill に従い、AL/NST で構造回帰がないことを確認する。用語レイヤーは翻訳の背景注入のみで構造に影響しないことを確認（見出し抽出・階層は不変）。
 
 Run（例）: `python3 main.py data/input/paperplain/NST/NSTsample.txt --lite`
 Expected: Phase 1-5 完走、`_p2.md` 生成、セクション構造が理想出力と一致（訳文の一致は不要）。翻訳プロンプトの `<glossary>` に定義付きエントリが載ることをログ/中間状態で確認。
+
+書籍モード（Task 8 のルーティング修正の実地確認）: `data/input/Booksample/` の 1 冊を `--book` で処理し、(a) 完走、(b) 書籍全体レジュメ・章レジュメが resume モデル（3.5-flash）で生成されること（実行ログのモデル表示で確認）、(c) 翻訳が lite で動くことを確認する。※有料キー消費を伴うため、ユーザー判断で 1 章のみ（`--max-chapters` 等）に絞ってよい。
 
 - [ ] **Step 3: 管理ログ追記**
 
@@ -780,9 +917,10 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - 描画（定義付き・定義あり先頭） → Task 3 ✅
 - 抽出プロンプト中庸＋特殊用法込み・件数上限・空許容 → Task 6 ✅
 - ハイブリッド既定化（2 値＋docs 同時更新） → Task 7 ✅
+- ハイブリッドを書籍モードでも成立させる（正本「論文/書籍全体/章レジュメのみ 3.5-flash」の書籍分） → Task 8（Task 7 のリグレッション対策）✅
 - レジュメ長据え置き → Global Constraints で明記（変更しない）✅
-- テスト/ゴールデン/比較読み → Task 8 ✅
-- 管理ログ・判断保留⑤明記 → Task 8 ✅
+- テスト/ゴールデン/比較読み → Task 9 ✅
+- 管理ログ・判断保留⑤明記 → Task 9 ✅
 
 **2. Placeholder scan:** 各コードステップに実コードあり。プロンプト差し替え（Task 6）と docs 更新（Task 7 Step 4）は対象ファイルの現行構成に合わせる旨を明記済みで「TODO/後で」型の空欄なし。
 

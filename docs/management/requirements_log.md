@@ -111,3 +111,19 @@ Stage 1（レジュメ配線・ウィンドウ連続化）実装後、NST 論文
 - **観測（Stage 2 設計入力）**: 3.5-flash レジュメは 11,450 字と目標「4000〜5000 字」を大きく超過（lite の約 2.6 倍）。訳質向上と引き換えに文脈長・コストが増える。→ Stage 2 起案時に (a) 用語レイヤーの抽出積極性、(b) レジュメ目標長の締め直し、を検討事項とする。
 - **A/B 成果物**: `data/input/paperplain/NST/ab_stage1_model/armA_lite_p2.*` / `armB_hybrid_p2.*`（git 管理外）。
 - **次**: Stage 2（統合用語レイヤー）を Fable セッションで起案（Spec＋Plan）。
+
+### 2026-07-12: 翻訳コンテキスト Stage 2（統合用語レイヤー）実装完了
+
+`docs/superpowers/specs/2026-07-11-translation-context-stage2-term-layer-design.md` を `subagent-driven-development` で実装完了（feature ブランチ `feature/translation-context-stage2`）。用語集パイプラインが `dict[str,str]`（en→ja）に固定され、Phase 2 が既に抽出していた `definition` が翻訳プロンプトの `<glossary>` に一度も届いていなかった欠落（詳細は `troubleshooting_log.md` I-18）を解消し、訳語と定義を両方運ぶ統合用語レイヤーへ差し替えた。
+
+- **定義配線の復活**: `core/config.py` に 3 列（en, ja, definition）対応の `load_glossary_entries` を新設（旧 `load_glossary_csv` は dict 版として残置、呼び出し元は新関数へ移行）。`core/phase4_translate.py` の用語集組み立てを `keywords_data`（本文抽出の definition 付き）と glossary CSV（書籍は definition 列付き）の両方を材料にする方式へ差し替え、`definition` が初めて翻訳プロンプトまで到達するようにした。
+- **`TermEntry` / `term_layer.py` への隔離**: 新モジュール `core/engine/p4_translate/term_layer.py` に `TermEntry(en, ja, definition, source)` と `build_term_layer(keywords_data, glossary_entries)` を実装。フィールド別マージ方針（訳語 `ja` は glossary CSV 優先、`definition` は本文抽出（local）優先・空なら CSV で補完）を単一箇所に閉じ込め、フェーズファサード側にマージロジックを持たせない設計とした。`TranslationPromptBuilder.glossary` の型を `dict[str,str]` → `list[TermEntry]` に統一（`format_glossary()` は内部で `format_term_layer()` に委譲）。
+- **描画**: `format_term_layer` は定義付きエントリを `- en → ja：定義` 形式で先頭に列挙し、定義なしエントリを後続、ヘッダは `# 用語集 (Glossary)`。
+- **書籍モードの定義配線**: 書籍の `global_glossary.csv` は元々 definition 列を持つため、`load_glossary_entries` を共通で通すだけで両モードの定義配線が揃った（新規のパイプライン分岐は不要、判断保留②の確定値）。
+- **`KEYWORD_EXTRACTION_PROMPT` の中庸＋特殊用法込み改修**: 明示的に定義された専門用語に加え、日常語が理論的・特殊な意味で使われている場合（語彙平板化対策の代表例: displace→「ずらす」）も抽出対象に含めるよう改修。特殊な語義の根拠が本文から取れない場合は `definition` を空のまま許容し、無理な創作を防止。抽出上限は 30 件（判断保留①の確定値。比較読みの結果次第で今後調整可）。
+- **ハイブリッド既定化**: Stage 1 の A/B で採用が決まっていた「レジュメ生成のみ `gemini-3.5-flash`・他は `gemini-3.1-flash-lite`」構成を `core/coreprompts.json` の既定値として確定（`DEFAULT_MODEL=gemini-3.1-flash-lite`, `DEFAULT_MODEL_RESUME=gemini-3.5-flash`、`DEFAULT_MODEL_FREE`/`DEFAULT_MODEL_VLM` は lite のまま不変）。`docs/model_optimization.md` を既定化後の状態に同期（§1 にハイブリッド構成の注記追加、§3・§5 に残っていた「lite 一本」前提の矛盾記述を修正）。
+- **レジュメ長は据え置き（論点③宿題は継続保留）**: Stage 1 で観測された 3.5-flash レジュメの超過（目標 4000〜5000 字に対し実測 11,450 字）への対処（プロンプトの目標字数を締め直す等）は本 Stage では実施しない。比較読みで訳質への影響を見てから判断する対象として持ち越し。
+- **書籍レジュメ routing のリグレッション修正**: ハイブリッド既定化（`DEFAULT_MODEL` を lite に変更）により、`book_manager.py` の書籍全体レジュメ生成（旧 `:72` 相当）と各章の `run_pipeline()` 呼び出し（旧 `:212` 相当）が resume 用途のモデルルーティングを経由せず `DEFAULT_MODEL`（lite）にフォールバックしてしまう回帰を発見・修正した。両箇所を `get_default_model("resume")` 経由／`self.model` 明示渡しに変更し、書籍全体・章レジュメが意図どおり `DEFAULT_MODEL_RESUME`（3.5-flash）で生成されるようにした。**この回帰は NST 論文モードの比較読みでは検出不可能**（書籍モード専用の配線のため）であり、コードレビューで先に発見できたことは Task 8 として記録済み。
+- **判断保留⑤の確定**: Web 版で管理者パスコード経由のサーバー側キー（無料モード）利用時、レジュメ生成が `DEFAULT_MODEL_RESUME`（3.5-flash、無料枠なし）を消費する点は、ハイブリッド構成の訳質向上メリットを優先し**許容する**判断とする。将来的にコスト面で問題が顕在化した場合は、無料モード時のみ resume も lite にフォールバックする分岐を別途検討する。
+- **検証**: 単体テスト 211 → 237 件全合格（回帰なし、新規 26 件: `load_glossary_entries` 4 / `term_layer` 10 / `TranslationPromptBuilder` 2 / `coreprompts` Stage 2 関連 2 / 書籍 resume routing 1 ほか）。ゴールデン構造回帰・書籍スモークはユーザー実施（本タスクのスコープ外、有料 API 実行を伴うため）。
+- **次ステップ（ユーザー実施・本 Plan スコープ外）**: (1) 比較読み（`docs/translation_review_checklist.md`、NST で Stage 2 前後・ハイブリッド固定条件、`displace` 等の語彙平板化改善を重点確認）。(2) その結果を入力に、(a) レジュメ目標長の再評価（論点③宿題）、(b) 用語抽出の積極性微調整（抽出上限 30 件を含む、判断保留①の再検討）、(c) Stage 3（argument_tree）の Spec/Plan 起案。

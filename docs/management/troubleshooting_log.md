@@ -215,3 +215,20 @@ Phase 2 (Meta Generation) において、文献の第一ページからタイト
 - **対策（実施済み）**: `generate_resume` の `max_output_tokens` を `8192 → 32768` に引き上げ（thinking＋目標 4000〜5000 字＋余裕を確保）。修正後の再実行で 3.5-flash レジュメは **11,450 字**で完結（section 3「各セクションの展開」含む、末尾正常）。lite 腕は元々 8192 内で完結していたため挙動不変。単体テスト 218 件全合格（テストは call_gemini をモックするため値変更の影響なし）。
 - **観測メモ（A/B の設計入力）**: 3.5-flash レジュメは 11,450 字と lite（4,347 字）の約 2.6 倍で、プロンプトの目標「4000〜5000 字」を大きく超える。文脈としては richer だが、毎バッチ注入されるためコスト・文脈長への影響は比較読みで評価対象。
 - **フォローアップ候補（未実施）**: `call_gemini`/`call_gemini_async` で finish_reason == MAX_TOKENS を検出した際に警告ログを出す（レジュメ以外でも silent truncation を早期検知するため）。
+
+## 2026-07-12: 翻訳コンテキスト Stage 2（統合用語レイヤー）実装で対処した不具合
+
+### I-18. 用語集パイプラインが dict[str,str] 固定で definition が 2 箇所で欠落し、翻訳プロンプトに一度も届いていなかった
+
+- **事象**: Phase 2 のキーワード抽出（`KEYWORD_EXTRACTION_PROMPT` / `keywords_data`）は用語ごとに `definition`（本文中の定義・特殊な語義の説明）を抽出済みだったにもかかわらず、この情報が Phase 4 の翻訳プロンプト `<glossary>` まで一度も到達していなかった。
+- **根本原因（2 箇所の欠落）**:
+  1. `core/config.py::load_glossary_csv`（用語集 CSV ローダー）が en/ja の 2 列だけを読み、CSV の 3 列目（definition）を無視して `dict[str,str]`（en→ja）を返す実装だった。
+  2. `core/phase4_translate.py`（旧実装、`:96-98` 付近）が `p2_data["keywords_data"]` を用語集に組み込む際、`{kw["en"]: kw["ja"] for kw in keywords_data}` のような形で en→ja のみを取り出してフラット化しており、`keywords_data` に載っていた `definition` フィールドをここで捨てていた。
+  - 2 箇所とも「用語集＝訳語の対応表（dict[str,str]）」という当初のデータモデルに固定された結果、後から追加された `definition` フィールドの受け皿がどこにも用意されていなかった。`TranslationPromptBuilder.glossary` の型注釈も `dict[str,str]` のままで、型シグネチャ上も definition を運べない設計になっていた。
+- **影響**: 訳語だけでなく定義（特に「日常語が理論的・特殊な意味で使われている」ケースの語義の手がかり）を翻訳 LLM に与えることで訳語の一貫性・精度を上げる、という用語集本来の狙いが、実装上ずっと機能していなかった。書籍モードの `global_glossary.csv`（definition 列あり）も同様に定義が捨てられていた。
+- **対策**: `core/config.py` に 3 列（en, ja, definition）対応の `load_glossary_entries` を新設（`load_glossary_csv` は既存呼び出し元互換のため dict 版として残置）。`core/engine/p4_translate/term_layer.py` に `TermEntry(en, ja, definition, source)` と `build_term_layer(keywords_data, glossary_entries)` を新設し、`keywords_data`（本文抽出、definition 優先）と glossary CSV（訳語 `ja` 優先、definition は空欄補完のみ）をフィールド単位でマージする専用ロジックに隔離。`phase4_translate.py` を `build_term_layer` 経由に配線し直し、`TranslationPromptBuilder.glossary` の型を `list[TermEntry]` に変更。`format_term_layer` で定義付きエントリを先頭に `- en → ja：定義` 形式で描画するようにし、definition が初めて `<glossary>` に載るようにした。
+- **副次的に発見した回帰（同一 Stage 内、コードレビューで検出）**: Stage 2 でハイブリッド構成（`DEFAULT_MODEL=gemini-3.1-flash-lite` / `DEFAULT_MODEL_RESUME=gemini-3.5-flash`）を既定化した際、`core/book_manager.py` の書籍全体レジュメ生成（旧 `:72` 相当）と各章の `run_pipeline()` 呼び出し（旧 `:212` 相当）が resume 用途のモデルルーティングを経由せず、`DEFAULT_MODEL`（lite）へフォールバックしてしまう設計だったことが判明した。Stage 1 時点では `DEFAULT_MODEL` が実質 resume と同じ lite だったため症状が出ておらず、ハイブリッド既定化で `DEFAULT_MODEL` を lite に固定し `DEFAULT_MODEL_RESUME` を切り離したことで初めて顕在化した「静かな書籍モード限定の劣化」である。**NST 論文モードの比較読みでは検出できない**（論文モードは book_manager を通らないため）。
+  - **対策**: `book_manager.py` の該当 2 箇所を `get_default_model("resume")` 経由／`self.model` の明示渡しに変更し、書籍全体・章レジュメが用途別ルーティングに正しく乗るよう修正（commit `1033e83`）。
+  - **教訓**: モデルティアのデフォルト値を変更する際は、purpose 別ルーティング（resume 等）を経由せず定数を直接参照しているコードパスが他にないか、変更前に横断確認する必要がある。今回は Stage 2 の自己レビューで発見できたが、次回同種の変更（`DEFAULT_MODEL_*` 系の値変更）では `grep -rn "DEFAULT_MODEL\b" core/` 等での横断確認をチェックリスト化することを検討する。
+- **検証**: `tests/unit/test_config.py`（`load_glossary_entries` 4 件）、`tests/unit/test_term_layer.py`（`build_term_layer`/`format_term_layer` 10 件）、`TranslationPromptBuilder` 関連 2 件、`coreprompts.json` の Stage 2 既定値 2 件、書籍 resume routing 回帰 1 件を含む新規テストを追加。単体テスト 211 → 237 件全合格（回帰なし）。ゴールデン構造回帰・書籍スモーク（resume モデル表示の実地確認）はユーザー実施予定（有料 API 実行を伴うため本タスクのスコープ外）。
+- **判断保留⑤（許容判断として確定）**: Web 版で管理者パスコード経由のサーバー側キー（無料モード）を使う場合、レジュメ生成が `DEFAULT_MODEL_RESUME`（3.5-flash、無料枠の対象外）を消費する。ハイブリッド構成による訳質向上のメリットを優先し、現時点ではこれを許容する。コスト面で問題が顕在化した場合は、無料モード時のみ resume も lite にフォールバックする分岐を別途検討する。

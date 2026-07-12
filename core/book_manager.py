@@ -69,7 +69,8 @@ class BookManager:
                                      .replace("{context_guide}", "書籍全体の核心的問い、論理構成を俯瞰して下さい。") \
                                      .replace("{text}", full_text)
 
-        self.global_resume = call_gemini(resume_prompt, api_key=self.api_key, model=self.model, thinking_level="High")
+        resume_model = self.model or get_default_model("resume")
+        self.global_resume = call_gemini(resume_prompt, api_key=self.api_key, model=resume_model, thinking_level="High")
 
         # 2. 全体用語集生成
         print_log("  [BookManager] 書籍全体の共通用語集を生成中...")
@@ -209,7 +210,7 @@ class BookManager:
                     title=ch_title,
                     resume_content=self.global_resume or None,
                     glossary_path=glossary_path_str,
-                    model=model_to_use,
+                    model=self.model,
                     pdf_mode="full_vlm",
                     simple_mode=is_simple,
                     resume_only=resume_only,

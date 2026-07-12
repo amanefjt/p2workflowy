@@ -1,5 +1,6 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Any, Optional
 from core.models import TreeNode
+from core.engine.p4_translate.term_layer import TermEntry, format_term_layer
 
 # 直前訳ウィンドウの最大文字数。断片ではなく連続した直前訳文（段落丸ごと）を渡す。
 # 根拠: docs/superpowers/specs/2026-07-10-translation-context-research-notes.md
@@ -10,18 +11,13 @@ class TranslationPromptBuilder:
     翻訳用プロンプトの構築を専門に扱うエンジン。
     用語集、履歴、コンテキストの注入を担う。
     """
-    def __init__(self, prompt_template: str, glossary: Optional[Dict[str, str]] = None):
+    def __init__(self, prompt_template: str, glossary: Optional[List[TermEntry]] = None):
         self.prompt_template = prompt_template
-        self.glossary = glossary or {}
+        self.glossary = glossary or []
 
     def format_glossary(self) -> str:
-        """用語集をプロンプト用に整形する。"""
-        if not self.glossary:
-            return ""
-        lines = ["# 用語集 (Glossary)", "以下の用語は、指定された日本語訳を優先的に使用してください。"]
-        for en, ja in self.glossary.items():
-            lines.append(f"- {en}: {ja}")
-        return "\n".join(lines)
+        """用語レイヤーをプロンプト用に整形する（term_layer.format_term_layer へ委譲）。"""
+        return format_term_layer(self.glossary)
 
     def format_previous_translation(self, nodes: List[TreeNode]) -> str:
         """

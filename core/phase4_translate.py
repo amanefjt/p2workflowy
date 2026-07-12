@@ -4,13 +4,14 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from .models import TreeNode
-from .config import load_coreprompts, load_glossary_csv, print_log
+from .config import load_coreprompts, load_glossary_entries, print_log
 from .llm_client import translate_batch, tier_manager, GeminiTier, apply_tier_settings
 
 # アトミック・エンジンのインポート
 from .engine.p4_translate.parallel_translator import ParallelTranslator
 from .engine.p4_translate.prompt_builder import TranslationPromptBuilder
 from .engine.p4_translate.tree_reconstructor import TreeReconstructor
+from .engine.p4_translate.term_layer import build_term_layer
 
 
 def build_translation_context(book_resume: str, document_resume: str, is_book: bool) -> str:
@@ -86,16 +87,16 @@ async def _run_phase4_async(
 
     # 設定と用語集のロード
     prompts = load_coreprompts()
-    master_glossary = load_glossary_csv(glossary_path)
+    glossary_entries = load_glossary_entries(glossary_path)
+    keywords_data = []
     resume_context = ""
     if Path(phase2_state_path).exists():
         with open(phase2_state_path, "r", encoding="utf-8") as f:
             p2_data = json.load(f)
             resume_context = p2_data.get("resume_content", "")
-            # DNA キーワードを用語集に統合
-            for kw in p2_data.get("keywords_data", []):
-                if kw.get("en") and kw["en"] not in master_glossary:
-                    master_glossary[kw["en"]] = kw.get("ja", "")
+            keywords_data = p2_data.get("keywords_data", [])
+    # 用語レイヤー: 本文抽出（定義付き）＋ glossary CSV（書籍は定義列付き）を統合
+    term_entries = build_term_layer(keywords_data, glossary_entries)
 
     # エンジンの初期化
     current_tier = GeminiTier.FREE if tier.lower() == "free" else GeminiTier.PAID
@@ -103,7 +104,7 @@ async def _run_phase4_async(
     
     translator = ParallelTranslator(api_key=api_key, model=model, tier=current_tier,
                                      max_concurrent_sections=max_concurrent_sections)
-    prompt_builder = TranslationPromptBuilder(prompts["TRANSLATION_PROMPT"], glossary=master_glossary)
+    prompt_builder = TranslationPromptBuilder(prompts["TRANSLATION_PROMPT"], glossary=term_entries)
     reconstructor = TreeReconstructor(is_book=is_book, resume_only=resume_only)
 
     # 翻訳コンテキストの組み立て（全セクション共通・毎バッチの {resume_content} に注入）

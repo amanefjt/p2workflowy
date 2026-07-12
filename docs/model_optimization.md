@@ -13,11 +13,16 @@ V3（Golden Rewrite）では用途別に**動的ルーティング**を採用。
 
 | キー | 現在値 |
 |---|---|
-| `DEFAULT_MODEL` | `gemini-3.5-flash` |
+| `DEFAULT_MODEL` | `gemini-3.1-flash-lite` |
 | `DEFAULT_MODEL_FREE` | `gemini-3.1-flash-lite` |
 | `DEFAULT_MODEL_VLM` | `gemini-3.1-flash-lite` |
+| `DEFAULT_MODEL_RESUME` | `gemini-3.5-flash` |
 
 ドキュメントとコードが乖離している場合はコード側を優先し、このドキュメントを修正すること。`@lru_cache` のため変更後はプロセス再起動が必須。
+
+> [!NOTE]
+> **ハイブリッド構成が既定（2026-07-11、Stage 2）**: レジュメ生成（論文全体・書籍全体・章単位）のみ `DEFAULT_MODEL_RESUME`（`gemini-3.5-flash`）を使い、翻訳を含むそれ以外の全フェーズは `DEFAULT_MODEL`（`gemini-3.1-flash-lite`）を使う。根拠は 2026-07-11 実施の Stage 1 モデル A/B（NST 論文）で Arm B（ハイブリッド）採用を決定したこと。GA 移行後の価格改定で Flash と Flash-Lite の価格差が約 6 倍に拡大したため、品質影響が大きいレジュメ生成のみ高モデルを残し、他は Lite に統一した。
+> `DEFAULT_MODEL_RESUME` は TierManager のティア追従の対象外（`core/llm_client.py::get_default_model("resume")`）。無料ティアへダウンシフトした場合でもレジュメ生成は `gemini-3.5-flash` のまま実行され、これは無料枠のレート制限内に収まる想定。詳細は `docs/management/requirements_log.md`（2026-07-11 の Stage 1 A/B 記録）を参照。
 
 ### フェーズ別ルーティング表
 
@@ -25,9 +30,10 @@ V3（Golden Rewrite）では用途別に**動的ルーティング**を採用。
 | :--- | :--- | :--- | :--- |
 | **Phase 1 — PDF VLM / OCR** | `DEFAULT_MODEL_VLM` (Lite) | LOW | コスト・速度優先。大量の画像処理を並行するため Lite 固定 |
 | **Phase 1 — テキスト構造解析** | `DEFAULT_MODEL_FREE` (Lite) | HIGH | 見出し抽出（TextStructureExtractor）。Lite でも精度十分 |
-| **Phase 2 — DNA / Resume / Keywords** | `DEFAULT_MODEL` (Flash) | HIGH | 品質主権。論文全体の構造と意味を決定づける最重要フェーズ |
-| **Phase 3 — 構造ツリー / TOC** | `DEFAULT_MODEL` (Flash) | HIGH | Phase 2 と同じモデルを継承。セクション境界の論理判断 |
-| **Phase 4 — 翻訳** | `DEFAULT_MODEL`（通常）/ `DEFAULT_MODEL_FREE`（`--lite` / フォールバック時） | HIGH | 通常は Flash、`--lite` 指定時や TierManager 発動時は Lite へ |
+| **Phase 2 — レジュメ生成（論文/書籍全体/章）** | `DEFAULT_MODEL_RESUME` (Flash) | HIGH | ティア非追従。品質影響が大きいため無料モード下でも Flash を維持 |
+| **Phase 2 — DNA / Keywords** | `DEFAULT_MODEL` (Lite) | HIGH | ハイブリッド構成によりレジュメ以外は Lite |
+| **Phase 3 — 構造ツリー / TOC** | `DEFAULT_MODEL` (Lite) | HIGH | セクション境界の論理判断 |
+| **Phase 4 — 翻訳** | `DEFAULT_MODEL`（Lite・通常）/ `DEFAULT_MODEL_FREE`（`--lite` / フォールバック時、同じく Lite） | HIGH | ハイブリッド構成により通常時も Lite。`--lite` 指定時や TierManager 発動時も同一モデル |
 
 ### thinking_level のフェーズ別設定
 
@@ -100,25 +106,27 @@ Phase 1 で画像1枚ごとに VLM API を呼び出すため、ページ数に�
 ### ユーザー種別による動作
 
 ```
-有料ユーザー:
-  全フェーズ → DEFAULT_MODEL（高品質モデル）で処理
+有料ユーザー（ハイブリッド構成、2026-07-11〜）:
+  レジュメ生成（Phase 2、論文/書籍全体・章単位） → DEFAULT_MODEL_RESUME（gemini-3.5-flash、ティア非追従）
+  それ以外の全フェーズ（翻訳を含む） → DEFAULT_MODEL（gemini-3.1-flash-lite）
 
 無料ユーザー（TierManagerの自動制御）:
-  初回〜数回 → DEFAULT_MODEL を試みる
-       ↓  429 RESOURCE_EXHAUSTED 発生（Flash の無料枠は早期に枯渇）
-  残り全体 → DEFAULT_MODEL_FREE (Lite) へ自動ダウングレード
+  レジュメ生成 → 常に DEFAULT_MODEL_RESUME（gemini-3.5-flash）のまま（ティア追従の対象外）
+  それ以外のフェーズ → 初回から DEFAULT_MODEL（Lite）で処理
+       ↓  429 RESOURCE_EXHAUSTED 発生時
+  残り全体 → DEFAULT_MODEL_FREE (Lite、DEFAULT_MODEL と同一) へダウングレード（実質モデル変化なし）
 ```
 
-実態として、**無料ユーザーは 1 論文の処理中に TierManager が発動し、以降の全処理が Lite モデルで実行される**。品質は下がるが完走は保証される設計。
+実態として、DEFAULT_MODEL が Lite になったハイブリッド構成下では、**有料/無料ユーザー間の実行モデルの差はレジュメ生成（Phase 2）のみ**であり、翻訳を含むそれ以外のフェーズは有料・無料とも同じ Lite モデルで処理される。以前の「有料は全フェーズ Flash・無料は TierManager 発動で Lite に落ちる」という区別は現在の既定値には当てはまらない。
 
 ### 処理能力の目安（無料枠基準）
 
 | ユーザー種別 | 実質動作モデル | ボトルネック | 1日 | 1ヶ月（30日） |
 |---|---|---|---|---|
-| **無料ユーザー** | Flash → Lite 自動切替 | Flash の RPD（数回で Lite へ） | **〜90〜130本** | **〜2,700〜3,900本** |
-| **有料ユーザー** | Flash 固定 | TPM / RPM | 実質無制限 | 実質無制限 |
+| **無料ユーザー** | Lite 固定（レジュメのみ Flash、ティア非追従） | Lite の RPD | **〜90〜130本** | **〜2,700〜3,900本** |
+| **有料ユーザー** | Lite 固定（レジュメのみ Flash） | TPM / RPM | 実質無制限 | 実質無制限 |
 
-> 無料ユーザーは Lite の RPD（〜1,500）÷ 11 リクエスト ≈ 136 本/日が上限。最初の数回は Flash 品質で処理される。
+> 無料ユーザーも有料ユーザーも翻訳等の大半のフェーズは Lite で処理される（ハイブリッド構成、§1 参照）。無料ユーザーは Lite の RPD（〜1,500）÷ 11 リクエスト ≈ 136 本/日が上限。レジュメ生成のみ TierManager のティア追従の対象外で常に Flash 品質。
 
 ### 処理速度（Phase 4 翻訳）
 
@@ -126,10 +134,10 @@ AL論文（9セクション / 17バッチ）、`concurrent=4`（2026-05-11 実�
 
 | 条件 | Phase 4 完走時間 |
 |---|---|
-| 有料 + Flash、concurrent=4 | 119s〜335s（平均 227s / 約4分） |
-| 無料 + Lite（フォールバック後） | 同等（モデル間の処理時間差は小さい） |
+| 有料 + Lite、concurrent=4（ハイブリッド構成の現行既定） | 119s〜335s（平均 227s / 約4分。計測当時は Flash だが、モデル間の処理時間差は小さいため目安として有効） |
+| 無料 + Lite | 同等（モデル間の処理時間差は小さい） |
 
-Flash と Lite の処理時間差はほぼない。**品質差**（文脈の深さ・訳の正確さ）が主な違い。
+Flash と Lite の処理時間差はほぼない。翻訳フェーズは有料・無料とも Lite で処理されるため、**品質差**は主にレジュメ生成の有無（ティア非追従の `DEFAULT_MODEL_RESUME`）による。
 
 ---
 
@@ -146,7 +154,10 @@ Flash と Lite の処理時間差はほぼない。**品質差**（文脈の深�
 
 ## 5. モデルのトークン仕様と Phase 4 プロンプト収支（2026-07-10 調査）
 
-Phase 4 翻訳で実際に使うモデル（`DEFAULT_MODEL` = `gemini-3.5-flash`、`--lite`/フォールバック時 `DEFAULT_MODEL_FREE` = `gemini-3.1-flash-lite`）の入出力トークン仕様と、現状の翻訳プロンプト 1 バッチあたりのトークン収支をまとめる。設計判断（ウィンドウ拡大やレジュメ注入の是非）はここでは行わず、事実と試算のみを記す。
+Phase 4 翻訳で実際に使うモデル（`DEFAULT_MODEL` = `gemini-3.1-flash-lite`、`--lite`/フォールバック時 `DEFAULT_MODEL_FREE` = 同じく `gemini-3.1-flash-lite`）の入出力トークン仕様と、現状の翻訳プロンプト 1 バッチあたりのトークン収支をまとめる。設計判断（ウィンドウ拡大やレジュメ注入の是非）はここでは行わず、事実と試算のみを記す。
+
+> [!NOTE]
+> 以下のコスト試算（§5.2〜§5.3）は 2026-07-10 調査時点、すなわち `DEFAULT_MODEL = gemini-3.5-flash` だったハイブリッド化前の数値。2026-07-11 のハイブリッド既定化（§1 参照）後は Phase 4 翻訳が `gemini-3.1-flash-lite`（Flash 比で入力 1/6・出力 1/6 の単価）で実行されるため、実際のコストは本節記載額より大幅に低い。数値の読み方は §1 のハイブリッド構成の注記と併せて解釈すること。
 
 ### 5.1 モデルのトークン上限と料金（2026-07-10 確認）
 
@@ -167,6 +178,12 @@ Phase 4 翻訳で実際に使うモデル（`DEFAULT_MODEL` = `gemini-3.5-flash`
 > `gemini-3.5-flash` は 2026-05-19 の GA 化に伴い $0.50/$3.00 → **$1.50/$9.00** に改定された（`gemini-3-flash-preview` 比 3 倍、Lite 比 6 倍）。正本 `~/Code/shared/gemini_models.md` §5 は 2026-07-10 に更新・同期済み。
 
 ### 5.2 Phase 4 翻訳プロンプトの現状収支（1 バッチ）
+
+> [!NOTE]
+> 以下 §5.2・§5.3 の実測値・記述は **2026-07-10 時点（翻訳コンテキスト Stage 1 実装前）のスナップショット**であり、当時のプロンプト構成での測定を歴史的記録として残す。現況との差分は次のとおり：
+> - **`resume_content`**: Stage 1（2026-07-11）で論文モードでも文献レジュメを毎バッチ注入するよう配線済み（下表・§5.3(b) の「なし／未注入」は Stage 1 前の状態）。
+> - **`previous_translation`**: Stage 1 でスライディングウィンドウを「3 件 × 200 字の断片」から「連続 ~2,000 字（段落丸ごと）」へ変更済み（下表・§5.3(a) の「3 件 × 200 字」は Stage 1 前の状態）。
+> - **`glossary`**: Stage 2（2026-07-12）で用語レイヤーに定義文が載るようになり、定義付きエントリは数十字程度増える（`docs/superpowers/specs/2026-07-11-translation-context-stage2-term-layer-design.md`）。
 
 バッチ構成の決まり方（`core/engine/p4_translate/parallel_translator.py` + `core/llm_client.py::apply_tier_settings`）:
 

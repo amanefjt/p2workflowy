@@ -140,13 +140,13 @@ class SessionState:
 
 def load_glossary_csv(path: str | Path | None = None) -> dict:
     """glossary.csv を読み込んで辞書形式で返す。
-    
+
     形式: 1列目=英語, 2列目=日本語 （ヘッダー行は自動スキップ）
     ヘッダー判定: 1行目の1列目が小文字化して既知のヘッダーキーワードと一致する場合スキップ。
     """
     if path is None:
         path = PROJECT_ROOT / "data" / "glossary.csv"
-    
+
     path = Path(path)
     if not path.exists():
         return {}
@@ -168,3 +168,35 @@ def load_glossary_csv(path: str | Path | None = None) -> dict:
             if key:  # 空キーは除外
                 glossary[key] = val
     return glossary
+
+def load_glossary_entries(path: str | Path | None = None) -> list[dict]:
+    """glossary CSV を en/ja/definition の 3 列で読み込む。
+
+    load_glossary_csv（en→ja）とは別に、definition 列を保持する。
+    書籍モードの global_glossary.csv（definition 列付き）から定義を取り出すために使う。
+    ヘッダー判定・空キー除外は load_glossary_csv と同一。
+    """
+    if path is None:
+        path = PROJECT_ROOT / "data" / "glossary.csv"
+    path = Path(path)
+    if not path.exists():
+        return []
+
+    _HEADER_KEYWORDS = {"en", "english", "englishterm", "word", "term", "source", "original"}
+    entries: list[dict] = []
+    with open(path, "r", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        for i, row in enumerate(reader):
+            if len(row) < 2:
+                continue
+            if i == 0 and row[0].strip().lower() in _HEADER_KEYWORDS:
+                continue
+            en = row[0].strip()
+            if not en:
+                continue
+            entries.append({
+                "en": en,
+                "ja": row[1].strip(),
+                "definition": row[2].strip() if len(row) >= 3 else "",
+            })
+    return entries

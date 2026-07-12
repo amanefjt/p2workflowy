@@ -1,5 +1,6 @@
 from core.models import TreeNode
 from core.engine.p4_translate.prompt_builder import TranslationPromptBuilder, WINDOW_MAX_CHARS
+from core.engine.p4_translate.term_layer import TermEntry
 
 
 def _node(text, role="p"):
@@ -43,3 +44,16 @@ def test_non_p_roles_are_skipped():
     nodes = [_node("heading text", role="h2"), _node("para text")]
     out = _builder().format_previous_translation(nodes)
     assert "heading text" not in out and "para text" in out
+
+
+def test_format_glossary_empty_default():
+    # glossary 未指定なら空文字列
+    assert TranslationPromptBuilder("tpl").format_glossary() == ""
+
+
+def test_format_glossary_renders_term_entries():
+    entries = [TermEntry("displace", "転位", "秩序からずらす", "local")]
+    b = TranslationPromptBuilder("tpl", glossary=entries)
+    out = b.format_glossary()
+    assert "- displace → 転位：秩序からずらす" in out
+    assert "# 用語集 (Glossary)" in out

@@ -271,8 +271,12 @@ def call_gemini(
                 if hasattr(chunk, 'text') and chunk.text:
                     full_response_text += chunk.text
             
-            if chunk is None and not full_response_text:
-                raise RuntimeError("APIから空のレスポンスが返されました。")
+            # テキスト出力が空なら失敗として扱いリトライさせる。
+            # chunk が返っていても finish_reason=MALFORMED_RESPONSE / MAX_TOKENS / SAFETY 等で
+            # text が 0 トークンのことがあり、これを無言で "" として返すとレジュメ欠落など
+            # 静かな品質劣化を招く（troubleshooting_log I-19）。空出力は常に異常とみなす。
+            if not full_response_text:
+                raise RuntimeError("APIから空のレスポンス（テキスト0トークン）が返されました。")
 
             end_time = time.time()
             duration = end_time - start_time
@@ -368,8 +372,12 @@ async def call_gemini_async(
             except asyncio.TimeoutError:
                 raise RuntimeError(f"Gemini API 応答タイムアウト (600秒超過)")
             
-            if chunk is None and not full_response_text:
-                raise RuntimeError("APIから空のレスポンスが返されました。")
+            # テキスト出力が空なら失敗として扱いリトライさせる。
+            # chunk が返っていても finish_reason=MALFORMED_RESPONSE / MAX_TOKENS / SAFETY 等で
+            # text が 0 トークンのことがあり、これを無言で "" として返すとレジュメ欠落など
+            # 静かな品質劣化を招く（troubleshooting_log I-19）。空出力は常に異常とみなす。
+            if not full_response_text:
+                raise RuntimeError("APIから空のレスポンス（テキスト0トークン）が返されました。")
 
             end_time = time.time()
             duration = end_time - start_time

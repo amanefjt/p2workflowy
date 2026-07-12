@@ -232,3 +232,13 @@ Phase 2 (Meta Generation) において、文献の第一ページからタイト
   - **教訓**: モデルティアのデフォルト値を変更する際は、purpose 別ルーティング（resume 等）を経由せず定数を直接参照しているコードパスが他にないか、変更前に横断確認する必要がある。今回は Stage 2 の自己レビューで発見できたが、次回同種の変更（`DEFAULT_MODEL_*` 系の値変更）では `grep -rn "DEFAULT_MODEL\b" core/` 等での横断確認をチェックリスト化することを検討する。
 - **検証**: `tests/unit/test_config.py`（`load_glossary_entries` 4 件）、`tests/unit/test_term_layer.py`（`build_term_layer`/`format_term_layer` 10 件）、`TranslationPromptBuilder` 関連 2 件、`coreprompts.json` の Stage 2 既定値 2 件、書籍 resume routing 回帰 1 件を含む新規テストを追加。単体テスト 211 → 237 件全合格（回帰なし）。ゴールデン構造回帰・書籍スモーク（resume モデル表示の実地確認）はユーザー実施予定（有料 API 実行を伴うため本タスクのスコープ外）。
 - **判断保留⑤（許容判断として確定）**: Web 版で管理者パスコード経由のサーバー側キー（無料モード）を使う場合、レジュメ生成が `DEFAULT_MODEL_RESUME`（3.5-flash、無料枠の対象外）を消費する。ハイブリッド構成による訳質向上のメリットを優先し、現時点ではこれを許容する。コスト面で問題が顕在化した場合は、無料モード時のみ resume も lite にフォールバックする分岐を別途検討する。
+
+### I-19. thinking モデルの空レスポンス（finish_reason=MALFORMED_RESPONSE 等）を call_gemini が無言で "" として返し、レジュメが静かに欠落する
+
+- **事象**: Stage 2 マージ後の論文 NST E2E 実行（ハイブリッド既定・PAID）で、`resume_content` が 0 文字になり、出力 `_p2.md` にレジュメが載らず、かつ **翻訳プロンプトにもレジュメが届かない**状態が発生した。ログ上は `[Phase 2] レジュメ生成完了 (0 文字)` とだけ出て、例外・リトライは一切発生していなかった。A/B の armB（同一入力・同一 3.5-flash）では 11,450 字のレジュメが生成できていたため、間欠的な失敗。
+- **根本原因**: Gemini API が `gemini-3.5-flash`（thinking=High）のレジュメ生成で **`finish_reason=MALFORMED_RESPONSE`（候補トークン 0）** を返した（ログに `MALFORMED_RESPONSE is not a valid FinishReason` / `Output: 0tk`）。これは多くの場合 transient なモデル側の生成失敗。ところが `core/llm_client.py` の空レスポンス判定が `if chunk is None and not full_response_text:` と狭く、**「chunk は届いているが text だけ空」**（usage_metadata 付きの最終 chunk はあるが `chunk.text` が全て空）のケースを異常と見なさず、`return full_response_text`（= ""）で無言で空を返していた。sync（`call_gemini` 旧 `:274`）・async（`call_gemini_async` 旧 `:371`）の両方に同じ狭い判定があった。
+  - I-17（max_output_tokens=8192 過小による MAX_TOKENS 途中切断）とは別物。今回は Output 0 トークンで、token 枯渇ではなく finish_reason 異常。ただし「thinking モデルが本文テキストを 1 文字も返さない」という同じ失敗表面を共有する。
+- **影響**: レジュメ生成が間欠的に無言で失敗し、① Phase 4 翻訳がレジュメ文脈なしで実行され訳質が劣化、② 出力にレジュメが載らない、という静かな品質劣化が起きる。間欠バグのため大半の実行では表面化せず、**比較読み等の評価を交絡させる**（レジュメ有無が意図せず混入する）危険があった。実際に Stage 2 の用語レイヤー比較読みがこの状態で行われ、評価をやり直すことになった。
+- **対策**: sync/async 両方の空判定を `if not full_response_text:` に広げ、**テキスト出力が空なら常に `RuntimeError` を送出**するようにした（`core/llm_client.py`）。これによりリトライループ（既定 `max_retries=5`）が拾い、transient な MALFORMED_RESPONSE は再試行で回復し、恒久的に空なら無言で "" を返さず例外で顕在化する。全呼び出し（レジュメ・キーワード・翻訳・DNA）で「空テキスト＝異常」は共通して正しい。
+- **検証**: `tests/unit/test_llm_client.py` に sync/async の「空テキスト応答 → RuntimeError」2 件と、正常応答がそのまま返る sync 1 件を追加（計 3 件）。単体 237 → 240 全合格。修正後の NST 再実行でレジュメ生成が回復することを確認する（ユーザー実施の再比較読みの前提）。
+- **教訓**: ストリーミング応答の「完了はしたが本文が空」は `chunk is None` では捕捉できない。生成系 API 呼び出しでは「空出力は常に失敗」として扱い、finish_reason の種類（MAX_TOKENS / MALFORMED_RESPONSE / SAFETY / RECITATION）に関わらずリトライ・顕在化させるのが安全。

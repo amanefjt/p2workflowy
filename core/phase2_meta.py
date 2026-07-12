@@ -114,7 +114,7 @@ def extract_keywords(text: str, api_key: str | None = None, expertise: str = "�
         expertise: 専門分野
 
     Returns:
-        list[dict]: [{"en": "...", "ja": "...", "definition": "..."}, ...]
+        list[dict]: [{"en": "...", "ja": "..."}, ...]
     """
     prompts = load_coreprompts()
     prompt_tpl = prompts["KEYWORD_EXTRACTION_PROMPT"]
@@ -192,7 +192,6 @@ def merge_with_glossary(
             keyword_dict[key] = {
                 "en": en_term,
                 "ja": ja_term,
-                "definition": "",
             }
 
     merged = list(keyword_dict.values())

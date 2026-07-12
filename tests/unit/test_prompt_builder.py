@@ -52,8 +52,8 @@ def test_format_glossary_empty_default():
 
 
 def test_format_glossary_renders_term_entries():
-    entries = [TermEntry("displace", "転位", "秩序からずらす", "local")]
+    entries = [TermEntry("displace", "転位", "local")]
     b = TranslationPromptBuilder("tpl", glossary=entries)
     out = b.format_glossary()
-    assert "- displace → 転位：秩序からずらす" in out
+    assert "- displace → 転位" in out
     assert "# 用語集 (Glossary)" in out

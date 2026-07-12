@@ -8,20 +8,19 @@ def _write_csv(path, rows):
         w.writerows(rows)
 
 
-def test_reads_three_columns(tmp_path):
+def test_reads_three_columns_ignores_third(tmp_path):
     p = tmp_path / "g.csv"
     _write_csv(p, [["en", "ja", "definition"],
                    ["displace", "転位させる", "確立した秩序からずらす意"]])
     entries = load_glossary_entries(p)
-    assert entries == [{"en": "displace", "ja": "転位させる",
-                        "definition": "確立した秩序からずらす意"}]
+    assert entries == [{"en": "displace", "ja": "転位させる"}]
 
 
-def test_two_column_csv_yields_empty_definition(tmp_path):
+def test_two_column_csv(tmp_path):
     p = tmp_path / "g.csv"
     _write_csv(p, [["agency", "行為主体性"]])   # ヘッダーなし・2 列
     entries = load_glossary_entries(p)
-    assert entries == [{"en": "agency", "ja": "行為主体性", "definition": ""}]
+    assert entries == [{"en": "agency", "ja": "行為主体性"}]
 
 
 def test_missing_file_returns_empty(tmp_path):
@@ -34,4 +33,4 @@ def test_skips_header_and_blank_keys(tmp_path):
                    ["", "空キー", "x"],             # 空キーは除外
                    ["ethos", "エートス", ""]])
     entries = load_glossary_entries(p)
-    assert entries == [{"en": "ethos", "ja": "エートス", "definition": ""}]
+    assert entries == [{"en": "ethos", "ja": "エートス"}]

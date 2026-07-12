@@ -134,7 +134,7 @@ class BookManager:
         if self.global_glossary:
             import csv
             with open(glossary_path, "w", encoding="utf-8", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=["en", "ja", "definition"])
+                writer = csv.DictWriter(f, fieldnames=["en", "ja"], extrasaction="ignore")
                 writer.writeheader()
                 writer.writerows(self.global_glossary)
         

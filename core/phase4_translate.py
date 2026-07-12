@@ -95,7 +95,7 @@ async def _run_phase4_async(
             p2_data = json.load(f)
             resume_context = p2_data.get("resume_content", "")
             keywords_data = p2_data.get("keywords_data", [])
-    # 用語レイヤー: 本文抽出（定義付き）＋ glossary CSV（書籍は定義列付き）を統合
+    # 用語レイヤー: 本文抽出 ＋ glossary CSV を en→ja 対応表として統合（定義文は保持しない）
     term_entries = build_term_layer(keywords_data, glossary_entries)
 
     # エンジンの初期化

@@ -170,10 +170,9 @@ def load_glossary_csv(path: str | Path | None = None) -> dict:
     return glossary
 
 def load_glossary_entries(path: str | Path | None = None) -> list[dict]:
-    """glossary CSV を en/ja/definition の 3 列で読み込む。
+    """glossary CSV を en/ja の 2 列で読み込む（3 列目以降は無視）。
 
-    load_glossary_csv（en→ja）とは別に、definition 列を保持する。
-    書籍モードの global_glossary.csv（definition 列付き）から定義を取り出すために使う。
+    load_glossary_csv（dict を返す）とは別に、build_term_layer が扱う list[dict] 形式で返す。
     ヘッダー判定・空キー除外は load_glossary_csv と同一。
     """
     if path is None:
@@ -197,6 +196,5 @@ def load_glossary_entries(path: str | Path | None = None) -> list[dict]:
             entries.append({
                 "en": en,
                 "ja": row[1].strip(),
-                "definition": row[2].strip() if len(row) >= 3 else "",
             })
     return entries

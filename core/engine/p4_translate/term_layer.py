@@ -1,8 +1,12 @@
 """翻訳コンテキストの「② 術語＝統合用語レイヤー」。
 
-glossary（訳語対応）と local_definitions（本文抽出の術語定義）を単一の
-構造化レイヤーに統合する。詳細は
-docs/superpowers/specs/2026-07-11-translation-context-stage2-term-layer-design.md 参照。
+本文抽出キーワードと glossary CSV を単一の en→ja 対応レイヤーに統合する。
+
+注: 当初（Stage 2）は語の「定義文」も翻訳プロンプトに注入していたが、NST/AL 2 本の
+A/B（定義あり vs なし・他条件固定）で定義注入に翻訳品質上の効果が確認できず（むしろ
+過剰適合・忠実性低下の副作用）、定義レイヤーは撤去した。訳語対応（en→ja）は両版で機能
+していたため維持する。詳細は
+docs/superpowers/specs/2026-07-11-translation-context-stage2-term-layer-design.md（結果節）参照。
 """
 from dataclasses import dataclass
 
@@ -11,7 +15,6 @@ from dataclasses import dataclass
 class TermEntry:
     en: str
     ja: str
-    definition: str = ""
     source: str = "local"   # "local"（本文抽出）| "glossary"（glossary CSV）
 
 
@@ -20,7 +23,6 @@ def build_term_layer(keywords_data, glossary_entries):
 
     - dedup キー: en.lower()
     - 訳語 ja: glossary CSV 優先（ユーザー/書籍が権威）
-    - 定義 definition: local（本文抽出）優先。local が空なら CSV 定義で補完。
     """
     merged: dict[str, TermEntry] = {}
 
@@ -32,46 +34,33 @@ def build_term_layer(keywords_data, glossary_entries):
         merged[en.lower()] = TermEntry(
             en=en,
             ja=(kw.get("ja") or "").strip(),
-            definition=(kw.get("definition") or "").strip(),
             source="local",
         )
 
-    # 2. glossary CSV を重ねる（ja は CSV 優先、definition は local 優先で空なら補完）
+    # 2. glossary CSV を重ねる（ja は CSV 優先）
     for g in glossary_entries or []:
         en = (g.get("en") or "").strip()
         if not en:
             continue
         key = en.lower()
         g_ja = (g.get("ja") or "").strip()
-        g_def = (g.get("definition") or "").strip()
         if key in merged:
-            e = merged[key]
             if g_ja:
-                e.ja = g_ja
-            if not e.definition and g_def:
-                e.definition = g_def
+                merged[key].ja = g_ja
         else:
-            merged[key] = TermEntry(en=en, ja=g_ja, definition=g_def, source="glossary")
+            merged[key] = TermEntry(en=en, ja=g_ja, source="glossary")
 
     return list(merged.values())
 
 
 def format_term_layer(entries) -> str:
-    """用語レイヤーを翻訳プロンプトの <glossary> 用に整形する。
-
-    定義付きの語（＝特殊用法・高価値）を先頭に、定義なしを後に並べる。
-    """
+    """用語レイヤーを翻訳プロンプトの <glossary> 用に整形する（en→ja 対応表）。"""
     if not entries:
         return ""
-    with_def = [e for e in entries if e.definition]
-    without_def = [e for e in entries if not e.definition]
     lines = [
         "# 用語集 (Glossary)",
-        "指定された日本語訳を優先的に使用してください。定義が付された語は、"
-        "この文献での特定の含意を示すため、訳語選択の際に踏まえてください。",
+        "指定された日本語訳を優先的に使用してください。",
     ]
-    for e in with_def:
-        lines.append(f"- {e.en} → {e.ja}：{e.definition}")
-    for e in without_def:
+    for e in entries:
         lines.append(f"- {e.en} → {e.ja}")
     return "\n".join(lines)

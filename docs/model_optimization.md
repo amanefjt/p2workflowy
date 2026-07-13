@@ -23,6 +23,8 @@ V3（Golden Rewrite）では用途別に**動的ルーティング**を採用。
 > [!NOTE]
 > **ハイブリッド構成が既定（2026-07-11、Stage 2）**: レジュメ生成（論文全体・書籍全体・章単位）のみ `DEFAULT_MODEL_RESUME`（`gemini-3.5-flash`）を使い、翻訳を含むそれ以外の全フェーズは `DEFAULT_MODEL`（`gemini-3.1-flash-lite`）を使う。根拠は 2026-07-11 実施の Stage 1 モデル A/B（NST 論文）で Arm B（ハイブリッド）採用を決定したこと。GA 移行後の価格改定で Flash と Flash-Lite の価格差が約 6 倍に拡大したため、品質影響が大きいレジュメ生成のみ高モデルを残し、他は Lite に統一した。
 > `DEFAULT_MODEL_RESUME` は TierManager のティア追従の対象外（`core/llm_client.py::get_default_model("resume")`）。無料ティアへダウンシフトした場合でもレジュメ生成は `gemini-3.5-flash` のまま実行され、これは無料枠のレート制限内に収まる想定。詳細は `docs/management/requirements_log.md`（2026-07-11 の Stage 1 A/B 記録）を参照。
+>
+> **`gemini-3.5-flash` の単発リクエスト実効入力上限は `gemini_models.md` 記載の公称値（1,048,576 tok）よりかなり低い（2026-07-13 実測）**: 実測で約 186,000〜187,000 tok（文字数にして概ね 735,000 字前後）を超えると thinking の有無・`max_output_tokens` に関わらず一貫して `400 INVALID_ARGUMENT` になる（`gemini-3.1-flash-lite` は同じ入力で成功）。書籍モードの Phase 0 全文スキャン（`BookManager._generate_global_context`）はこの規模を容易に超えるため、`core/book_manager.py::RESUME_MODEL_SAFE_CHAR_LIMIT`（60万字）超で resume モデルを使わず `DEFAULT_MODEL` にフォールバックするガードを実装済み（章単位のレジュメは章テキスト規模が閾値未満のため対象外）。詳細は `troubleshooting_log.md` I-20。
 
 ### フェーズ別ルーティング表
 

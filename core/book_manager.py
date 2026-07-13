@@ -11,6 +11,14 @@ from .engine.p1_ingest.pdf_splitter import PDFSplitter
 from .engine.p3_structure.state_integrator import StateIntegrator
 from .llm_client import call_gemini, get_default_model, load_coreprompts, GeminiTier, apply_tier_settings
 
+# gemini-3.5-flash は公称入力上限（1,048,576 tok）とは別に、単発リクエストで
+# 実測 ~186,000〜187,000 tok（本文字数にして概ね 735,000 字前後）を超えると
+# 400 INVALID_ARGUMENT を返す（ドキュメント未記載の実挙動。troubleshooting_log I-20）。
+# 書籍全文スキャンはこの規模を容易に超えるため、超過時は resume モデルを使わず
+# 既定モデル（gemini-3.1-flash-lite）にフォールバックする。安全マージンとして
+# 実測しきい値（734,997字=OK / 738,015字=FAIL）よりかなり低い値を設定。
+RESUME_MODEL_SAFE_CHAR_LIMIT = 600_000
+
 class BookManager:
     """書籍全体のライフサイクル（全体解析 -> 分割 -> 処理 -> 統合）を管理する。"""
 
@@ -70,6 +78,9 @@ class BookManager:
                                      .replace("{text}", full_text)
 
         resume_model = self.model or get_default_model("resume")
+        if not self.model and len(full_text) > RESUME_MODEL_SAFE_CHAR_LIMIT:
+            print_log(f"  [BookManager] 全文が{RESUME_MODEL_SAFE_CHAR_LIMIT}字超のため resume モデルの実効入力上限を回避し既定モデルへフォールバック")
+            resume_model = get_default_model("default")
         self.global_resume = call_gemini(resume_prompt, api_key=self.api_key, model=resume_model, thinking_level="High")
 
         # 2. 全体用語集生成

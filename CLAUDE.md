@@ -122,7 +122,7 @@ Phase 2 が抽出する DNA には `intro_pre_heading`（最初の節タイト�
 
 ## 設計原則
 
-- **入力ルーティングと判断優先順位**: デジタル PDF（`is_docling_viable()`=True）は Docling ルートが正式経路で、VLM OCR はスキャン PDF（見開き含む）用。VLM 経路内の判断優先順位は `VLM の論理役割判断 > 物理証拠（フォント・座標）> 幾何的ヒント` で、OCR 補正は「VLM が特定した位置の Native テキストで肉付けする」方針を守る。※2026-07-10 時点、VLM 経路は機能停止中（`troubleshooting_log.md` I-15/I-16）。修理と経路の公式化は Spec B（`docs/superpowers/specs/2026-07-10-book-mode-vlm-routing-design.md`）で対応予定。
+- **入力ルーティングと判断優先順位**: 書籍は書籍単位で1回だけ判定する（①ユーザーが `pdf_mode` を明示指定→それを尊重、②見開きスキャン→VLM、③デジタルPDF（`is_docling_viable()`=True）→Docling、④それ以外→VLM）。論文（非書籍）PDF は Phase 1（`phase1_preprocessor.py`）が同じ優先順位で1文書ごとに判定する。Phase 1 が実際に使ったルート（`docling`/`vlm`/`native_fallback`）は `phase1_route.json` に記録され、Phase 3 は `pdf_mode` 指定値ではなくこの実ルートを見て構造化方式（VLM Markdown 正規表現 / Docling role 構造化 / ChapterParser・TOC フォールバック）を切り替える。VLM 経路内の判断優先順位は `VLM の論理役割判断 > 物理証拠（フォント・座標） > 幾何的ヒント` で、OCR 補正は「VLM が特定した位置の Native テキストで肉付けする」方針を守る。（Spec B 実装済み: `docs/superpowers/specs/2026-07-10-book-mode-vlm-routing-design.md`）
 - **責務境界**: `main.py` はエントリーポイント専任。`run_pipeline` はオーケストレーション専任。個別アルゴリズムは各フェーズモジュールに閉じ込める。
 - **出力形式**: `_p2.md` / `_p2.txt` が標準。Workflowy では英語ブロックを親子ネスト、日本語ブロックを並列展開する非対称階層を維持する。
 - **エクスポート不変条件**: `References` 系セクションは出力から除外し、`Appendix` は保持する。注釈ノードは言語ブロック末尾へ再配置する。

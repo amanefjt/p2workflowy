@@ -211,20 +211,6 @@ class OCRManager:
         
         return new_img
 
-    async def process_page_vlm(self, pdf_path: str, page_num: int) -> str:
-        """（互換用）1ページを Gemini VLM OCR で処理する。"""
-        async with self.semaphore:
-            doc = fitz.open(pdf_path)
-            try:
-                page = doc[page_num]
-                pix = page.get_pixmap(dpi=200)
-                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            finally:
-                doc.close()
-
-            # VLM 呼び出し
-            return await self._call_gemini_raw([img, self.VLM_PROMPT])
-
     async def _call_gemini_raw(self, content: list) -> str:
         try:
             result = await call_gemini_async(

@@ -199,6 +199,78 @@ class TestGlobalResumeHandoff:
 
 
 # ============================================================
+# 書籍単位ルーティングの run() 配線（I-16 上層）
+# ============================================================
+
+def _run_with_routing_mocks(manager, is_spread, is_docling_ok, **run_kwargs):
+    """is_spread_pdf / is_docling_viable をモックして manager.run() を実行し、
+    run_pipeline に渡された kwargs を captured で返す。"""
+    ch_pdf = Path(manager.input_path).parent / "ch1.pdf"
+    ch_pdf.write_bytes(b"%PDF-1.4 dummy")
+    splitter = MagicMock()
+    splitter.split.return_value = [{"title": "Ch1", "path": str(ch_pdf), "role": "chapter"}]
+
+    captured = {}
+
+    def fake_run_pipeline(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    with patch("core.book_manager.PDFSplitter", return_value=splitter), \
+         patch("core.book_manager.apply_tier_settings"), \
+         patch("core.engine.p1_ingest.pdf_ingester.diagnose_pdf_quality", return_value=True), \
+         patch("core.engine.p1_ingest.spread_splitter.is_spread_pdf", return_value=is_spread), \
+         patch("core.engine.p1_ingest.spread_splitter.split_spread_pdf", return_value=str(ch_pdf)), \
+         patch("core.engine.p1_ingest.docling_ingester.is_docling_viable", return_value=is_docling_ok), \
+         patch("core.pipeline.run_pipeline", side_effect=fake_run_pipeline):
+        try:
+            manager.run(max_chapters=1, **run_kwargs)
+        except Exception:
+            pass  # 統合フェーズ以降の失敗は本テストの関心外
+    return captured
+
+
+class TestBookLevelRouting:
+    def _make_ready_manager(self, tmp_path, title, fp):
+        manager = make_manager(tmp_path)
+        manager.book_title = title
+        manager.fingerprint = fp
+        manager.session_dir = tmp_path / "book_sessions" / f"{title}_{fp}"
+        manager.session_dir.mkdir(parents=True, exist_ok=True)
+        (manager.session_dir / "global_context.json").write_text(
+            json.dumps({"resume": "R", "glossary": [], "book_title": title}),
+            encoding="utf-8",
+        )
+        return manager
+
+    def test_explicit_pdf_mode_is_respected_not_discarded(self, tmp_path):
+        """I-16: 明示指定された pdf_mode が pop されて捨てられず章パイプラインに渡る。"""
+        manager = self._make_ready_manager(tmp_path, "routebook1", "fp1")
+        captured = _run_with_routing_mocks(
+            manager, is_spread=False, is_docling_ok=True, pdf_mode="full_vlm"
+        )
+        assert captured.get("pdf_mode") == "full_vlm"
+
+    def test_default_docling_viable_uses_hybrid_not_hardcoded_full_vlm(self, tmp_path):
+        """I-16: pdf_mode 未指定・非見開き・Docling可能な書籍は hybrid（Doclingルート）になる。"""
+        manager = self._make_ready_manager(tmp_path, "routebook2", "fp2")
+        captured = _run_with_routing_mocks(manager, is_spread=False, is_docling_ok=True)
+        assert captured.get("pdf_mode") == "hybrid"
+
+        routing_file = manager.session_dir / "routing_decision.json"
+        assert routing_file.exists()
+        data = json.loads(routing_file.read_text(encoding="utf-8"))
+        assert data["pdf_mode"] == "hybrid"
+        assert data["reason"] == "docling_viable"
+
+    def test_spread_pdf_forces_full_vlm_even_if_docling_viable(self, tmp_path):
+        """I-16: 見開きスキャンはDocling可能でもVLMルートを優先する（規則②>③）。"""
+        manager = self._make_ready_manager(tmp_path, "routebook3", "fp3")
+        captured = _run_with_routing_mocks(manager, is_spread=True, is_docling_ok=True)
+        assert captured.get("pdf_mode") == "full_vlm"
+
+
+# ============================================================
 # book_sessions クリーンアップ
 # ============================================================
 
@@ -249,3 +321,33 @@ class TestBookSessionCleanup:
             manager._cleanup_old_book_sessions()
 
         assert len(list(book_sessions_dir.iterdir())) == before
+
+
+# ============================================================
+# 書籍単位ルーティング規則（①〜④）
+# ============================================================
+
+class TestDecideBookPdfMode:
+    def test_explicit_pdf_mode_takes_priority(self):
+        """規則①: ユーザー明示指定は他の判定より優先される。"""
+        from core.book_manager import _decide_book_pdf_mode
+        mode, reason = _decide_book_pdf_mode("full_vlm", is_spread=False, is_docling_ok=True)
+        assert (mode, reason) == ("full_vlm", "explicit_pdf_mode")
+
+    def test_spread_pdf_forces_vlm_even_if_docling_viable(self):
+        """規則②>③: 見開きスキャンはDocling可能でもVLMを優先する。"""
+        from core.book_manager import _decide_book_pdf_mode
+        mode, reason = _decide_book_pdf_mode(None, is_spread=True, is_docling_ok=True)
+        assert (mode, reason) == ("full_vlm", "spread_pdf")
+
+    def test_docling_viable_non_spread_uses_hybrid(self):
+        """規則③: 見開きでなくDocling可能ならDoclingルート（hybrid=Docling優先）。"""
+        from core.book_manager import _decide_book_pdf_mode
+        mode, reason = _decide_book_pdf_mode(None, is_spread=False, is_docling_ok=True)
+        assert (mode, reason) == ("hybrid", "docling_viable")
+
+    def test_non_viable_non_spread_falls_back_to_vlm(self):
+        """規則④: 見開きでもDocling可能でもない（劣化スキャン等）ならVLM。"""
+        from core.book_manager import _decide_book_pdf_mode
+        mode, reason = _decide_book_pdf_mode(None, is_spread=False, is_docling_ok=False)
+        assert (mode, reason) == ("full_vlm", "docling_not_viable")

@@ -181,7 +181,7 @@ def main():
             output_paths = manager.run(
                 glossary_path=args.glossary,
                 thinking_level=args.thinking,
-                pdf_mode=args.pdf_mode if args.pdf_mode else "hybrid",
+                pdf_mode=args.pdf_mode,
                 tier="free" if (args.free or args.lite) else "paid",
                 heavy_ocr=args.heavy_ocr,
                 max_pages=args.max_pages,

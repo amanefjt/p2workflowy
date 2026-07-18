@@ -19,6 +19,28 @@ from .llm_client import call_gemini, get_default_model, load_coreprompts, Gemini
 # 実測しきい値（734,997字=OK / 738,015字=FAIL）よりかなり低い値を設定。
 RESUME_MODEL_SAFE_CHAR_LIMIT = 600_000
 
+
+def _decide_book_pdf_mode(
+    explicit_pdf_mode: Optional[str], is_spread: bool, is_docling_ok: bool
+) -> tuple[str, str]:
+    """書籍単位のルーティング規則（①〜④）を判定する。
+
+    ① ユーザーが pdf_mode を明示指定 → それを尊重
+    ② 見開きスキャン → VLM ルート（Docling の読み順が未検証のため保守的に優先）
+    ③ Docling 可能（デジタルPDF）→ Docling ルート
+    ④ それ以外（スキャン等）→ VLM ルート
+
+    戻り値は (pdf_mode, reason)。reason は routing_decision.json とログに記録する。
+    """
+    if explicit_pdf_mode is not None:
+        return explicit_pdf_mode, "explicit_pdf_mode"
+    if is_spread:
+        return "full_vlm", "spread_pdf"
+    if is_docling_ok:
+        return "hybrid", "docling_viable"
+    return "full_vlm", "docling_not_viable"
+
+
 class BookManager:
     """書籍全体のライフサイクル（全体解析 -> 分割 -> 処理 -> 統合）を管理する。"""
 
@@ -154,10 +176,34 @@ class BookManager:
         # 1. PDF 分割
         # 見開きスキャンPDFは分割してから章分割・処理に渡す
         from .engine.p1_ingest.spread_splitter import is_spread_pdf, split_spread_pdf
+        from .engine.p1_ingest.docling_ingester import is_docling_viable
+
         pdf_for_splitting = str(self.input_path)
-        if is_spread_pdf(pdf_for_splitting):
+        is_spread = is_spread_pdf(pdf_for_splitting)
+        if is_spread:
             print_log("  [BookManager] 見開きスキャンPDFを検出。単ページに分割します...")
             pdf_for_splitting = split_spread_pdf(pdf_for_splitting)
+
+        # 書籍単位のルーティング決定（①〜④）: ユーザー明示指定 pop はここで一度だけ行う
+        explicit_pdf_mode = pipeline_kwargs.pop("pdf_mode", None)
+        is_docling_ok = is_docling_viable(str(self.input_path))
+        book_pdf_mode, routing_reason = _decide_book_pdf_mode(explicit_pdf_mode, is_spread, is_docling_ok)
+        print_log(
+            f"  [BookManager] 入力ルーティング決定: pdf_mode={book_pdf_mode} "
+            f"(理由: {routing_reason}, spread={is_spread}, docling_viable={is_docling_ok}, "
+            f"explicit={explicit_pdf_mode})"
+        )
+        routing_path = self.session_dir / "routing_decision.json"
+        routing_path.write_text(
+            json.dumps({
+                "pdf_mode": book_pdf_mode,
+                "reason": routing_reason,
+                "is_spread": is_spread,
+                "is_docling_viable": is_docling_ok,
+                "explicit_pdf_mode": explicit_pdf_mode,
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
         model_to_use = self.model or get_default_model("default")
         splitter = PDFSplitter(api_key=self.api_key, model=model_to_use)
@@ -179,7 +225,7 @@ class BookManager:
         resume_from = pipeline_kwargs.get("resume_from", None)
 
         explicit_keys = [
-            "glossary_path", "pdf_mode", "thinking_level", "tier",
+            "glossary_path", "thinking_level", "tier",
             "heavy_ocr", "max_pages", "api_key", "model", "resume_from"
         ]
         for key in explicit_keys:
@@ -222,7 +268,7 @@ class BookManager:
                     resume_content=self.global_resume or None,
                     glossary_path=glossary_path_str,
                     model=self.model,
-                    pdf_mode="full_vlm",
+                    pdf_mode=book_pdf_mode,
                     simple_mode=is_simple,
                     resume_only=resume_only,
                     structure_only=structure_only,

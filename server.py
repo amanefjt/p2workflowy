@@ -140,7 +140,7 @@ async def run_pipeline_in_background(task_id: str, input_path: str, glossary_pat
                     manager.run,
                     glossary_path=glossary_path,
                     thinking_level="High",
-                    pdf_mode="hybrid",
+                    pdf_mode=None,
                     tier="free",
                     max_chapters=max_chapters,
                 )

@@ -12,7 +12,7 @@ from typing import List, Dict
 from .config import (print_log,
     load_coreprompts,
 )
-from .models import TreeNode, load_chunks_from_json, save_tree_to_json
+from .models import TreeNode, load_chunks_from_json, load_route_from_json, phase1_route_path, save_tree_to_json
 from .engine.p3_structure.heading_matcher import extract_headings_from_resume, merge_role_headings
 from .engine.p3_structure.tree_builder import (
     build_tree,
@@ -46,8 +46,9 @@ def run_phase3(
     intro_pre_heading = None  # Paper Mode で DNA から取得、Book Mode では使わない
     chunks = load_chunks_from_json(str(phase1_state_path))
     
-    # --- Route C: VLM Markdown 構造化 (pdf_mode == "full_vlm" かつ Markdown見出しが存在する場合) ---
-    if pdf_mode == "full_vlm":
+    # --- Route C: VLM Markdown 構造化（Phase1 の実ルートが vlm の場合のみ）---
+    actual_route = load_route_from_json(phase1_route_path(str(phase1_state_path)))
+    if actual_route == "vlm":
         has_markdown_headers = any(re.match(r'^#\s+', c.text.strip()) for c in chunks)
         if has_markdown_headers:
             print_log("  [Phase 3] Route C: VLM Markdown Mode (正規表現パース) を実行します")
@@ -68,7 +69,7 @@ def run_phase3(
                     json.dump(sections_dict, f, ensure_ascii=False, indent=2)
             return tree, sections_dict
         else:
-            print_log("  [Phase 3] pdf_mode='full_vlm' ですが Markdown 見出しが未検出です。標準構造化へフォールバックします。")
+            print_log("  [Phase 3] 実ルート=vlm ですが Markdown 見出しが未検出です。標準構造化へフォールバックします。")
 
     anchors = {"metadata_ids": []}
     headings = []

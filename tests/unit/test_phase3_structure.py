@@ -342,3 +342,61 @@ class TestStructureNodesByHeadings:
         # どちらも「クラッシュしない」ことを確認
         assert isinstance(tree, list)
         assert isinstance(sections, dict)
+
+
+# ============================================================
+# I-16: Route C 発火条件の実ルート参照化
+# ============================================================
+
+class TestRunPhase3ActualRouteDispatch:
+    def test_vlm_route_triggers_route_c_even_with_hybrid_pdf_mode(self, tmp_path):
+        """実ルート=vlm が記録されていれば、pdf_mode='hybrid' でも Route C（Markdown構造化）が発火する。"""
+        from core.phase3_structure import run_phase3
+        from core.models import RawChunk, save_chunks_to_json, save_route_to_json, phase1_route_path
+
+        phase1_path = tmp_path / "phase1_preprocessor.json"
+        chunks = [
+            RawChunk(id="0", text="# Chapter One", role="p", seq_index=0.0),
+            RawChunk(id="1", text="Body text.", role="p", seq_index=1.0),
+        ]
+        save_chunks_to_json(chunks, str(phase1_path))
+        save_route_to_json("vlm", phase1_route_path(str(phase1_path)))
+
+        tree, sections = run_phase3(
+            phase1_state_path=str(phase1_path),
+            phase2_state_path=str(tmp_path / "phase2_meta.json"),
+            structure_state_path=str(tmp_path / "phase3_structure.json"),
+            sections_state_path=str(tmp_path / "phase3_sections.json"),
+            is_book=True,
+            input_path=None,
+            api_key=None,
+            pdf_mode="hybrid",
+        )
+
+        assert len(tree) == 1
+        assert tree[0].text == "Chapter One"
+
+    def test_docling_route_does_not_trigger_route_c(self, tmp_path):
+        """実ルート=docling では # Markdown が無いため Route C は発火せず後続分岐へ進む。"""
+        from core.phase3_structure import run_phase3
+        from core.models import RawChunk, save_chunks_to_json, save_route_to_json, phase1_route_path
+
+        phase1_path = tmp_path / "phase1_preprocessor.json"
+        chunks = [RawChunk(id="0", text="Plain body text.", role="p", seq_index=0.0)]
+        save_chunks_to_json(chunks, str(phase1_path))
+        save_route_to_json("docling", phase1_route_path(str(phase1_path)))
+
+        # Book Mode かつ role 見出しが無いため Task 5 の Route D も発火せず、
+        # ChapterParser/TOC フォールバック（input_path 必須）に進む。
+        # input_path=None なので例外になることをもって「Route C を通らなかった」ことを確認する。
+        with pytest.raises(Exception):
+            run_phase3(
+                phase1_state_path=str(phase1_path),
+                phase2_state_path=str(tmp_path / "phase2_meta.json"),
+                structure_state_path=str(tmp_path / "phase3_structure.json"),
+                sections_state_path=str(tmp_path / "phase3_sections.json"),
+                is_book=True,
+                input_path=None,
+                api_key=None,
+                pdf_mode="hybrid",
+            )

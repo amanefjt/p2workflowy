@@ -83,6 +83,9 @@ def run_phase3(
                 with open(toc_path, "r", encoding="utf-8") as f:
                     cached_data = json.load(f)
                     toc_list = [entry["title"] for entry in cached_data.get("toc", [])]
+            elif not api_key:
+                print_log("  [Phase 3] Route D: APIキーがないためTOC抽出をスキップします")
+                toc_list = []
             else:
                 toc_list = extract_toc_from_chunks(chunks, api_key=api_key, model=model)
 

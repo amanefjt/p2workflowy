@@ -278,3 +278,18 @@ Phase 2 (Meta Generation) において、文献の第一ページからタイト
 - **Spec Bとの関係**: `PDFSplitter`（LLM TOC抽出＋ページ補正、`core/engine/p1_ingest/pdf_splitter.py` 系）は Spec B が一切変更していないコンポーネントで、書籍単位のルーティング判定（`BookManager._decide_book_pdf_mode`）よりも前段の、章分割そのものの処理。したがって Spec B のスコープ外だが、これも I-21 と同様、**VLM が実際に処理されるようになったことで初めて中身を精査する機会が生まれ顕在化した**可能性がある（I-15/I-16 修理前は書籍全体が Docling+TOCフォールバックか native_fallback で処理されており、章境界の物理ページ精度を人間が読んで確認する場面自体がなかった）。
 - **対応方針（ユーザー判断・2026-07-18）**: 記録のみで棚上げ。Spec B のスコープ（VLM修理・書籍単位ルーティング判定・Docling role構造化）はこの章分割境界の問題と独立に正しく機能しており、Spec B は完了とする。`PDFSplitter` のページ補正精度改善は別途調査・対応する。
 - **教訓**: I-21 と合わせ、書籍全文を通した「読んで確認する」検証が、ログ上は正常終了に見える処理でも見つかる問題があることを示した。今後、長期間動いていなかった処理経路の修理では、構造検証（見出し数・階層等の機械チェック）に加えて人間による通読サンプリングを検証工程に含めることを検討する。
+
+## 2026-07-18: Spec B `is_book` 配線バグの発見・修正（relations.pdf 実データ検証中）
+
+### I-23. `core/pipeline.py` が `run_phase3()` に `is_book` を渡しておらず、書籍モードの Phase 3 分岐が本番では一度も実行されていなかった
+
+- **事象**: Task 5 で新設した Route D（Docling role 見出し構造化）を relations.pdf（Docling ルート）で実データ検証したところ、`phase1_route.json` が正しく `{"route": "docling"}` を記録し、role=h1/h2 の見出しチャンクも存在するにもかかわらず、Route D が発火しなかった。
+- **根本原因**: `core/pipeline.py` の `run_phase3(...)` 呼び出しに `is_book=is_book` が渡っていなかった（`run_phase3` のデフォルト値 `is_book=False` が常に使われる）。`git show <Spec B着手前のコミット>:core/pipeline.py` で確認したところ、この欠落は Spec B 着手前から存在する既存バグであり、本セッションの Task 1-5 のどのコミットも `core/pipeline.py` に触れていない。`run_phase3` の唯一の本番呼び出し元が `core/pipeline.py` であることは `grep -rn "run_phase3(" core/` で確認済み。
+- **影響**: 書籍モードの Phase 3 分岐（ChapterParser/TOC フォールバック、Route C、Task 5 の Route D）が、この関数が書かれてから一度も本番で実行されたことがなかった。書籍は常に「ペーパーモード」相当の構造化（`merge_role_headings` によるレジュメ見出し＋role h1/h2 フォールバックの統合）で処理されてきた。これが「たまたま許容できる品質」を出していたため、これまで気づかれずにいた。
+- **副次的に発見した設計上の問題（Route C は実データでは発火しない死んだコード）**: Phase 1 の `Formatter.logical_split`（VLM 出力のパース）は、VLM が出力した Markdown 見出し記号 `# ` を `RawChunk.role`（h1/h2）に変換し、`chunk.text` からは `#` を除去する。そのため Route C（`re.match(r'^#\s+', chunk.text)` による Markdown 正規表現判定）は、VLM ルートの実データでは原理的に一致条件を満たさず、一度も発火しない。この状態は is_book 配線バグの有無に関わらず存在していた。
+- **対策**:
+  1. `core/pipeline.py` の `run_phase3(...)` 呼び出しに `is_book=is_book` を追加。
+  2. `core/phase3_structure.py` の Route D 条件を `actual_route == "docling"` から `actual_route in ("docling", "vlm")` に拡張し、VLM ルートの書籍も Docling と同じ `structure_nodes_by_role` で処理するようにした（Route C が実質使えないため、VLM ルート書籍が is_book 修正後にそのまま ChapterParser／TOC フォールバック（ネイティブ PDF 再解析、スキャン本には無力）へ落ちる回帰を防ぐため）。
+  3. relations.pdf の実データ検証で、章の最初の見出しが章ローカルな TOC 抽出結果と一致せず降格された場合、`structure_nodes_by_role` が空の「[Unlabeled Section]」ノードをトップレベルに紛れ込ませるバグを追加発見（`current_h2 is None` のみでの判定漏れ。降格後は `current_h3` のみが設定され `current_h2` は None のまま残るため）。`structure_nodes_by_markdown` にも同型のバグがあったため合わせて修正（未発火の死んだコードだが一貫性のため）。
+- **検証**: `tests/unit/test_pipeline.py` を新設し、`run_pipeline(is_book=True/False)` → `run_phase3()` の配線を直接検証する回帰テストを追加（これまでのテストは `run_phase3` を直接 `is_book=True` で呼んでいたため、本番唯一の呼び出し元である `run_pipeline` を経由する配線漏れを検出できていなかった）。`tests/unit/test_phase3_structure.py` に VLM ルート×Route D 発火のテストと、降格章の空セクション回帰テストを追加。単体テスト 264 件全合格。relations.pdf の Preface 章（Docling ルート）を実データで再実行し、Route D が正しく発火（ログで確認）、出力に空の「[Unlabeled Section]」が混入しないことを確認した。
+- **教訓**: (1) ユニットテストが対象関数を直接呼び出す場合、その関数の唯一の本番呼び出し元を経由する統合テストが別途無いと、「本番では一度も通らないキーワード引数」のような配線漏れを検出できない。(2) 長期間実行されたことのないコードパス（今回は書籍モード Phase 3 分岐全体）を修理する際は、ユニットテストの green だけでなく実データでの動作確認が必須。(3) TOC ベースの章見出しデモーション判定は「書籍全体を一括処理する」設計を前提にしており、`book_manager.py` が章ごとに独立した `run_pipeline()` を呼ぶ現在のアーキテクチャ（各 Phase 3 呼び出しが単一チャプター PDF のみを見る）とは相性が悪い（章ローカルな TOC 抽出が章自身のタイトルを含まないのは自然な帰結）。将来この判定ロジックに手を入れる場合は、この前提のズレを踏まえる必要がある。

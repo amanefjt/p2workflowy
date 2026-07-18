@@ -13,6 +13,11 @@ class PDFSplitter:
     # OCRManager と共通のキャッシュファイルを使用
     CACHE_PATH = PROJECT_ROOT / "state" / "vlm_cache.json"
 
+    # --- Route 2 (outline) 妥当性検査 (I-24) ---
+    OUTLINE_MAX_ENTRY_RATIO = 0.10
+    OUTLINE_MIN_PAGES_PER_CHAPTER = 3
+    OUTLINE_LABEL_SEQ_RATIO = 0.5
+
     def __init__(self, api_key: str, model: Optional[str] = None):
         self.api_key = api_key
         # model_optimization.md に基づき、TOC 解析には安定性の高いデフォルトモデルを使用
@@ -129,6 +134,46 @@ class PDFSplitter:
         doc.close()
         return results
 
+    def _is_plausible_outline(
+        self, entries: List[tuple], total_pages: int
+    ) -> bool:
+        """outline が章目次として妥当かを検査する (I-24)。
+
+        スキャンソフトはページラベル（f1, f2, ... ）を outline として
+        埋め込むことがある。これを章目次として採用すると 1頁=1章 の
+        分割が発生するため、明らかに章目次でないものを棄却する。
+        """
+        if not entries or total_pages <= 0:
+            return False
+
+        # 指標A: エントリ数がページ数に対して多すぎる
+        if (len(entries) / total_pages) > self.OUTLINE_MAX_ENTRY_RATIO:
+            print_log(
+                f"  [Splitter] outline 棄却: {len(entries)}件/{total_pages}頁 "
+                f"= 比{len(entries)/total_pages:.2f} が上限{self.OUTLINE_MAX_ENTRY_RATIO}超"
+            )
+            return False
+
+        # 指標B: 1章あたり平均頁数が少なすぎる
+        if (total_pages / len(entries)) < self.OUTLINE_MIN_PAGES_PER_CHAPTER:
+            print_log(f"  [Splitter] outline 棄却: 1章あたり平均頁数が過小")
+            return False
+
+        # 指標C: 連番ページラベル形式（共通接頭辞 + 数字のみ）が大半
+        label_like = 0
+        for title, _ in entries:
+            t = title.strip()
+            if re.fullmatch(r'[A-Za-z]{0,3}\d{1,4}', t):
+                label_like += 1
+        if (label_like / len(entries)) > self.OUTLINE_LABEL_SEQ_RATIO:
+            print_log(
+                f"  [Splitter] outline 棄却: 連番ページラベル形式が "
+                f"{label_like}/{len(entries)} 件"
+            )
+            return False
+
+        return True
+
     def _get_chapters_from_outline(self, doc: fitz.Document) -> Optional[List[Dict[str, Any]]]:
         """PDF ネイティブ outline から章リストを取得（物理ページ直参照）。"""
         toc = doc.get_toc()  # [(level, title, phys_page_1indexed), ...]
@@ -141,6 +186,9 @@ class PDFSplitter:
             if entries:
                 break
         if not entries:
+            return None
+
+        if not self._is_plausible_outline(entries, len(doc)):
             return None
 
         return [

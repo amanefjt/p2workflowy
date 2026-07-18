@@ -441,3 +441,56 @@ class TestExtractTocVlmFallback:
 
         # VLM の結果（1件）より text_toc（2件）の方が多いので text_toc を維持
         assert result == text_toc
+
+
+# ============================================================
+# _is_plausible_outline (I-24)
+# ============================================================
+
+class TestIsPlausibleOutline:
+    def test_rejects_one_entry_per_page(self):
+        """PSEpdf.pdf 実測: 175頁に175件の f1…f175 は章目次ではない。"""
+        s = make_splitter()
+        entries = [(f"f{i+1}", i + 1) for i in range(175)]
+        assert s._is_plausible_outline(entries, total_pages=175) is False
+
+    def test_rejects_sequential_page_labels(self):
+        """比が閾値内でも、連番ラベル形式なら棄却する。"""
+        s = make_splitter()
+        entries = [(f"f{i*20+1}", i * 20 + 1) for i in range(9)]
+        assert s._is_plausible_outline(entries, total_pages=300) is False
+
+    def test_accepts_normal_chapter_outline(self):
+        s = make_splitter()
+        entries = [
+            ("Preface", 1), ("1. Introduction", 12), ("2. Methods", 45),
+            ("3. Results", 88), ("4. Discussion", 130), ("Appendix", 170),
+        ]
+        assert s._is_plausible_outline(entries, total_pages=200) is True
+
+    def test_rejects_too_few_pages_per_chapter(self):
+        s = make_splitter()
+        entries = [(f"Chapter {i}", i * 2 + 1) for i in range(20)]
+        assert s._is_plausible_outline(entries, total_pages=45) is False
+
+    def test_empty_entries_rejected(self):
+        s = make_splitter()
+        assert s._is_plausible_outline([], total_pages=100) is False
+
+
+class TestOutlineGuardIntegration:
+    def test_garbage_outline_returns_none(self):
+        """棄却された outline は None を返し Route 3 へ落とす。"""
+        s = make_splitter()
+        toc = [(1, f"f{i+1}", i + 1) for i in range(175)]
+        doc = make_mock_doc(["text"] * 175, toc=toc)
+        assert s._get_chapters_from_outline(doc) is None
+
+    def test_valid_outline_still_works(self):
+        s = make_splitter()
+        toc = [(1, "Preface", 1), (1, "1. Introduction", 20), (1, "2. Methods", 60)]
+        doc = make_mock_doc(["text"] * 100, toc=toc)
+        result = s._get_chapters_from_outline(doc)
+        assert result is not None
+        assert len(result) == 3
+        assert result[0]["start_page"] == 0

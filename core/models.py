@@ -146,6 +146,27 @@ def load_chunks_from_json(path: str) -> List[RawChunk]:
     return [RawChunk.from_dict(d) for d in data]
 
 
+def phase1_route_path(phase1_state_path: str) -> str:
+    """phase1_preprocessor.json のパスから同階層の phase1_route.json パスを導出する。"""
+    from pathlib import Path
+    return str(Path(phase1_state_path).parent / "phase1_route.json")
+
+
+def save_route_to_json(route: str, path: str) -> None:
+    """Phase 1 が実際に使用した入力ルート（docling/vlm/native_fallback）を記録する。"""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"route": route}, f, ensure_ascii=False)
+
+
+def load_route_from_json(path: str) -> Optional[str]:
+    """Phase 1 の実ルート記録を読み込む。ファイルが存在しない場合は None（テキストルート・旧セッション）。"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f).get("route")
+    except FileNotFoundError:
+        return None
+
+
 def save_tree_to_json(tree: List[TreeNode], path: str) -> None:
     data = [node.to_dict() for node in tree]
     with open(path, "w", encoding="utf-8") as f:

@@ -90,6 +90,7 @@ class SessionState:
         
         # 各フェーズの状態保存先
         self.phase1_preprocessor = self.session_dir / "phase1_preprocessor.json"
+        self.phase1_route = self.session_dir / "phase1_route.json"
         self.phase2_meta = self.session_dir / "phase2_meta.json"
         self.phase3_structure = self.session_dir / "phase3_structure.json"
         self.phase3_sections = self.session_dir / "phase3_sections.json"

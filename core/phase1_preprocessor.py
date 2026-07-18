@@ -9,7 +9,7 @@ from typing import List, Any, Optional
 
 import wordninja
 
-from .models import RawChunk, save_chunks_to_json
+from .models import RawChunk, save_chunks_to_json, phase1_route_path, save_route_to_json
 from .config import load_glossary_csv, print_log, PROJECT_ROOT
 from .text_utils import _SENTENCE_END_RE, _TRAILING_WORDS
 from .engine.p1_ingest.formatter import Formatter
@@ -137,8 +137,9 @@ def _run_phase1_pdf(
     """
     print_log(f"--- Phase 1 [PDF]: Preprocessor ---")
 
-    # Docling ルート: デジタルPDFかつ max_pages 未指定（部分処理モードでない）
-    if max_pages is None and is_docling_viable(pdf_path):
+    # Docling ルート: デジタルPDFかつ max_pages 未指定（部分処理モードでない）かつ VLM 強制指定でない
+    force_vlm = pdf_mode == "full_vlm"
+    if max_pages is None and not force_vlm and is_docling_viable(pdf_path):
         try:
             chunks = docling_pdf_to_chunks(pdf_path)
             if chunks:
@@ -147,6 +148,7 @@ def _run_phase1_pdf(
                     c.text = c.text.strip()
                 if save_state:
                     save_chunks_to_json(chunks, str(state_path))
+                    save_route_to_json("docling", phase1_route_path(str(state_path)))
                     print_log(f"  [Phase 1 PDF] State 保存: {state_path}")
                 return chunks
             print_log("  [Phase 1 PDF] Docling が空を返したため VLM にフォールバック。")
@@ -164,9 +166,11 @@ def _run_phase1_pdf(
 
     if elements and elements[0].get("role") == "vlm_page_source":
         chunks = Formatter.logical_split(elements)
+        actual_route = "vlm"
         print_log(f"  [Phase 1 PDF] VLM ルート: {len(chunks)} チャンクを生成。")
     else:
         chunks = Formatter.smart_unwrap(elements)
+        actual_route = "native_fallback"
         print_log(f"  [Phase 1 PDF] 物理ルート: {len(chunks)} チャンクを生成。")
 
     for c in chunks:
@@ -174,6 +178,7 @@ def _run_phase1_pdf(
 
     if save_state:
         save_chunks_to_json(chunks, str(state_path))
+        save_route_to_json(actual_route, phase1_route_path(str(state_path)))
         print_log(f"  [Phase 1 PDF] State 保存: {state_path}")
 
     return chunks

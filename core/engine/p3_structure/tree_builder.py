@@ -404,3 +404,95 @@ def structure_nodes_by_markdown(
             )
 
     return tree, sections_dict
+
+
+def structure_nodes_by_role(
+    chunks: List[RawChunk],
+    toc_list: List[str] | None = None,
+) -> tuple[List[TreeNode], Dict[str, List[dict]]]:
+    """
+    書籍モード専用: Docling が付与した role（h1=章, h2=節, p=本文）を使って
+    TreeNode の親子構造を構築する。structure_nodes_by_markdown の role 版。
+
+    TOC（目次）リストが存在する場合、role="h1" の見出しが TOC に含まれるか検証し、
+    含まれない場合は自動的に節（h3）へ降格（Demote）させる。
+    """
+    import difflib
+
+    tree: List[TreeNode] = []
+    sections_dict: Dict[str, List[dict]] = {}
+
+    current_h2: Optional[TreeNode] = None
+    current_h3: Optional[TreeNode] = None
+    unlabeled_key = "unlabeled_0|[Unlabeled Section]"
+    current_section_key: str = unlabeled_key
+
+    norm_toc = [normalize_heading(t) for t in (toc_list or [])]
+
+    def is_valid_chapter(title: str) -> bool:
+        if not norm_toc:
+            return True  # TOCがない場合はDoclingのroleを信じる
+        norm_title = normalize_heading(title)
+        if norm_title in norm_toc:
+            return True
+        for t in norm_toc:
+            if norm_title in t or t in norm_title:
+                return True
+            ratio = difflib.SequenceMatcher(None, norm_title, t).ratio()
+            if ratio > 0.85:
+                return True
+        return False
+
+    for chunk in chunks:
+        text = chunk.text.strip()
+        if not text:
+            continue
+
+        if chunk.role == "h1":
+            if not is_valid_chapter(text):
+                node = TreeNode(id=chunk.id, text=text, role="h3", seq_index=chunk.seq_index, children=[])
+                if current_h2 is not None:
+                    current_h2.children.append(node)
+                else:
+                    tree.append(node)
+                sections_dict.setdefault(current_section_key, []).append(
+                    {"id": node.id, "text": node.text, "role": "h3"}
+                )
+                current_h3 = node
+                continue
+
+            node = TreeNode(id=chunk.id, text=text, role="h3", seq_index=chunk.seq_index, children=[])
+            tree.append(node)
+            current_section_key = f"{chunk.id}|{text}"
+            sections_dict[current_section_key] = []
+            current_h2 = node
+            current_h3 = None
+
+        elif chunk.role == "h2":
+            node = TreeNode(id=chunk.id, text=text, role="h3", seq_index=chunk.seq_index, children=[])
+            if current_h2 is not None:
+                current_h2.children.append(node)
+            else:
+                tree.append(node)
+            sections_dict.setdefault(current_section_key, []).append(
+                {"id": node.id, "text": node.text, "role": "h3"}
+            )
+            current_h3 = node
+
+        else:
+            node = TreeNode(id=chunk.id, text=text, role="p", seq_index=chunk.seq_index)
+            if current_h2 is None:
+                current_h2 = TreeNode(
+                    id="unlabeled_0", text="[Unlabeled Section]",
+                    role="h3", seq_index=chunk.seq_index, children=[],
+                )
+                tree.append(current_h2)
+                current_section_key = unlabeled_key
+                sections_dict[current_section_key] = []
+            parent = current_h3 or current_h2
+            parent.children.append(node)
+            sections_dict.setdefault(current_section_key, []).append(
+                {"id": node.id, "text": node.text, "role": "p"}
+            )
+
+    return tree, sections_dict

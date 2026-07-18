@@ -17,6 +17,7 @@ from .engine.p3_structure.heading_matcher import extract_headings_from_resume, m
 from .engine.p3_structure.tree_builder import (
     build_tree,
     structure_nodes_by_markdown,
+    structure_nodes_by_role,
 )
 from .engine.p3_structure.toc_extractor import (
     extract_toc_via_llm,
@@ -70,6 +71,29 @@ def run_phase3(
             return tree, sections_dict
         else:
             print_log("  [Phase 3] 実ルート=vlm ですが Markdown 見出しが未検出です。標準構造化へフォールバックします。")
+
+    # --- Route D: Docling role 見出し構造化（書籍モードかつ実ルートが docling の場合）---
+    if is_book and actual_route == "docling" and chunks:
+        role_headings_present = any(c.role in ("h1", "h2") for c in chunks)
+        if role_headings_present:
+            print_log("  [Phase 3] Route D: Docling role 見出し構造化 を実行します")
+            toc_list = []
+            toc_path = Path(structure_state_path).parent / "phase3_toc.json"
+            if toc_path.exists():
+                with open(toc_path, "r", encoding="utf-8") as f:
+                    cached_data = json.load(f)
+                    toc_list = [entry["title"] for entry in cached_data.get("toc", [])]
+            else:
+                toc_list = extract_toc_from_chunks(chunks, api_key=api_key, model=model)
+
+            tree, sections_dict = structure_nodes_by_role(chunks, toc_list=toc_list)
+            if save_state:
+                save_tree_to_json(tree, str(structure_state_path))
+                with open(sections_state_path, "w", encoding="utf-8") as f:
+                    json.dump(sections_dict, f, ensure_ascii=False, indent=2)
+            return tree, sections_dict
+        else:
+            print_log("  [Phase 3] 実ルート=docling ですが role 見出しが未検出です。ChapterParser/TOCフォールバックへ進みます。")
 
     anchors = {"metadata_ids": []}
     headings = []

@@ -400,3 +400,88 @@ class TestRunPhase3ActualRouteDispatch:
                 api_key=None,
                 pdf_mode="hybrid",
             )
+
+    def test_docling_route_with_role_headings_uses_route_d(self, tmp_path):
+        """実ルート=docling かつ role 見出しがあれば Route D（role構造化）が発火し、
+        ChapterParser（PDF再解析、input_path 必須）を経由しない。"""
+        from core.phase3_structure import run_phase3
+        from core.models import RawChunk, save_chunks_to_json, save_route_to_json, phase1_route_path
+
+        phase1_path = tmp_path / "phase1_preprocessor.json"
+        chunks = [
+            RawChunk(id="0", text="Chapter One", role="h1", seq_index=0.0),
+            RawChunk(id="1", text="Body text.", role="p", seq_index=1.0),
+        ]
+        save_chunks_to_json(chunks, str(phase1_path))
+        save_route_to_json("docling", phase1_route_path(str(phase1_path)))
+
+        tree, sections = run_phase3(
+            phase1_state_path=str(phase1_path),
+            phase2_state_path=str(tmp_path / "phase2_meta.json"),
+            structure_state_path=str(tmp_path / "phase3_structure.json"),
+            sections_state_path=str(tmp_path / "phase3_sections.json"),
+            is_book=True,
+            input_path=None,  # ChapterParser経路に落ちたら input_path 必須でエラーになるはず
+            api_key=None,
+            pdf_mode="hybrid",
+        )
+
+        assert len(tree) == 1
+        assert tree[0].text == "Chapter One"
+        assert tree[0].children[0].text == "Body text."
+
+
+# ============================================================
+# structure_nodes_by_role（Docling role 見出しの書籍構造化）
+# ============================================================
+
+class TestStructureNodesByRole:
+    def _chunk(self, id, text, role, seq):
+        from core.models import RawChunk
+        return RawChunk(id=id, text=text, role=role, seq_index=seq)
+
+    def test_h1_becomes_chapter_h2_becomes_section(self):
+        from core.engine.p3_structure.tree_builder import structure_nodes_by_role
+        chunks = [
+            self._chunk("0", "Chapter One", "h1", 0.0),
+            self._chunk("1", "Section A", "h2", 1.0),
+            self._chunk("2", "Body text.", "p", 2.0),
+        ]
+        tree, sections = structure_nodes_by_role(chunks)
+
+        assert len(tree) == 1
+        assert tree[0].text == "Chapter One"
+        assert tree[0].role == "h3"
+        assert tree[0].children[0].text == "Section A"
+        assert tree[0].children[0].children[0].text == "Body text."
+
+    def test_toc_demotes_h1_not_in_toc(self):
+        """TOCにない h1 見出しは h3（節相当）へ降格し、直前の章の子ではなくトップレベルに置かれる。"""
+        from core.engine.p3_structure.tree_builder import structure_nodes_by_role
+        chunks = [self._chunk("0", "Fake Chapter", "h1", 0.0)]
+        tree, sections = structure_nodes_by_role(chunks, toc_list=["Real Chapter"])
+
+        assert len(tree) == 1
+        assert tree[0].text == "Fake Chapter"
+        assert tree[0].role == "h3"
+
+    def test_body_before_any_heading_creates_unlabeled_section(self):
+        from core.engine.p3_structure.tree_builder import structure_nodes_by_role
+        chunks = [self._chunk("0", "Orphan text", "p", 0.0)]
+        tree, sections = structure_nodes_by_role(chunks)
+
+        assert len(tree) == 1
+        assert tree[0].text == "[Unlabeled Section]"
+        assert tree[0].children[0].text == "Orphan text"
+
+    def test_sections_dict_keys_match_tree(self):
+        from core.engine.p3_structure.tree_builder import structure_nodes_by_role
+        chunks = [
+            self._chunk("0", "Chapter One", "h1", 0.0),
+            self._chunk("1", "Body.", "p", 1.0),
+        ]
+        tree, sections = structure_nodes_by_role(chunks)
+
+        section_key = f"{tree[0].id}|Chapter One"
+        assert section_key in sections
+        assert sections[section_key] == [{"id": "1", "text": "Body.", "role": "p"}]

@@ -60,6 +60,9 @@ def run_phase3(
                     with open(toc_path, "r", encoding="utf-8") as f:
                         cached_data = json.load(f)
                         toc_list = [entry["title"] for entry in cached_data.get("toc", [])]
+                elif not api_key:
+                    print_log("  [Phase 3] Route C: APIキーがないためTOC抽出をスキップします")
+                    toc_list = []
                 else:
                     toc_list = extract_toc_from_chunks(chunks, api_key=api_key, model=model)
 
@@ -72,11 +75,14 @@ def run_phase3(
         else:
             print_log("  [Phase 3] 実ルート=vlm ですが Markdown 見出しが未検出です。標準構造化へフォールバックします。")
 
-    # --- Route D: Docling role 見出し構造化（書籍モードかつ実ルートが docling の場合）---
-    if is_book and actual_route == "docling" and chunks:
+    # --- Route D: role 見出し構造化（書籍モードかつ実ルートが docling/vlm の場合）---
+    # VLM ルートも Phase1 の Formatter.logical_split で `# ` 見出しが role に変換済みのため
+    # （chunk.text に `#` は残らない = Route C の Markdown 正規表現は原理的に発火しない）、
+    # Docling と同じ role ベース構造化で処理する。
+    if is_book and actual_route in ("docling", "vlm") and chunks:
         role_headings_present = any(c.role in ("h1", "h2") for c in chunks)
         if role_headings_present:
-            print_log("  [Phase 3] Route D: Docling role 見出し構造化 を実行します")
+            print_log(f"  [Phase 3] Route D: role 見出し構造化 を実行します (実ルート={actual_route})")
             toc_list = []
             toc_path = Path(structure_state_path).parent / "phase3_toc.json"
             if toc_path.exists():
@@ -96,7 +102,7 @@ def run_phase3(
                     json.dump(sections_dict, f, ensure_ascii=False, indent=2)
             return tree, sections_dict
         else:
-            print_log("  [Phase 3] 実ルート=docling ですが role 見出しが未検出です。ChapterParser/TOCフォールバックへ進みます。")
+            print_log(f"  [Phase 3] 実ルート={actual_route} ですが role 見出しが未検出です。ChapterParser/TOCフォールバックへ進みます。")
 
     anchors = {"metadata_ids": []}
     headings = []

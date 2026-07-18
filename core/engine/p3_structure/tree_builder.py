@@ -387,9 +387,11 @@ def structure_nodes_by_markdown(
             )
             
             # 親見出しがない場合（見出しのない論文や、VLMが冒頭から本文を返した場合）の救済
-            if current_h2 is None:
+            # current_h3（TOC非一致で降格された見出し）があれば本文の親として足りるため、
+            # current_h2 だけで判定すると降格直後に空の [Unlabeled Section] が生成されてしまう。
+            if current_h2 is None and current_h3 is None:
                 current_h2 = TreeNode(
-                    id="unlabeled_0", text="[Unlabeled Section]", 
+                    id="unlabeled_0", text="[Unlabeled Section]",
                     role="h2" if not is_book else "h3", # 論文ならh2, 書籍ならh3相当
                     seq_index=chunk.seq_index, children=[]
                 )
@@ -481,7 +483,12 @@ def structure_nodes_by_role(
 
         else:
             node = TreeNode(id=chunk.id, text=text, role="p", seq_index=chunk.seq_index)
-            if current_h2 is None:
+            # current_h3 は「TOC非一致で降格された章タイトル」であることがあり、
+            # その場合 current_h2 は None のままだが本文の親としては current_h3 で足りる。
+            # ここを current_h2 だけで判定すると、降格直後の最初の本文チャンクで
+            # 空の「[Unlabeled Section]」ノードが tree 直下に生成されてしまう
+            # （本文自体は current_h3 の子になるため、この空ノードには一切子が付かない）。
+            if current_h2 is None and current_h3 is None:
                 current_h2 = TreeNode(
                     id="unlabeled_0", text="[Unlabeled Section]",
                     role="h3", seq_index=chunk.seq_index, children=[],

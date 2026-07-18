@@ -128,6 +128,7 @@ def run_pipeline(
                 state.phase3_structure,
                 state.phase3_sections,
                 state=state,
+                is_book=is_book,
                 api_key=api_key,
                 model=model,
                 input_path=phase3_input,

@@ -430,6 +430,40 @@ class TestRunPhase3ActualRouteDispatch:
         assert tree[0].text == "Chapter One"
         assert tree[0].children[0].text == "Body text."
 
+    def test_vlm_route_with_role_headings_uses_route_d(self, tmp_path):
+        """実ルート=vlm でも role 見出しがあれば Route D（role構造化）が発火する。
+
+        Phase1 の Formatter.logical_split は VLM が出力した `# ` を role=h1/h2 に
+        変換し chunk.text から `#` を除去するため、実運用の VLM チャンクは常にこの形。
+        Route C の Markdown 正規表現（`test_vlm_route_triggers_route_c_even_with_hybrid_pdf_mode`
+        が使う「text に # が残っている」チャンク）は実データでは発生しない。
+        """
+        from core.phase3_structure import run_phase3
+        from core.models import RawChunk, save_chunks_to_json, save_route_to_json, phase1_route_path
+
+        phase1_path = tmp_path / "phase1_preprocessor.json"
+        chunks = [
+            RawChunk(id="0", text="Chapter One", role="h1", seq_index=0.0),
+            RawChunk(id="1", text="Body text.", role="p", seq_index=1.0),
+        ]
+        save_chunks_to_json(chunks, str(phase1_path))
+        save_route_to_json("vlm", phase1_route_path(str(phase1_path)))
+
+        tree, sections = run_phase3(
+            phase1_state_path=str(phase1_path),
+            phase2_state_path=str(tmp_path / "phase2_meta.json"),
+            structure_state_path=str(tmp_path / "phase3_structure.json"),
+            sections_state_path=str(tmp_path / "phase3_sections.json"),
+            is_book=True,
+            input_path=None,  # ChapterParser経路に落ちたら input_path 必須でエラーになるはず
+            api_key=None,
+            pdf_mode="hybrid",
+        )
+
+        assert len(tree) == 1
+        assert tree[0].text == "Chapter One"
+        assert tree[0].children[0].text == "Body text."
+
 
 # ============================================================
 # structure_nodes_by_role（Docling role 見出しの書籍構造化）
@@ -464,6 +498,28 @@ class TestStructureNodesByRole:
         assert len(tree) == 1
         assert tree[0].text == "Fake Chapter"
         assert tree[0].role == "h3"
+
+    def test_demoted_first_chapter_does_not_spawn_phantom_unlabeled_section(self):
+        """降格された最初の章見出しの直後に本文が続いても、空の
+        [Unlabeled Section] がトップレベルに紛れ込んではいけない
+        （relations.pdf の実データで再現した回帰）。
+
+        章タイトルが TOC に一致せず降格されると current_h3 のみが設定され
+        current_h2 は None のまま残る。続く本文チャンクの「親見出しなし」判定を
+        current_h2 だけで行うと、本文自体は current_h3（降格された章見出し）の
+        子になる一方で、空の [Unlabeled Section] ノードが tree 直下に
+        別途生成されてしまっていた。
+        """
+        from core.engine.p3_structure.tree_builder import structure_nodes_by_role
+        chunks = [
+            self._chunk("0", "Preface", "h1", 0.0),
+            self._chunk("1", "Body text.", "p", 1.0),
+        ]
+        tree, sections = structure_nodes_by_role(chunks, toc_list=["Introduction"])
+
+        assert len(tree) == 1
+        assert tree[0].text == "Preface"
+        assert tree[0].children[0].text == "Body text."
 
     def test_body_before_any_heading_creates_unlabeled_section(self):
         from core.engine.p3_structure.tree_builder import structure_nodes_by_role

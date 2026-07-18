@@ -97,6 +97,7 @@ server.py (Web API) ┴──> core/pipeline.py :: run_pipeline()
 - **状態管理と再開**: `state/<session_id>/` への JSON 永続化と `--resume` は、全フェーズ共通の仕組みです。新しいフェーズやデータモデルを追加する際も、この永続化・復元の互換性を壊さないことが、パイプライン設計の必須要件として各フェーズのコードに組み込まれています。
 - **物理データ主権**: OCR・構造抽出では「VLM（視覚言語モデルによる論理的判断） > 物理証拠（フォントサイズ・太字・座標） > 幾何的ヒント」という優先順位が徹底されています（CLAUDE.md の設計原則を参照）。物理情報は VLM の判断を裏付ける証拠として使うのであって、物理情報だけで構造を決定しないという設計思想です。
 - **入力ルーティングの自動判定**: PDF はまず `is_docling_viable()`（`p1_ingest/docling_ingester.py`）でデジタル PDF かどうかを判定し、可能なら Docling を優先します。不向きなスキャン PDF は VLM または物理抽出（`pdf_ingester.py::run_pdf_ingestion`）にフォールバックします。テキスト入力は段落分割の後、`TextStructureExtractor`（LLM）が見出しを推定します。
+- **書籍モードのルーティング**: 書籍では `BookManager` が書籍のオリジナル PDF に対して1回だけルーティングを判定し（①明示指定 ②見開きスキャン=VLM ③Docling可能=Docling ④それ以外=VLM）、判定結果を book session の `routing_decision.json` に記録します。Phase 1 が実際に使用したルート（`docling`/`vlm`/`native_fallback`）は `phase1_route.json` に記録され、Phase 3 は `pdf_mode` の指定値ではなくこの実ルートを参照して構造化方式を切り替えます。デジタル書籍（Docling ルート）では Docling が付与した role 見出し（h1=章, h2=節）を `structure_nodes_by_role` で直接構造化に使い、role 見出しが乏しい場合のみ `ChapterParser`/TOC 抽出のフォールバックに委ねます。
 - **書籍モードの統合**: 章ごとに独立した `run_pipeline()` 呼び出しの結果を `StateIntegrator` が後段で統合します。`chN_` プレフィックス付与・見出し昇格・重複タイトル除去は、章間の一貫性を保つための必須ステップです。
 
 ---

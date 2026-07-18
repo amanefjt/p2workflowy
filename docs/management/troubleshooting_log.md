@@ -197,13 +197,14 @@ Phase 2 (Meta Generation) において、文献の第一ページからタイト
 - **事象**: `core/engine/p1_ingest/ocr_manager.py` の `OCRManager` に `process_page_vlm` が**同一クラス内で二重定義**されている（`:157` 画像引数版 / `:214` pdf_path 引数版）。Python の規則で後者が生存する（`inspect.signature` により実行時確認済み: `(self, pdf_path: str, page_num: int)`）。ところが唯一の呼び出し元 `pdf_ingester.py:67` は前者のシグネチャ（`curr_img, prev_img=..., page_idx=..., session_dir=...`）で呼ぶため、**毎ページ必ず TypeError** となり、`pdf_ingester.py:70-80` の except で握りつぶされてネイティブ PDF テキスト抽出にフォールバックする。テキスト層のないスキャン PDF では「[VLM抽出失敗]」が並ぶ。
 - **影響**: full_vlm モードは、二重定義がファイル初出コミット a4c7fa4（2026-04-03, Stable V3.2.1）から存在するため、**エンジン層の現行構成では一度も VLM OCR を実行していない可能性が高い**。Route C（Markdown 構造化）の前提となる VLM Markdown 見出しは生成されない。CLAUDE.md の設計原則「VLM の論理役割判断が最優先」は現状コードでは実態を持たない。
 - **対策方針**: Spec B で修理する。スキャン書籍（見開き含む）は今後も処理予定のため必須項目。修理後にスキャン PDF での実動作確認（VLM が実際に呼ばれ Markdown が返ること）を行う。
+- **対応済み（2026-07-18, Spec B 実装）**: `ocr_manager.py` の pdf_path 引数版（旧 :214）を削除し、呼び出し元 `pdf_ingester.py:67` と一致する画像引数版（旧 :157）を正とした。
 
 ### I-16. pdf_mode=full_vlm 指定でも Docling が優先される（書籍モードの実働経路は Docling＋TOC フォールバック）
 
 - **事象**: `phase1_preprocessor.py:141` の Docling 分岐は `max_pages is None and is_docling_viable(pdf_path)` のみを見て **`pdf_mode` を参照しない**。したがって書籍モードの full_vlm 固定にかかわらず、デジタル PDF は Docling ルートに入る。`data/input/Booksample/` の 3 冊はすべて `is_docling_viable=True` を実測確認（corfra 106p / pse 175p / relations 282p、テキスト層クリーン）。さらに Docling 出力（`docling_ingester.py:70-81`）は `role` 属性のみで本文に `#` Markdown を付与しないため、Phase 3 の Route C（`structure_nodes_by_markdown` の Markdown 正規表現）は空振りし、`phase3_structure.py:70-77` の TOC/ChapterParser フォールバックが実働経路になっている。
 - **含意**: 書籍モードの構造化品質は、意図された「VLM Markdown 経路」ではなく **Docling＋TOC フォールバック経路**の産物。requirements_log（2026-07-07）が見込んだ「デジタル書籍で 10〜50 倍のコスト削減余地」は、VLM が動いていない以上、事実上すでに享受されている。I-15 と合わせて、Phase 1（Docling 優先）と Phase 3（full_vlm 前提の Route C）の**前提不一致**が Spec B の技術的核心。
 - **対策方針**: Spec B で「デジタル書籍＝ Docling を正式ルート化（role 見出しを書籍 Phase 3 に配線）／スキャン書籍＝ VLM（I-15 修理後）」として公式化し、Phase 3 の分岐条件を「指定された pdf_mode」ではなく「Phase 1 が実際に使ったルート」参照に改める。
-
+- **対応済み（2026-07-18, Spec B 実装）**: `phase1_preprocessor.py` が `pdf_mode` を尊重するよう修正し、実ルートを `phase1_route.json` に記録。`BookManager` に書籍単位ルーティング（①〜④）を実装し `pdf_mode` の pop・破棄を解消。`phase3_structure.py` の Route C 発火条件を実ルート参照に変更し、Docling ルート×書籍モードでは新設の `structure_nodes_by_role` が role 見出しを直接構造化する（従来の ChapterParser/TOC フォールバックは role 見出しが乏しい場合のみ使用）。
 
 ## 2026-07-11: モデル A/B（Stage 1 後）の下ごしらえ中に発見したレジュメ切断バグ
 

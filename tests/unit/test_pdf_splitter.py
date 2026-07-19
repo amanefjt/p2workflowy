@@ -937,15 +937,15 @@ class TestLocalOffsetRescue:
         # 正しい章扉頁(93, 0-indexed)がそのまま使われる。
         assert result[0]["start_page"] == 93
 
-    def test_previous_line_bare_numeral_not_misread_as_printed_page(self):
-        """Finding 1 実測相当: 章番号が単独行で先行し本題が続くレイアウト
-        （'3\\nPlace\\nThe difference between…'）では、一致行の直前行は
-        単なる裸の章番号であって印刷頁番号ではない。これを印刷頁番号として
-        読んでしまうと、探索窓ガードをすり抜けてしまう誤ったオフセットを
-        算出しうる（title='Place'（章番号なし）, 論理P25, phys30 = '3\\nPlace\\n...'
-        → 誤救済で 25+(30-3)=52 は窓[20,74]内のためガードを通過してしまう）。
-        直前行を読まなければ printed は None のままとなり、rescue は None を
-        返して章扉頁30がそのまま維持される。
+    def test_previous_line_bare_numeral_rejected_by_plausibility(self):
+        """Finding 1 実測相当・plausibility 版: 章番号が単独行で先行し本題が
+        続くレイアウト（'3\\nPlace\\nThe difference between…'）では、一致行の
+        直前行は単なる裸の章番号であって印刷頁番号ではない。直前行の読み取り
+        自体は（verso 対応のため）復元済みで '3' は候補として読まれるが、
+        論理P25との差22が RESCUE_PAGE_NUMBER_TOLERANCE(10) を超えるため
+        plausibility 検査で却下される（位置ではなく数値の妥当性で却下される
+        点が Finding 1 時点との違い）。他に候補がないため rescue は None を
+        返し、章扉頁30がそのまま維持される。
         """
         s = make_splitter()
         pages = ["front"] * 80
@@ -985,3 +985,55 @@ class TestLocalOffsetRescue:
         result = s._apply_content_scan(doc, llm_toc)
 
         assert result[0]["start_page"] == 93
+
+    def test_verso_layout_page_number_before_title(self):
+        """Naven 実測相当: verso頁は頁番号がタイトルより前に来るレイアウト
+        （'24\\nThe Concepts of Structure and Function\\n...'）。直前行の
+        読み取りを復元しないとこの verso 形式は救済できない（printed は
+        常に None のまま）。
+        """
+        s = make_splitter()
+        pages = ["filler"] * 60
+        pages[53] = "24\nThe Concepts of Structure and Function\nbody text"
+        doc = make_mock_doc(pages)
+        assert s._rescue_by_local_offset(
+            doc, 53, 23, "the concepts of structure and function") == 52
+
+    def test_plausibility_boundary_accepts_within_tolerance(self):
+        """RESCUE_PAGE_NUMBER_TOLERANCE ちょうどの差は妥当とみなし採用する。
+        ハードコードした10ではなく属性から閾値を取得して境界を作る。
+        """
+        s = make_splitter()
+        tol = s.RESCUE_PAGE_NUMBER_TOLERANCE
+        logical_page = 50
+        printed_ok = logical_page - tol  # 差 == tol → 妥当
+        pages = ["filler"] * 100
+        pages[80] = f"Knowing | {printed_ok}\nbody"
+        doc = make_mock_doc(pages)
+        expected = logical_page + (80 - printed_ok)
+        assert s._rescue_by_local_offset(doc, 80, logical_page, "knowing") == expected
+
+    def test_plausibility_boundary_rejects_just_outside_tolerance(self):
+        """RESCUE_PAGE_NUMBER_TOLERANCE を1超える差は却下し None を返す。
+        ハードコードした10ではなく属性から閾値を取得して境界を作る。
+        """
+        s = make_splitter()
+        tol = s.RESCUE_PAGE_NUMBER_TOLERANCE
+        logical_page = 50
+        printed_bad = logical_page - tol - 1  # 差 == tol + 1 → 却下
+        pages = ["filler"] * 100
+        pages[80] = f"Knowing | {printed_bad}\nbody"
+        doc = make_mock_doc(pages)
+        assert s._rescue_by_local_offset(doc, 80, logical_page, "knowing") is None
+
+    def test_tries_next_position_when_same_line_number_implausible(self):
+        """同一行の数字が plausibility 検査で却下されても、そこで諦めず
+        次の行の数字を試す（候補は位置の順に逐次試行される）。同一行の
+        999 は論理P45との差が大きすぎて却下されるが、次行の40は妥当。
+        """
+        s = make_splitter()
+        pages = ["filler"] * 100
+        pages[75] = "Knowing | 999\n40\nbody text"
+        doc = make_mock_doc(pages)
+        expected = 45 + (75 - 40)
+        assert s._rescue_by_local_offset(doc, 75, 45, "knowing") == expected

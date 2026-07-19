@@ -30,6 +30,15 @@ class PDFSplitter:
     SCORE_SPARSE_PAGE_CHARS = 1500
     SCORE_SPARSE_BONUS = 20
 
+    # --- 局所オフセット救済の頁番号妥当性検査 ---
+    # ランニングヘッダー付近で読んだ数字が「その章の印刷頁番号」として
+    # 妥当かを論理頁との差で判定する許容幅。章扉近傍のランニングヘッダー
+    # は論理頁のごく近傍の値を持つ（corfra 'Knowing' は差2、Naven の
+    # verso ヘッダーは差1）のに対し、隣接する裸の章番号を誤読した場合は
+    # 論理頁から大きく離れる（'3 Place' 誤読は差22）。この差を閾値と
+    # することで、位置（同一行/次行/前行）に依らず妥当性を判定できる。
+    RESCUE_PAGE_NUMBER_TOLERANCE = 10
+
     def __init__(self, api_key: str, model: Optional[str] = None):
         self.api_key = api_key
         # model_optimization.md に基づき、TOC 解析には安定性の高いデフォルトモデルを使用
@@ -263,11 +272,12 @@ class PDFSplitter:
                 rescued = self._rescue_by_local_offset(
                     doc, best_phys, logical_page, norm_title)
                 # 救済結果は探索窓内に限定する（I-22 Task4 実データ検証で判明）。
-                # 章番号がタイトルから欠落し隣接する裸の章番号（例: '4\nThings'
-                # の '4'）が印刷頁番号と誤認されると、局所オフセットが実際の
-                # 印刷頁と無関係な値になり、窓外の無関係な頁へ大きく外れうる。
-                # 窓内に留まる場合のみ採用することで、この誤爆による大幅な
-                # ずれを排除する（Knowing のような正当な救済は窓内に収まる）。
+                # 誤読された印刷頁番号は _rescue_by_local_offset 内の
+                # RESCUE_PAGE_NUMBER_TOLERANCE 妥当性検査で大半を排除できるが、
+                # この窓ガードは二重の安全策（defence in depth）として残す。
+                # 窓内に留まる場合のみ採用することで、万一妥当性検査をすり抜けた
+                # 誤爆があっても大幅なずれを排除する（Knowing のような正当な
+                # 救済は窓内に収まる）。
                 if (
                     rescued is not None
                     and rescued > last_found_phys
@@ -469,39 +479,57 @@ class PDFSplitter:
         照合が当たったヘッダー頁の印刷頁番号 P から局所オフセット
         (phys_idx - P) を求め、TOC の論理頁に加えることで扉頁を導出する。
 
-        印刷頁番号は一致行そのものと、その直後の行のみから読む（同一行
-        'Knowing | 147' の corfra 形式、タイトルと頁番号が別行に分かれる
-        'The Concepts of Structure and Function' / '29' の Naven 形式の
-        両方をこれでカバーできる）。一致行の *直前* の行は意図的に見ない。
-        章扉は章番号が単独行で先行し本題が続くレイアウトが一般的
-        （'3\nPlace\nThe difference between…'）で、この裸の章番号を
-        印刷頁番号と誤読すると探索窓内に収まってしまう誤ったオフセットを
-        算出し、探索窓ガードをすり抜けて章が無関係な頁へ静かに移動して
-        しまうため（Finding 1）。
+        印刷頁番号は一致行につき3箇所を順に見る: (1) 一致行自身の残り
+        （'Knowing | 147' の corfra 形式）、(2) 直後の行（タイトルと頁番号
+        が別行に分かれる形式）、(3) 直前の行。(3) が必要なのは、組版の
+        見開きでは奇数頁（recto）が「タイトル→頁番号」、偶数頁（verso）
+        は逆順「頁番号→タイトル」になるという交互配置の慣習があるため
+        （Naven.pdf 全380頁がこの形式。verso 実測: idx31 '2\nMethods of
+        Presentation\n…'）。直前行を見なければ verso 頁を全て取りこぼす。
+
+        ただし直前行には章扉特有の罠がある。章扉は章番号が単独行で先行し
+        本題が続くレイアウトが一般的（'3\nPlace\nThe difference between…'）
+        で、この裸の章番号は verso の頁番号と行位置だけでは区別できない。
+        位置では判別できないため、読み取った数字それぞれに対し
+        RESCUE_PAGE_NUMBER_TOLERANCE 以内に logical_page があるかで妥当性
+        を判定する。章扉近傍のランニングヘッダーの印刷頁番号は論理頁の
+        ごく近傍にあるはずだが（corfra 'Knowing' は差2、Naven verso は
+        差1）、隣接する裸の章番号を誤読した場合は論理頁から大きく外れる
+        （'3 Place' 誤読は差22）。3箇所を順に試し、妥当性を満たす最初の
+        候補を採用する。全て不合格なら None を返し、章扉頁の探索結果を
+        そのまま維持させる（安全側のフォールバック）。
 
         書籍全体の頁番号マップは作らない。オフセットは PDF の作られ方に
         依存し（見開きスキャンでは全巻一定、組版由来では部扉ごとに階段状）
         大域的な抽出は書式依存で脆いため、当たった1頁のみを見る。
         """
         lines = [l.strip() for l in doc[phys_idx].get_text("text").split("\n") if l.strip()]
-        printed = None
 
         for pos, line in enumerate(lines[:self.HEADING_SCAN_LINES]):
             line_norm = self._normalize_title(line)
-            if line_norm.startswith(norm_title):
-                rest = line_norm[len(norm_title):].strip()
-                printed = self._parse_page_number(rest)
-                if printed is None and pos + 1 < len(lines):
-                    printed = self._parse_page_number(lines[pos + 1])
-                break
+            if not line_norm.startswith(norm_title):
+                continue
 
-        if printed is None:
-            return None
+            rest = line_norm[len(norm_title):].strip()
+            candidates = [self._parse_page_number(rest)]
+            if pos + 1 < len(lines):
+                candidates.append(self._parse_page_number(lines[pos + 1]))
+            if pos > 0:
+                candidates.append(self._parse_page_number(lines[pos - 1]))
 
-        predicted = logical_page + (phys_idx - printed)
-        if not (0 <= predicted < len(doc)):
-            return None
-        return predicted
+            for printed in candidates:
+                if printed is None:
+                    continue
+                if abs(printed - logical_page) > self.RESCUE_PAGE_NUMBER_TOLERANCE:
+                    continue
+                predicted = logical_page + (phys_idx - printed)
+                if not (0 <= predicted < len(doc)):
+                    continue
+                return predicted
+
+            break
+
+        return None
 
     def _score_candidate(
         self, page_text: str, kind: str, chapter_numeral: Optional[str]

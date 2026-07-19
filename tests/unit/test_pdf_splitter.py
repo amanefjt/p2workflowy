@@ -291,12 +291,16 @@ class TestApplyContentScan:
         # 物理ページ14（0-indexed）にマッチする
         assert result[0]["start_page"] == 14
 
-    def test_fallback_skip_when_ordering_violation(self):
-        """フォールバックページが前章より前になる場合はエントリをスキップする。
+    def test_ordering_violation_places_entry_after_previous_instead_of_dropping(self):
+        """フォールバックページが前章より前になる場合でも、章を欠落させず
+        前章の直後に配置する (I-22 Task4)。
 
         例: Chapter 11 が物理P242 で見つかり、続く Concluded が
         コンテンツスキャンで見つからず論理P233 → フォールバック物理P232 となる場合。
-        242 > 232 なので Concluded はスキップし、Chapter 11 の範囲に吸収される。
+        232 <= 241 のため、以前は Concluded を丸ごとスキップして結果から
+        消していた。しかし「章が結果から silently 消える」よりも
+        「順序上ずれた位置に配置される」方が望ましいため、前章の直後
+        （物理P242）に配置し、章としては必ず出力に残す。
         """
         s = make_splitter()
         # pages[241] に Chapter 11 見出し、Concluded 相当のタイトルは存在しない
@@ -311,9 +315,12 @@ class TestApplyContentScan:
         result = s._apply_content_scan(doc, llm_toc)
 
         # Chapter 11 は物理P241（0-indexed）で見つかる
-        assert len(result) == 1
+        assert len(result) == 2
         assert result[0]["title"] == "Chapter 11: The Ethnographic Effect II"
         assert result[0]["start_page"] == 241
+        # Concluded 相当の章は消えず、前章の直後（物理P242, 0-indexed）に配置される
+        assert result[1]["title"] == "Writing societies, writing persons"
+        assert result[1]["start_page"] == 242
 
     def test_fallback_ok_when_no_ordering_violation(self):
         """フォールバックページが前章より後ならエントリを維持する。"""
@@ -825,3 +832,73 @@ class TestFindTocPages:
         pages = s._find_toc_pages(doc)
         assert 29 in pages
         assert pages == list(range(29, 29 + s.TOC_SAMPLE_PAGES))
+
+
+# ============================================================
+# 局所オフセット救済 (I-22 / Knowing)
+# ============================================================
+
+class TestLocalOffsetRescue:
+    def test_derives_true_start_from_running_header(self):
+        """corfra 実測: idx155 の 'Knowing | 147' から論理145 → idx153。"""
+        s = make_splitter()
+        pages = ["filler"] * 160
+        pages[155] = "Knowing | 147\nwoman drove it fast, with her sunglasses"
+        doc = make_mock_doc(pages)
+        assert s._rescue_by_local_offset(doc, 155, 145, "knowing") == 153
+
+    def test_reads_page_number_from_adjacent_line(self):
+        """Naven 形式: タイトルと頁番号が別行。"""
+        s = make_splitter()
+        pages = ["filler"] * 80
+        pages[60] = "The Concepts of Structure and Function\n31\nbody text"
+        doc = make_mock_doc(pages)
+        assert s._rescue_by_local_offset(
+            doc, 60, 23, "the concepts of structure and function") == 52
+
+    def test_returns_none_when_no_page_number(self):
+        s = make_splitter()
+        pages = ["filler"] * 50
+        pages[30] = "Knowing\nbody text without any page number"
+        doc = make_mock_doc(pages)
+        assert s._rescue_by_local_offset(doc, 30, 20, "knowing") is None
+
+    def test_returns_none_when_out_of_range(self):
+        s = make_splitter()
+        pages = ["filler"] * 20
+        pages[10] = "Knowing | 900\nbody"
+        doc = make_mock_doc(pages)
+        assert s._rescue_by_local_offset(doc, 10, 5, "knowing") is None
+
+    def test_knowing_end_to_end(self):
+        """扉頁にタイトル文字が無くても正しい開始位置を得る。"""
+        s = make_splitter()
+        pages = ["filler"] * 200
+        pages[153] = "The tree imposes the verb to be\nCollisions and Connections\nThis story starts"
+        pages[155] = "Knowing | 147\nwoman drove it fast"
+        doc = make_mock_doc(pages)
+        result = s._apply_content_scan(doc, [{"title": "7 Knowing", "start_page": 145}])
+        assert result[0]["start_page"] == 153
+
+    def test_misfire_rejected_when_rescue_lands_outside_search_window(self):
+        """corfra 実測 (Task4 実データ検証で発見): TOC タイトルが章番号を
+        欠いて渡された場合（例: 'Things' のみ、'4 Things' でない）、真の
+        章扉頁 '4\\nThings\\n...' 自体が隣接する裸の章番号 '4' を印刷頁番号と
+        誤認して "header" 判定されうる。この場合 _rescue_by_local_offset は
+        章番号 '4' を印刷頁として扱い、探索窓から大きく外れた無関係な頁を
+        導出してしまう。窓外の救済結果は採用せず、誤爆前の best_phys
+        （＝この場合は元々正しい章扉頁）を維持しなければならない。
+        """
+        s = make_splitter()
+        pages = ["front"] * 200
+        # 実ページ93(0-indexed): 真の章扉。直前に裸の章番号 '4' があり、
+        # 隣接判定で頁番号と誤認され kind="header" になる。
+        pages[93] = "4\nThings\nThe difference between ambiguity and clarity is not enormous."
+        doc = make_mock_doc(pages)
+
+        llm_toc = [{"title": "Things", "start_page": 85, "role": "chapter"}]
+        result = s._apply_content_scan(doc, llm_toc)
+
+        # 誤った局所オフセット救済（探索窓外）は採用されず、元々見つかっていた
+        # 正しい章扉頁(93, 0-indexed)がそのまま使われる。
+        assert result[0]["start_page"] == 93

@@ -259,6 +259,26 @@ class PDFSplitter:
                 if best_score is None or score > best_score:
                     best_phys, best_score, best_kind = phys_idx, score, kind
 
+            if best_phys is not None and best_kind == "header":
+                rescued = self._rescue_by_local_offset(
+                    doc, best_phys, logical_page, norm_title)
+                # 救済結果は探索窓内に限定する（I-22 Task4 実データ検証で判明）。
+                # 章番号がタイトルから欠落し隣接する裸の章番号（例: '4\nThings'
+                # の '4'）が印刷頁番号と誤認されると、局所オフセットが実際の
+                # 印刷頁と無関係な値になり、窓外の無関係な頁へ大きく外れうる。
+                # 窓内に留まる場合のみ採用することで、この誤爆による大幅な
+                # ずれを排除する（Knowing のような正当な救済は窓内に収まる）。
+                if (
+                    rescued is not None
+                    and rescued > last_found_phys
+                    and search_start <= rescued <= search_end
+                ):
+                    print_log(
+                        f"  [Splitter] 局所オフセット補正: '{title}' "
+                        f"物理P{best_phys+1} → P{rescued+1}"
+                    )
+                    best_phys = rescued
+
             if best_phys is not None:
                 phys_display = best_phys + 1
                 if phys_display != logical_page:
@@ -271,12 +291,23 @@ class PDFSplitter:
             else:
                 fallback = max(0, logical_page - 1)
                 if fallback <= last_found_phys:
-                    # フォールバックが前章より前になる場合、順序を壊すのでスキップ
-                    # そのエントリの内容は前章の範囲に吸収される
+                    # フォールバックも前章より前になる場合、単調性のためそのまま
+                    # 採用はできないが、章を結果から消してはならない（欠落防止）。
+                    # 前章の直後に配置することで順序を保ったまま出力に残す。
+                    rescued_fallback = last_found_phys + 1
+                    if rescued_fallback >= total_pages:
+                        print_log(
+                            f"  [Splitter] 警告: '{title}' が本文で見つからず、"
+                            f"配置可能な物理ページが残っていないためスキップします。"
+                        )
+                        continue
                     print_log(
                         f"  [Splitter] 警告: '{title}' が本文で見つからず、"
-                        f"フォールバックP{fallback+1}が前章P{last_found_phys+1}より前のためスキップします。"
+                        f"フォールバックP{fallback+1}も前章P{last_found_phys+1}以前のため、"
+                        f"章の欠落を避けるため前章直後の物理P{rescued_fallback+1}に配置します。"
                     )
+                    last_found_phys = rescued_fallback
+                    results.append({**entry, "start_page": rescued_fallback})
                     continue
                 print_log(
                     f"  [Splitter] 警告: '{title}' が本文で見つかりません。"
@@ -422,6 +453,42 @@ class PDFSplitter:
             return "title"
 
         return None
+
+    def _rescue_by_local_offset(
+        self, doc: fitz.Document, phys_idx: int, logical_page: int, norm_title: str
+    ) -> Optional[int]:
+        """ランニングヘッダーから局所オフセットを求め真の開始位置を導く (I-22)。
+
+        章扉のタイトル文字がテキスト層から欠落している書籍（corfra の
+        'Knowing' 章）では、どんなテキスト照合でも扉頁に到達できない。
+        照合が当たったヘッダー頁の印刷頁番号 P から局所オフセット
+        (phys_idx - P) を求め、TOC の論理頁に加えることで扉頁を導出する。
+
+        書籍全体の頁番号マップは作らない。オフセットは PDF の作られ方に
+        依存し（見開きスキャンでは全巻一定、組版由来では部扉ごとに階段状）
+        大域的な抽出は書式依存で脆いため、当たった1頁のみを見る。
+        """
+        lines = [l.strip() for l in doc[phys_idx].get_text("text").split("\n") if l.strip()]
+        printed = None
+
+        for pos, line in enumerate(lines[:self.HEADING_SCAN_LINES]):
+            line_norm = self._normalize_title(line)
+            if line_norm.startswith(norm_title):
+                rest = line_norm[len(norm_title):].strip()
+                printed = self._parse_page_number(rest)
+                if printed is None and pos + 1 < len(lines):
+                    printed = self._parse_page_number(lines[pos + 1])
+                if printed is None and pos > 0:
+                    printed = self._parse_page_number(lines[pos - 1])
+                break
+
+        if printed is None:
+            return None
+
+        predicted = logical_page + (phys_idx - printed)
+        if not (0 <= predicted < len(doc)):
+            return None
+        return predicted
 
     def _score_candidate(
         self, page_text: str, kind: str, chapter_numeral: Optional[str]

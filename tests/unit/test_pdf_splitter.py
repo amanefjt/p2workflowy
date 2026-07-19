@@ -155,22 +155,19 @@ class TestApplyContentScan:
     def test_corrects_fixed_offset(self):
         """前付け11ページによる固定オフセットを補正できる。
 
-        [I-22 更新] 旧タイトルは "Chapter 1" のみ（章番号のみで説明語なし）
-        だったが、_normalize_title が章番号プレフィックスを完全に剥がすため
-        norm_title が空文字列になる。新しい _classify_match は
-        `if not norm_title: return None` を仕様として持つため
-        （本文中の "chapter 1" への無差別な部分文字列一致という旧来の
-        誤検出源をなくすため。brief の実測8件はいずれも章番号の後に
-        説明的なタイトル語が続く）、空タイトルでは一致できず本来のオフセット
-        補正機能を検証できなくなってしまう。そのため入力タイトルに説明語を
-        補い、テストの本来の意図（固定オフセット補正）を保ったまま検証する。
+        [I-22 復元] タイトルは "Chapter 1" のみ（章番号のみで説明語なし）。
+        _normalize_title が章番号プレフィックスを完全に剥がすため
+        norm_title は空文字列になるが、_classify_match は norm_title が
+        空でも title_lower による部分文字列一致にフォールバックするため
+        （旧 _matches_heading() 相当・レビュー指摘で復元）、この裸タイトルの
+        まま本来のオフセット補正機能を検証できる。
         """
         s = make_splitter()
         # 物理ページ 0-11: 前付け, 12: Chapter 1 本文
-        pages = ["front matter"] * 12 + ["Chapter 1: Introduction\nIntroduction text..."] + ["body"] * 50
+        pages = ["front matter"] * 12 + ["Chapter 1\n\nIntroduction text..."] + ["body"] * 50
         doc = make_mock_doc(pages)
 
-        llm_toc = [{"title": "Chapter 1: Introduction", "start_page": 1, "role": "chapter"}]
+        llm_toc = [{"title": "Chapter 1", "start_page": 1, "role": "chapter"}]
         result = s._apply_content_scan(doc, llm_toc)
 
         assert result[0]["start_page"] == 12  # 0-indexed 物理ページ
@@ -178,28 +175,26 @@ class TestApplyContentScan:
     def test_corrects_variable_offset(self):
         """前付け分のオフセットが章ごとに異なる場合も補正できる。
 
-        [I-22 更新] 旧版は本文全ページに "chapter 1 content" のように
-        章番号の裸文字列を撒いて任意ページに一致させていたが、これは
-        まさに I-22 が排除対象とする「本文中への無差別な部分文字列一致」
-        の一種であり、新しい _classify_match（norm_title が空なら
-        一致させない）とは根本的に相容れない。見出しページのみに説明的な
-        タイトル文字列を置く形に書き換え、固定/可変オフセット補正という
-        テストの本来の意図を保つ。
+        [I-22 復元] 本文全ページに "chapter 1 body text" のように章番号の
+        裸文字列を撒いても、見出しページが探索窓内で最初に見つかる
+        candidate であり、かつ本文頁とスコアが同点の場合は先に見つかった
+        方（＝見出しページ）が勝つ（"score > best_score" の厳密不等号）ため、
+        title_lower フォールバックが有効でも見出しページが正しく選ばれる。
         """
         s = make_splitter()
         # Chapter 1 見出しページ: 物理12, Chapter 5 見出しページ: 物理109
         pages = (
             ["front"] * 12
-            + ["Chapter 1: Foundations\nIntroduction text..."]
+            + ["Chapter 1\n\nIntroduction text..."]
             + ["chapter 1 body text"] * 96
-            + ["Chapter 5: Analysis\nFurther text..."]
+            + ["Chapter 5\n\nFurther text..."]
             + ["chapter 5 body text"] * 49
         )
         doc = make_mock_doc(pages)
 
         llm_toc = [
-            {"title": "Chapter 1: Foundations", "start_page": 1, "role": "chapter"},
-            {"title": "Chapter 5: Analysis", "start_page": 105, "role": "chapter"},
+            {"title": "Chapter 1", "start_page": 1, "role": "chapter"},
+            {"title": "Chapter 5", "start_page": 105, "role": "chapter"},
         ]
         result = s._apply_content_scan(doc, llm_toc)
 
@@ -337,6 +332,26 @@ class TestApplyContentScan:
         assert len(result) == 2
         assert result[1]["start_page"] == 39
 
+    def test_bare_numeral_toc_entry_lands_on_title_page_not_header(self):
+        """PSE 実測相当: TOC が説明語を持たない裸の 'Chapter 1' を返す場合、
+        title_lower フォールバックが復元されていないと本文照合が一切
+        働かず論理ページへ無補正フォールバックしてしまう回帰を検証する。
+        本文中には同じ 'Chapter 1' を含むランニングヘッダー頁もあるが、
+        _classify_match の隣接判定と _score_candidate の採点により
+        章扉頁（本タイトル頁）が正しく選ばれることを end-to-end で確認する。
+        """
+        s = make_splitter()
+        header_page = "Chapter 1\n15\nbody text continues across this running header page..."
+        title_page = "Chapter 1\nThe Ethnographic Effect\nBody begins here with the real chapter opening..."
+        pages = ["front matter"] * 10 + [header_page, title_page] + ["body"] * 29
+        doc = make_mock_doc(pages)
+
+        llm_toc = [{"title": "Chapter 1", "start_page": 11, "role": "chapter"}]
+        result = s._apply_content_scan(doc, llm_toc)
+
+        # ランニングヘッダー頁(10)ではなく章扉頁(11)に着地する
+        assert result[0]["start_page"] == 11
+
 
 # ============================================================
 # _parse_page_number / _is_chapter_marker (I-22)
@@ -425,6 +440,29 @@ class TestClassifyMatch:
     def test_no_match_returns_none(self):
         s = make_splitter()
         assert s._classify_match("unrelated body text\nmore text", "knowing", None) is None
+
+    def test_bare_numeral_title_page_fallback_is_title(self):
+        """PSE 実測相当: 'Chapter 1' は norm_title が空文字列になるため、
+        title_lower による部分文字列一致フォールバックが必要（レビュー指摘で復元）。
+        章扉ページ（直後が本文題名・本文）では "title" となる。
+        """
+        s = make_splitter()
+        text = "Chapter 1\nThe Ethnographic Effect\nBody text begins here..."
+        assert s._classify_match(text, "", None, "chapter 1") == "title"
+
+    def test_bare_numeral_title_fallback_running_header_is_header(self):
+        """同フォールバックでも、隣接行が裸の頁番号ならランニングヘッダー
+        と判定する（章扉と同じ隣接判定を通ることの検証）。
+        """
+        s = make_splitter()
+        text = "Chapter 1\n42\nbody text continues here"
+        assert s._classify_match(text, "", None, "chapter 1") == "header"
+
+    def test_both_empty_returns_none(self):
+        """norm_title・title_lower がともに空文字列なら、何にでも一致する
+        退行的挙動を避けるため None を返す。"""
+        s = make_splitter()
+        assert s._classify_match("Chapter 1\nsome body text", "", None, "") is None
 
 
 # ============================================================

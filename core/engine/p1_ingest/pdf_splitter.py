@@ -228,6 +228,7 @@ class PDFSplitter:
 
         for entry in llm_toc:
             title = entry.get("title", "")
+            title_lower = title.lower()
             logical_page = int(entry.get("start_page", 1))  # 1-indexed logical
 
             norm_title = self._normalize_title(title)
@@ -250,7 +251,7 @@ class PDFSplitter:
                 if self._is_toc_page(raw_page, all_titles):
                     continue
 
-                kind = self._classify_match(raw_page, norm_title, chapter_numeral)
+                kind = self._classify_match(raw_page, norm_title, chapter_numeral, title_lower)
                 if kind is None:
                     continue
 
@@ -332,7 +333,8 @@ class PDFSplitter:
         return False
 
     def _classify_match(
-        self, page_text: str, norm_title: str, chapter_numeral: Optional[str]
+        self, page_text: str, norm_title: str, chapter_numeral: Optional[str],
+        title_lower: str = "",
     ) -> Optional[str]:
         """ページが章扉かランニングヘッダーかを判定する (I-22)。
 
@@ -340,8 +342,18 @@ class PDFSplitter:
         ランニングヘッダー、章マーカーが隣接していれば章扉とみなす。
         exact / joined という一致の種類は判定に使わない（Naven では
         本文頁のヘッダーが exact、章扉が joined になり順位が反転するため）。
+
+        norm_title が空文字列になるケース（'Chapter 1' のように説明語を
+        伴わない裸の章番号は _normalize_title() が章番号プレフィックスごと
+        剥がすため空文字列になる）では、行単位の正規化一致が機能しない。
+        この場合は旧 _matches_heading() が持っていたフォールバック——
+        title_lower による大文字小文字を無視した部分文字列一致——に頼る。
+        フォールバックで一致した行も通常の一致行と同じ隣接判定にかけ、
+        "title" に短絡させない。ただし Pass 2（複数行結合）は裸の章番号
+        だと本文中の "chapter 1" にも過剰一致するため、norm_title が
+        空の場合はスキップする。
         """
-        if not norm_title:
+        if not norm_title and not title_lower:
             return None
 
         lines = [l.strip() for l in page_text.split("\n")]
@@ -351,17 +363,23 @@ class PDFSplitter:
 
         # Pass 1: 行単位
         for pos, line in enumerate(nonempty[:self.HEADING_SCAN_LINES]):
-            line_norm = self._normalize_title(line)
-            if line_norm == norm_title:
-                pass
-            elif line_norm.startswith(norm_title + " "):
-                rest = line_norm[len(norm_title):].strip()
-                if self._parse_page_number(rest) is not None:
-                    return "header"   # 'Knowing | 147'
-                if not self._is_chapter_marker(rest, chapter_numeral):
-                    continue          # 本文行の前方一致は一致とみなさない
+            if norm_title:
+                line_norm = self._normalize_title(line)
+                if line_norm == norm_title:
+                    pass
+                elif line_norm.startswith(norm_title + " "):
+                    rest = line_norm[len(norm_title):].strip()
+                    if self._parse_page_number(rest) is not None:
+                        return "header"   # 'Knowing | 147'
+                    if not self._is_chapter_marker(rest, chapter_numeral):
+                        continue          # 本文行の前方一致は一致とみなさない
+                else:
+                    continue
             else:
-                continue
+                # norm_title が空（裸の章番号）: 旧 _matches_heading() の
+                # フォールバック。大文字小文字を無視した部分文字列一致。
+                if title_lower not in line.lower():
+                    continue
 
             neighbors = []
             if pos > 0:
@@ -374,6 +392,11 @@ class PDFSplitter:
             if any(self._parse_page_number(n) is not None for n in neighbors):
                 return "header"
             return "title"
+
+        if not norm_title:
+            # 裸の章番号は複数行結合一致（Pass 2）を行わない。'chapter 1' の
+            # ような文字列は本文中のあらゆる箇所に過剰一致してしまうため。
+            return None
 
         # Pass 2: 冒頭数行の結合（複数行に割れたタイトル）
         #

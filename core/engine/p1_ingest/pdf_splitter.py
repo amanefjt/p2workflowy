@@ -291,8 +291,6 @@ class PDFSplitter:
         {'I': '1', 'l': '1', '|': '1', 'i': '1', 'r': '1',
          'O': '0', 'o': '0', 'S': '5', 'B': '8'}
     )
-    _ROMAN_RE = re.compile(r'^[IVXLC]+$', re.IGNORECASE)
-
     def _parse_page_number(self, line: str) -> Optional[int]:
         """行を頁番号として解釈する。OCR 崩れ（'3 I'→31, 'r 72'→172）に耐える。
 
@@ -346,12 +344,14 @@ class PDFSplitter:
         norm_title が空文字列になるケース（'Chapter 1' のように説明語を
         伴わない裸の章番号は _normalize_title() が章番号プレフィックスごと
         剥がすため空文字列になる）では、行単位の正規化一致が機能しない。
-        この場合は旧 _matches_heading() が持っていたフォールバック——
-        title_lower による大文字小文字を無視した部分文字列一致——に頼る。
-        フォールバックで一致した行も通常の一致行と同じ隣接判定にかけ、
-        "title" に短絡させない。ただし Pass 2（複数行結合）は裸の章番号
-        だと本文中の "chapter 1" にも過剰一致するため、norm_title が
-        空の場合はスキップする。
+        この場合は title_lower による前方一致（行頭が title_lower と一致し、
+        直後が英数字でない）にフォールバックする。単純な部分文字列一致では
+        本文中の言及（'They are the subject of Chapter 10.'）や桁違いの
+        章番号（'Chapter 1' が 'Chapter 10' に誤ヒット）を拾ってしまうため、
+        行頭一致＋非英数字境界を要求する。フォールバックで一致した行も
+        通常の一致行と同じ隣接判定にかけ、"title" に短絡させない。ただし
+        Pass 2（複数行結合）は裸の章番号だと本文中の "chapter 1" にも
+        過剰一致するため、norm_title が空の場合はスキップする。
         """
         if not norm_title and not title_lower:
             return None
@@ -376,9 +376,19 @@ class PDFSplitter:
                 else:
                     continue
             else:
-                # norm_title が空（裸の章番号）: 旧 _matches_heading() の
-                # フォールバック。大文字小文字を無視した部分文字列一致。
-                if title_lower not in line.lower():
+                # norm_title が空（裸の章番号）: title_lower による前方一致。
+                # 行頭が title_lower と一致し、直後が英数字でない場合のみ
+                # 一致とみなす（本文中の言及・桁違い章番号への誤ヒット防止）。
+                line_lower = line.lower()
+                if line_lower == title_lower:
+                    pass
+                elif (
+                    line_lower.startswith(title_lower)
+                    and len(line_lower) > len(title_lower)
+                    and not line_lower[len(title_lower)].isalnum()
+                ):
+                    pass
+                else:
                     continue
 
             neighbors = []
@@ -416,10 +426,19 @@ class PDFSplitter:
     def _score_candidate(
         self, page_text: str, kind: str, chapter_numeral: Optional[str]
     ) -> int:
-        """候補ページを章扉らしさで採点する (I-22)。"""
-        score = 0
+        """候補ページを章扉らしさで採点する (I-22)。
+
+        章マーカー加点・疎密加点は kind == "title" の候補にのみ与える。
+        header にも加点すると、探索窓内の全候補がランニングヘッダーである
+        場合（章扉頁のテキスト層にタイトルが載っていないスキャン等）に
+        「最も疎な header」が勝ってしまい、任意性の高いページが選ばれる。
+        header は常に SCORE_HEADER_PENALTY のみとすることで、全候補が
+        header の窓では最も早い（=単調性上最初に見つかる）header が
+        決定的に選ばれるようにする。
+        """
         if kind == "header":
-            score += self.SCORE_HEADER_PENALTY
+            return self.SCORE_HEADER_PENALTY
+        score = 0
         head = [l.strip() for l in page_text.split("\n") if l.strip()][:self.JOINED_SCAN_LINES]
         if any(self._is_chapter_marker(l, chapter_numeral) for l in head):
             score += self.SCORE_CHAPTER_MARKER

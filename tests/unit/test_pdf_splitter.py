@@ -158,9 +158,9 @@ class TestApplyContentScan:
         [I-22 復元] タイトルは "Chapter 1" のみ（章番号のみで説明語なし）。
         _normalize_title が章番号プレフィックスを完全に剥がすため
         norm_title は空文字列になるが、_classify_match は norm_title が
-        空でも title_lower による部分文字列一致にフォールバックするため
-        （旧 _matches_heading() 相当・レビュー指摘で復元）、この裸タイトルの
-        まま本来のオフセット補正機能を検証できる。
+        空でも title_lower による前方一致（行頭一致＋非英数字境界）に
+        フォールバックするため、この裸タイトルのまま本来のオフセット
+        補正機能を検証できる。
         """
         s = make_splitter()
         # 物理ページ 0-11: 前付け, 12: Chapter 1 本文
@@ -352,6 +352,30 @@ class TestApplyContentScan:
         # ランニングヘッダー頁(10)ではなく章扉頁(11)に着地する
         assert result[0]["start_page"] == 11
 
+    def test_bare_numeral_sparse_prose_does_not_outrank_title_page(self):
+        """PSE 実測 (Finding 1): PSEpdf.pdf の TOC エントリ 'Chapter 10' で、
+        疎な写真キャプション頁（本文中に 'Chapter 10' への言及を含む）が
+        真の章扉頁より先に選ばれてしまう回帰を検証する。修正前は部分文字列
+        一致でキャプション頁が "title" 判定され、疎密加点(+20)で章扉頁(0点)
+        を上回っていた。
+        """
+        s = make_splitter()
+        title_page = "Chapter 10\nPuzzles of Scale\n" + ("x " * 2000)
+        caption_page = "Photo caption.\nThey are the subject of Chapter 10.\nMore caption."
+        pages = (
+            ["front"] * 108
+            + [title_page]
+            + ["filler"] * 10
+            + [caption_page]
+            + ["filler"] * 20
+        )
+        doc = make_mock_doc(pages)
+
+        llm_toc = [{"title": "Chapter 10", "start_page": 109, "role": "chapter"}]
+        result = s._apply_content_scan(doc, llm_toc)
+
+        assert result[0]["start_page"] == 108  # title_page（0-indexed）
+
 
 # ============================================================
 # _parse_page_number / _is_chapter_marker (I-22)
@@ -443,7 +467,7 @@ class TestClassifyMatch:
 
     def test_bare_numeral_title_page_fallback_is_title(self):
         """PSE 実測相当: 'Chapter 1' は norm_title が空文字列になるため、
-        title_lower による部分文字列一致フォールバックが必要（レビュー指摘で復元）。
+        title_lower による前方一致フォールバックが必要（行頭一致＋非英数字境界）。
         章扉ページ（直後が本文題名・本文）では "title" となる。
         """
         s = make_splitter()
@@ -463,6 +487,28 @@ class TestClassifyMatch:
         退行的挙動を避けるため None を返す。"""
         s = make_splitter()
         assert s._classify_match("Chapter 1\nsome body text", "", None, "") is None
+
+    def test_bare_numeral_fallback_rejects_prose_mention(self):
+        """PSE 実測 (Finding 1): 'They are the subject of Chapter 10.' のような
+        本文中の言及は、行頭一致でないため裸番号フォールバックで拾ってはならない。
+        """
+        s = make_splitter()
+        text = "Photo caption.\nThey are the subject of Chapter 10.\nMore caption text."
+        assert s._classify_match(text, "", None, "chapter 10") is None
+
+    def test_bare_numeral_fallback_matches_line_starting_with_title(self):
+        """行頭が title_lower と完全一致すれば通常の隣接判定にかけて良い。"""
+        s = make_splitter()
+        text = "Chapter 10\nPuzzles of Scale\nBody begins here..."
+        assert s._classify_match(text, "", None, "chapter 10") == "title"
+
+    def test_bare_numeral_fallback_prefix_collision_guard(self):
+        """Finding 1: 'chapter 1' を探索中に 'Chapter 10' へ桁違いで
+        前方一致してしまう衝突を、直後の非英数字境界チェックで防ぐ。
+        """
+        s = make_splitter()
+        text = "Chapter 10\nPuzzles of Scale\nBody begins here..."
+        assert s._classify_match(text, "", None, "chapter 1") is None
 
 
 # ============================================================
@@ -502,6 +548,35 @@ class TestCandidateScoring:
             {"title": "2 Beta", "start_page": 42},
         ])
         assert result[0]["start_page"] < result[1]["start_page"]
+
+    def test_all_header_window_earliest_wins_not_sparsest(self):
+        """Finding 2: 探索窓内の全候補が running header の場合、疎密加点は
+        header に適用してはならない。適用すると最も疎な header が勝ち、
+        任意性の高いページに着地してしまう（corfra '7 Knowing' 実測で
+        index169 という14頁の回帰を引き起こした）。修正後は疎密に関わらず
+        最も早い header が決定的に選ばれる。
+        """
+        s = make_splitter()
+        # 3つとも "Knowing | <page>" のランニングヘッダーで kind は "header" 一択。
+        # header_b が最も疎（短い）だが、最も早い header_a (idx20) が勝つべき。
+        header_a = "Knowing | 147\n" + ("body text continues here. " * 40)
+        header_b = "Knowing | 148\nshort."
+        header_c = "Knowing | 149\n" + ("body text continues here. " * 40)
+        pages = (
+            ["filler"] * 20
+            + [header_a]
+            + ["filler"] * 19
+            + [header_b]
+            + ["filler"] * 19
+            + [header_c]
+            + ["filler"] * 10
+        )
+        doc = make_mock_doc(pages)
+
+        llm_toc = [{"title": "Knowing", "start_page": 21, "role": "chapter"}]
+        result = s._apply_content_scan(doc, llm_toc)
+
+        assert result[0]["start_page"] == 20  # header_a（最も早い header）
 
 
 # ============================================================

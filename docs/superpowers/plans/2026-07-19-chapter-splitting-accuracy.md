@@ -14,11 +14,11 @@
 
 | 定数 | 値 | 用途 |
 |---|---|---|
-| `OUTLINE_MAX_ENTRY_RATIO` | `0.10` | outline エントリ数 ÷ 総頁数 の上限 |
-| `OUTLINE_MIN_PAGES_PER_CHAPTER` | `3` | 1章あたり平均頁数の下限 |
+| `OUTLINE_MIN_PAGES_PER_CHAPTER` | `3` | 1章あたり平均頁数の下限（唯一の頁密度指標。当初あったエントリ数比の指標は同じ量の裏返しで到達不能な死にコードだったため Task 1 レビューで削除） |
 | `OUTLINE_LABEL_SEQ_RATIO` | `0.5` | 連番ラベルとみなす割合 |
 | `TOC_SEARCH_PAGES` | `30` | 目次ページを探索する範囲 |
-| `TOC_SAMPLE_PAGES` | `8` | LLM / VLM に渡すページ数 |
+| `TOC_SAMPLE_PAGES` | `8` | 目次発見時に LLM / VLM に渡すページ数 |
+| `TOC_FALLBACK_PAGES` | `15` | 目次が見つからない場合の退避窓（Task 2 レビューで追加。8 に縮小すると従来15頁窓より狭くなり既存書籍が退行するため） |
 | `HEADING_SCAN_LINES` | `15` | Pass 1 で走査する行数 |
 | `JOINED_SCAN_LINES` | `5` | Pass 2 で結合する行数 |
 | `SCORE_HEADER_PENALTY` | `-100` | ランニングヘッダー判定の減点 |

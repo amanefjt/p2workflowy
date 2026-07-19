@@ -339,6 +339,40 @@ class TestApplyContentScan:
         assert len(result) == 2
         assert result[1]["start_page"] == 39
 
+    def test_plain_fallback_branch_advances_watermark_for_monotonicity(self):
+        """Finding 3: 順序違反のない通常フォールバック分岐（本文未検出かつ
+        fallback > last_found_phys）でも last_found_phys を更新しなければ
+        ならない。更新しないと、後続章の探索窓は今回のフォールバック位置を
+        知らないまま前章の位置しか避けないため、フォールバック位置より
+        手前の頁に誤って一致し、結果リストが非単調になりうる。
+
+        Alpha は phys10 で本文一致（last_found_phys=10）。Beta は本文中
+        どこにも現れず論理P41→フォールバックP40（40>10 のため順序違反
+        分岐は通らない）。ここで last_found_phys を更新しないと、Gamma の
+        探索窓([16,70])は phys20（last_found_phys=10より後）の 'Gamma' 見出し
+        に一致してしまい、結果が [10, 40, 20] という非単調なリストになる
+        （split() では Beta の end_page が 20-1=19 となり start_page(40) >
+        end_page(19) で Beta が消失する）。修正後は last_found_phys=40 と
+        なり Gamma は phys20 をスキップして順序違反分岐へ回り、単調性が
+        保たれる。
+        """
+        s = make_splitter()
+        pages = ["filler"] * 90
+        pages[10] = "Alpha\nBody text of chapter alpha begins here for real content."
+        pages[20] = "Gamma\nBody text of chapter gamma begins here for real content."
+        doc = make_mock_doc(pages)
+
+        llm_toc = [
+            {"title": "Alpha", "start_page": 11, "role": "chapter"},
+            {"title": "Beta", "start_page": 41, "role": "chapter"},
+            {"title": "Gamma", "start_page": 21, "role": "chapter"},
+        ]
+        result = s._apply_content_scan(doc, llm_toc)
+
+        starts = [e["start_page"] for e in result]
+        assert starts == sorted(starts), f"non-monotonic result: {starts}"
+        assert starts == [10, 40, 41]
+
     def test_bare_numeral_toc_entry_lands_on_title_page_not_header(self):
         """PSE 実測相当: TOC が説明語を持たない裸の 'Chapter 1' を返す場合、
         title_lower フォールバックが復元されていないと本文照合が一切
@@ -901,4 +935,53 @@ class TestLocalOffsetRescue:
 
         # 誤った局所オフセット救済（探索窓外）は採用されず、元々見つかっていた
         # 正しい章扉頁(93, 0-indexed)がそのまま使われる。
+        assert result[0]["start_page"] == 93
+
+    def test_previous_line_bare_numeral_not_misread_as_printed_page(self):
+        """Finding 1 実測相当: 章番号が単独行で先行し本題が続くレイアウト
+        （'3\\nPlace\\nThe difference between…'）では、一致行の直前行は
+        単なる裸の章番号であって印刷頁番号ではない。これを印刷頁番号として
+        読んでしまうと、探索窓ガードをすり抜けてしまう誤ったオフセットを
+        算出しうる（title='Place'（章番号なし）, 論理P25, phys30 = '3\\nPlace\\n...'
+        → 誤救済で 25+(30-3)=52 は窓[20,74]内のためガードを通過してしまう）。
+        直前行を読まなければ printed は None のままとなり、rescue は None を
+        返して章扉頁30がそのまま維持される。
+        """
+        s = make_splitter()
+        pages = ["front"] * 80
+        pages[30] = "3\nPlace\nThe difference between ambiguity and clarity is not enormous."
+        doc = make_mock_doc(pages)
+
+        llm_toc = [{"title": "Place", "start_page": 25, "role": "chapter"}]
+        result = s._apply_content_scan(doc, llm_toc)
+
+        assert result[0]["start_page"] == 30
+
+    def test_rescue_only_fires_for_header_not_title(self):
+        """Finding 2: 局所オフセット救済は best_kind == 'header' の場合にのみ
+        発動しなければならない。'title' と判定された勝者候補に対しても
+        発動してしまうと、その扉頁自体に含まれる無関係な数字（キャプション
+        番号等）を印刷頁番号と誤読し、正しく見つかった扉頁を無関係な頁へ
+        動かしてしまいうる。
+
+        頁は '4\\nThings\\n90\\nThe difference between…' というレイアウト
+        で、隣接行 '4' が章番号と一致するため _classify_match は "title" を
+        返す（救済ゲートが正しく効いていれば発動しない）。しかし救済ゲート
+        なしで _rescue_by_local_offset を実行すると、一致行 'Things' の
+        次行 '90' を印刷頁番号と誤読し、predicted = 85 + (93 - 90) = 88 を
+        算出してしまう（88 は探索窓 [80, 134] 内に収まるためガードも
+        すり抜ける）。best_kind == 'header' ゲートを外すとこのテストは
+        88 を返し失敗する。
+        """
+        s = make_splitter()
+        pages = ["front"] * 150
+        pages[93] = (
+            "4\nThings\n90\nThe difference between ambiguity and clarity is not "
+            "enormous, but subtle and layered throughout everyday interpretation."
+        )
+        doc = make_mock_doc(pages)
+
+        llm_toc = [{"title": "4 Things", "start_page": 85, "role": "chapter"}]
+        result = s._apply_content_scan(doc, llm_toc)
+
         assert result[0]["start_page"] == 93

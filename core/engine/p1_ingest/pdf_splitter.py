@@ -313,6 +313,11 @@ class PDFSplitter:
                     f"  [Splitter] 警告: '{title}' が本文で見つかりません。"
                     f"論理ページ {logical_page} をフォールバックとして使用します。"
                 )
+                # 単調性の watermark はこの分岐でも更新する。ここを飛ばすと
+                # 後続章の探索窓が今回のフォールバック位置を考慮せず、
+                # フォールバック位置より手前の頁に誤って一致しうる
+                # （結果リストが非単調になり split() で章が消失する。Finding 3）。
+                last_found_phys = fallback
                 results.append({**entry, "start_page": fallback})
 
         return results
@@ -464,6 +469,16 @@ class PDFSplitter:
         照合が当たったヘッダー頁の印刷頁番号 P から局所オフセット
         (phys_idx - P) を求め、TOC の論理頁に加えることで扉頁を導出する。
 
+        印刷頁番号は一致行そのものと、その直後の行のみから読む（同一行
+        'Knowing | 147' の corfra 形式、タイトルと頁番号が別行に分かれる
+        'The Concepts of Structure and Function' / '29' の Naven 形式の
+        両方をこれでカバーできる）。一致行の *直前* の行は意図的に見ない。
+        章扉は章番号が単独行で先行し本題が続くレイアウトが一般的
+        （'3\nPlace\nThe difference between…'）で、この裸の章番号を
+        印刷頁番号と誤読すると探索窓内に収まってしまう誤ったオフセットを
+        算出し、探索窓ガードをすり抜けて章が無関係な頁へ静かに移動して
+        しまうため（Finding 1）。
+
         書籍全体の頁番号マップは作らない。オフセットは PDF の作られ方に
         依存し（見開きスキャンでは全巻一定、組版由来では部扉ごとに階段状）
         大域的な抽出は書式依存で脆いため、当たった1頁のみを見る。
@@ -478,8 +493,6 @@ class PDFSplitter:
                 printed = self._parse_page_number(rest)
                 if printed is None and pos + 1 < len(lines):
                     printed = self._parse_page_number(lines[pos + 1])
-                if printed is None and pos > 0:
-                    printed = self._parse_page_number(lines[pos - 1])
                 break
 
         if printed is None:

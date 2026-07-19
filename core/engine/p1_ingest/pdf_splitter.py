@@ -105,6 +105,11 @@ class PDFSplitter:
                     self._save_cache()
 
             if llm_toc:
+                # 層1: TOC の検算と系統的ずれの補正。
+                # Route 3（LLM 抽出）のみに掛ける。Route 1（手動修正済みTOC）と
+                # Route 2（ネイティブ outline・物理頁直参照）には掛けない。
+                from .toc_verifier import verify_and_fix_toc
+                llm_toc = verify_and_fix_toc(doc, llm_toc, self._normalize_title)
                 toc_data = self._apply_content_scan(doc, llm_toc)
 
         if not toc_data:
@@ -254,13 +259,25 @@ class PDFSplitter:
         for entry in llm_toc:
             title = entry.get("title", "")
             title_lower = title.lower()
-            logical_page = int(entry.get("start_page", 1))  # 1-indexed logical
+            raw_logical = entry.get("start_page")
+            if raw_logical is None:
+                # 層1の shift 補正で参照先が無かった章。論理頁のヒントを持たないため
+                # 文書全体を探索窓とし、本文照合のみで位置を決める。
+                logical_page = 1
+                has_logical_hint = False
+            else:
+                logical_page = int(raw_logical)  # 1-indexed logical
+                has_logical_hint = True
 
             norm_title = self._normalize_title(title)
 
             # 探索範囲: 論理ページ前後を広めに取り可変オフセットに対応
-            search_start = max(0, logical_page - 5)
-            search_end = min(total_pages - 1, logical_page + 49)
+            if has_logical_hint:
+                search_start = max(0, logical_page - 5)
+                search_end = min(total_pages - 1, logical_page + 49)
+            else:
+                search_start = max(0, last_found_phys + 1)
+                search_end = total_pages - 1
 
             chapter_numeral = self._extract_leading_numeral(title)
 

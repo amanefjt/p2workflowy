@@ -1131,3 +1131,81 @@ class TestLocalOffsetRescue:
         doc = make_mock_doc(pages)
         expected = 45 + (75 - 40)
         assert s._rescue_by_local_offset(doc, 75, 45, "knowing") == expected
+
+
+# ============================================================
+# 層1（TOC 検算）の Route 3 への配線
+# ============================================================
+
+class TestTocVerifierWiring:
+    """層1（TOC 検算）が Route 3 にのみ掛かることを確認する。"""
+
+    def test_route3_calls_verify_and_fix_toc(self, tmp_path):
+        s = make_splitter()
+        s.cache = {"dummyhash_toc": [{"title": "A", "start_page": 1, "role": "chapter"}]}
+        doc = make_mock_doc(["1\nA\n", "2\n本文\n"])
+
+        with patch("fitz.open", return_value=doc), \
+             patch.object(s, "_get_pdf_hash", return_value="dummyhash"), \
+             patch.object(s, "_get_chapters_from_outline", return_value=None), \
+             patch.object(s, "_apply_content_scan", return_value=[]), \
+             patch("core.engine.p1_ingest.toc_verifier.verify_and_fix_toc") as mock_verify:
+            mock_verify.return_value = [{"title": "A", "start_page": 1, "role": "chapter"}]
+            s.split("dummy.pdf", tmp_path)
+
+        assert mock_verify.called, "Route 3 では層1が呼ばれなければならない"
+
+    def test_route2_does_not_call_verify_and_fix_toc(self, tmp_path):
+        """ネイティブ outline は物理頁を直接持つため検算を掛けてはならない。"""
+        s = make_splitter()
+        doc = make_mock_doc(["A\n", "本文\n"])
+        outline_toc = [{"title": "A", "start_page": 0, "role": "chapter"}]
+
+        with patch("fitz.open", return_value=doc), \
+             patch.object(s, "_get_chapters_from_outline", return_value=outline_toc), \
+             patch("core.engine.p1_ingest.toc_verifier.verify_and_fix_toc") as mock_verify:
+            s.split("dummy.pdf", tmp_path)
+
+        assert not mock_verify.called, "Route 2 で層1が呼ばれてはならない"
+
+
+# ============================================================
+# 探索窓の不変性（既存入力に対する振る舞い不変の担保）
+# ============================================================
+
+class TestSearchWindowInvariance:
+    """start_page が数値の場合、探索窓は従来の式と完全に同一でなければならない。"""
+
+    def test_numeric_logical_page_uses_original_window(self):
+        s = make_splitter()
+        # 論理頁50 → 従来の窓は idx45..99（logical-5 … logical+49、総頁数でクリップ）
+        doc = make_mock_doc(["x\n"] * 200)
+        scanned = []
+
+        original_getitem = doc.__getitem__
+
+        def record(idx):
+            scanned.append(idx)
+            return original_getitem(idx)
+
+        doc.__getitem__ = MagicMock(side_effect=record)
+        s._apply_content_scan(doc, [{"title": "NotPresent", "start_page": 50, "role": "chapter"}])
+
+        assert min(scanned) == 45, "探索開始が logical-5 でない"
+        assert max(scanned) == 99, "探索終了が logical+49 でない"
+
+    def test_none_logical_page_scans_from_previous_chapter(self):
+        s = make_splitter()
+        doc = make_mock_doc(["x\n"] * 20)
+        scanned = []
+        original_getitem = doc.__getitem__
+
+        def record(idx):
+            scanned.append(idx)
+            return original_getitem(idx)
+
+        doc.__getitem__ = MagicMock(side_effect=record)
+        s._apply_content_scan(doc, [{"title": "NotPresent", "start_page": None, "role": "chapter"}])
+
+        assert min(scanned) == 0
+        assert max(scanned) == 19

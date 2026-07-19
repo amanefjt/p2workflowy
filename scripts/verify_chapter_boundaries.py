@@ -6,6 +6,8 @@ Route 3 の LLM TOC 抽出は state/vlm_cache.json にキャッシュされる�
 import sys
 from pathlib import Path
 
+import re
+
 import fitz
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -32,6 +34,14 @@ EXPECTED = {
 }
 
 
+
+def _match_key(title: str) -> str:
+    """章タイトルの照合キー。先頭の章番号（OCR 崩れを含む）と記号を除去する。"""
+    t = re.sub(r'^[\s\d IVXivx/.:|\[\]-]+', '', title)
+    t = re.sub(r'[^\w\s]', ' ', t)
+    return ' '.join(t.lower().split())
+
+
 def main() -> int:
     api_key = None
     import os
@@ -51,7 +61,12 @@ def main() -> int:
             print(f"    {ch['title'][:40]:42s} {rng} role={ch['role']}")
 
         for title, expected_idx in EXPECTED.get(name, {}).items():
-            match = [c for c in chapters if c["title"] == title]
+            # 完全一致では照合できない。TOC 抽出 LLM は OCR 崩れをそのまま
+            # 返すことがあり、corfra の '7 Knowing' は実際に '/ Knowing' として
+            # 抽出される（章番号 7 がスラッシュに誤読されている）。章番号を
+            # 除いた説明語部分で寛容に照合する。
+            key = _match_key(title)
+            match = [c for c in chapters if _match_key(c["title"]) == key]
             if not match:
                 print(f"  NG  '{title}' が章リストに無い")
                 failures += 1

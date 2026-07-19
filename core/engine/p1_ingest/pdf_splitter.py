@@ -17,6 +17,10 @@ class PDFSplitter:
     OUTLINE_MIN_PAGES_PER_CHAPTER = 3
     OUTLINE_LABEL_SEQ_RATIO = 0.5
 
+    # --- Route 3 TOC ページ探索 (I-25) ---
+    TOC_SEARCH_PAGES = 30
+    TOC_SAMPLE_PAGES = 8
+
     def __init__(self, api_key: str, model: Optional[str] = None):
         self.api_key = api_key
         # model_optimization.md に基づき、TOC 解析には安定性の高いデフォルトモデルを使用
@@ -330,6 +334,31 @@ class PDFSplitter:
         t = re.sub(r'[^\w\s]', ' ', t)
         return ' '.join(t.lower().split())
 
+    TOC_HEADING_RE = re.compile(
+        r'^\s*(TABLE\s+OF\s+CONTENTS|CONTENTS|目\s*次)\s*$',
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+    def _find_toc_pages(self, doc: fitz.Document) -> List[int]:
+        """目次ページを探索し、LLM に渡すページ index を返す (I-25)。
+
+        従来は先頭15頁固定だったが、Naven.pdf のように目次が idx 16-24 に
+        ある書籍では窓外となり TOC を取得できなかった。目次見出しを探索し、
+        見つかった位置から後続頁を含めて返す。見つからない場合は従来どおり
+        先頭から既定頁数を返す。
+        """
+        limit = min(self.TOC_SEARCH_PAGES, len(doc))
+        for i in range(limit):
+            text = doc[i].get_text()
+            # 先頭数行に目次見出しがあるページを目次とみなす
+            head = "\n".join(text.split("\n")[:5])
+            if self.TOC_HEADING_RE.search(head):
+                end = min(i + self.TOC_SAMPLE_PAGES, len(doc))
+                print_log(f"  [Splitter] 目次ページ検出: idx {i}-{end-1}")
+                return list(range(i, end))
+
+        return list(range(min(self.TOC_SAMPLE_PAGES, len(doc))))
+
     def _extract_toc(self, doc: fitz.Document) -> List[Dict[str, Any]]:
         """LLM を用いて PDF から TOC を抽出・整理する（論理ページ番号を返す）。
 
@@ -337,7 +366,7 @@ class PDFSplitter:
         これはスキャン PDF で TOC ページが OCR されていないケースに対応する。
         """
         text_samples = ""
-        for i in range(min(15, len(doc))):
+        for i in self._find_toc_pages(doc):
             text_samples += f"--- Page {i+1} ---\n" + doc[i].get_text() + "\n"
 
         from core.llm_client import load_coreprompts
@@ -373,7 +402,7 @@ class PDFSplitter:
         """ページ画像を VLM に渡して TOC を抽出する。
 
         テキスト抽出が失敗するスキャン PDF（見開きスキャン・白抜き文字等）に対応する。
-        最初の 10 ページを画像化して Gemini Flash に渡す。
+        `_find_toc_pages` で探索したページを画像化して Gemini Flash に渡す。
         """
         try:
             from PIL import Image as PILImage
@@ -384,7 +413,7 @@ class PDFSplitter:
         from core.llm_client import call_gemini, get_default_model
 
         images = []
-        for i in range(min(10, len(doc))):
+        for i in self._find_toc_pages(doc):
             pix = doc[i].get_pixmap(dpi=150)
             img = PILImage.frombytes("RGB", [pix.width, pix.height], pix.samples)
             images.append(img)

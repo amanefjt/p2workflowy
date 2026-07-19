@@ -494,3 +494,45 @@ class TestOutlineGuardIntegration:
         assert result is not None
         assert len(result) == 3
         assert result[0]["start_page"] == 0
+
+
+# ============================================================
+# _find_toc_pages (I-25)
+# ============================================================
+
+class TestFindTocPages:
+    def test_finds_toc_beyond_fixed_window(self):
+        """Naven.pdf 実測: 目次が idx 16 にあり従来の15頁窓の外。"""
+        s = make_splitter()
+        texts = ["front matter"] * 16 + ["TABLE\nOF CONTENTS\nChap. I. METHODS"] \
+            + ["contents cont."] * 8 + ["body"] * 100
+        doc = make_mock_doc(texts)
+        pages = s._find_toc_pages(doc)
+        assert 16 in pages
+
+    def test_finds_toc_near_front(self):
+        """corfra 実測: 目次は idx 3。"""
+        s = make_splitter()
+        texts = ["cover", "title", "copyright", "Contents\n1 Arbitrary Location\n9"] \
+            + ["body"] * 50
+        doc = make_mock_doc(texts)
+        assert 3 in s._find_toc_pages(doc)
+
+    def test_falls_back_to_leading_pages_when_absent(self):
+        """目次が見つからない場合は先頭から既定頁数を返す。"""
+        s = make_splitter()
+        doc = make_mock_doc(["body text"] * 50)
+        pages = s._find_toc_pages(doc)
+        assert pages == list(range(s.TOC_SAMPLE_PAGES))
+
+    def test_includes_pages_following_toc(self):
+        """目次は複数頁にまたがるため後続頁も含める。"""
+        s = make_splitter()
+        texts = ["x"] * 5 + ["Contents\nChapter 1"] + ["y"] * 40
+        pages = s._find_toc_pages(make_mock_doc(texts))
+        assert 5 in pages and 6 in pages
+
+    def test_does_not_exceed_document_length(self):
+        s = make_splitter()
+        doc = make_mock_doc(["Contents\nChapter 1", "b"])
+        assert all(0 <= p < 2 for p in s._find_toc_pages(doc))

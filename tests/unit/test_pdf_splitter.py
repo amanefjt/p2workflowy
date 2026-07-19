@@ -519,20 +519,39 @@ class TestFindTocPages:
         assert 3 in s._find_toc_pages(doc)
 
     def test_falls_back_to_leading_pages_when_absent(self):
-        """目次が見つからない場合は先頭から既定頁数を返す。"""
+        """目次が見つからない場合は先頭から TOC_FALLBACK_PAGES 頁を返す（I-26）。"""
         s = make_splitter()
         doc = make_mock_doc(["body text"] * 50)
         pages = s._find_toc_pages(doc)
-        assert pages == list(range(s.TOC_SAMPLE_PAGES))
+        assert pages == list(range(s.TOC_FALLBACK_PAGES))
 
     def test_includes_pages_following_toc(self):
-        """目次は複数頁にまたがるため後続頁も含める。"""
+        """目次は複数頁にまたがるため後続頁も含める（上限 TOC_SAMPLE_PAGES 頁を厳密検証）。"""
         s = make_splitter()
         texts = ["x"] * 5 + ["Contents\nChapter 1"] + ["y"] * 40
         pages = s._find_toc_pages(make_mock_doc(texts))
-        assert 5 in pages and 6 in pages
+        assert pages == list(range(5, 5 + s.TOC_SAMPLE_PAGES))
 
     def test_does_not_exceed_document_length(self):
         s = make_splitter()
         doc = make_mock_doc(["Contents\nChapter 1", "b"])
         assert all(0 <= p < 2 for p in s._find_toc_pages(doc))
+
+    def test_search_boundary_beyond_range_uses_fallback(self):
+        """TOC_SEARCH_PAGES(30) を超えた位置の見出しは検出されず、
+        フォールバック窓（先頭 TOC_FALLBACK_PAGES 頁）が返る。"""
+        s = make_splitter()
+        # Contents ヘッダを探索範囲(idx 0-29)の外、idx 35 にのみ配置
+        page_texts = ["body"] * 35 + ["Contents\nChapter 1"] + ["body"] * 10
+        doc = make_mock_doc(page_texts)
+        pages = s._find_toc_pages(doc)
+        assert pages == list(range(s.TOC_FALLBACK_PAGES))
+
+    def test_search_boundary_at_last_in_range_index_is_found(self):
+        """探索範囲の最終 index (29 = TOC_SEARCH_PAGES - 1) の見出しは検出される。"""
+        s = make_splitter()
+        page_texts = ["body"] * 29 + ["Contents\nChapter 1"] + ["body"] * 20
+        doc = make_mock_doc(page_texts)
+        pages = s._find_toc_pages(doc)
+        assert 29 in pages
+        assert pages == list(range(29, 29 + s.TOC_SAMPLE_PAGES))

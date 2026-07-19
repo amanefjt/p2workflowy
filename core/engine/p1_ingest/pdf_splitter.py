@@ -20,6 +20,7 @@ class PDFSplitter:
     # --- Route 3 TOC ページ探索 (I-25) ---
     TOC_SEARCH_PAGES = 30
     TOC_SAMPLE_PAGES = 8
+    TOC_FALLBACK_PAGES = 15
 
     def __init__(self, api_key: str, model: Optional[str] = None):
         self.api_key = api_key
@@ -344,8 +345,17 @@ class PDFSplitter:
 
         従来は先頭15頁固定だったが、Naven.pdf のように目次が idx 16-24 に
         ある書籍では窓外となり TOC を取得できなかった。目次見出しを探索し、
-        見つかった位置から後続頁を含めて返す。見つからない場合は従来どおり
-        先頭から既定頁数を返す。
+        見つかった位置から後続頁を含めて返す。
+
+        見つかった場合（discovery-hit）: 見出し検出位置は目次の開始頁だと
+        分かっているため、そこから TOC_SAMPLE_PAGES（8頁）だけ読めば十分。
+
+        見つからない場合（fallback）: 見出し正規表現が実際の目次を捉え損ねた
+        （本文と結合、字間の空いた "C O N T E N T S"、頁番号が見出し行と同居
+        等）可能性があり、目次の開始位置が不明なため、探索窓を広めに取る
+        必要がある。従来の固定 15 頁挙動を TOC_FALLBACK_PAGES として維持し、
+        LLM 自身に目次を意味的に発見させる（I-26: 8頁への一律短縮は
+        以前動いていた書籍を壊す退行だったため元に戻した）。
         """
         limit = min(self.TOC_SEARCH_PAGES, len(doc))
         for i in range(limit):
@@ -357,7 +367,7 @@ class PDFSplitter:
                 print_log(f"  [Splitter] 目次ページ検出: idx {i}-{end-1}")
                 return list(range(i, end))
 
-        return list(range(min(self.TOC_SAMPLE_PAGES, len(doc))))
+        return list(range(min(self.TOC_FALLBACK_PAGES, len(doc))))
 
     def _extract_toc(self, doc: fitz.Document) -> List[Dict[str, Any]]:
         """LLM を用いて PDF から TOC を抽出・整理する（論理ページ番号を返す）。

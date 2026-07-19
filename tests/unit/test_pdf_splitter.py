@@ -559,9 +559,12 @@ class TestCandidateScoring:
         s = make_splitter()
         # 3つとも "Knowing | <page>" のランニングヘッダーで kind は "header" 一択。
         # header_b が最も疎（短い）だが、最も早い header_a (idx20) が勝つべき。
-        header_a = "Knowing | 147\n" + ("body text continues here. " * 40)
+        # header_a / header_c は SCORE_SPARSE_PAGE_CHARS(1500) を確実に超える
+        # 長さにする。閾値未満だと修正前のコードでも3件が同点になり、
+        # 早い者勝ちで偶然正解してしまい、このテストが回帰を検出できない。
+        header_a = "Knowing | 147\n" + ("body text continues here. " * 60)
         header_b = "Knowing | 148\nshort."
-        header_c = "Knowing | 149\n" + ("body text continues here. " * 40)
+        header_c = "Knowing | 149\n" + ("body text continues here. " * 60)
         pages = (
             ["filler"] * 20
             + [header_a]

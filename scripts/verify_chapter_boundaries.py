@@ -111,10 +111,37 @@ NAVEN_KNOWN_BAD_TITLES = {
 # 破綻は回避されるがこれを大きく下回ることのみを確定済み正解とする（境界自体は
 # I-27 により信頼できないため厳密な章数は固定しない）。
 #
-# 注意: 以下の PSE 関連の値・メッセージは「現時点の出力」のスナップショットで
+# 注意: 以下の PSE_MAX_PLAUSIBLE_CHAPTER_COUNT は「現時点の出力」のスナップショットで
 # あり「正しい章境界」ではない。回帰（意図しない変化）の検出のみに使う。
-# PSE の正しい章境界は Task 2 で別途定義する（PSE_GROUND_TRUTH 追加予定）。
+# PSE の正しい章境界（真の扉頁）は Task 2 で PSE_GROUND_TRUTH として確定済み。
 PSE_MAX_PLAUSIBLE_CHAPTER_COUNT = 20
+
+# PSE の正解データ（2026-07-19 目視確認・1-indexed 物理頁）。
+# PSEpdf_split.pdf（見開き分割後・350頁）に対する値である。
+# spec: docs/superpowers/specs/2026-07-19-chapter-boundary-adjudication-design.md §4.2
+PSE_GROUND_TRUTH = {
+    "Preface": 8,
+    "Chapter 1 The Ethnographic Effect I": 12,
+    "Chapter 2 Pre-figured Features": 42,
+    "Chapter 3 The Aesthetics of Substance": 58,
+    "Chapter 4 Refusing Information": 77,
+    "Chapter 5 New Economic Forms: a Report": 102,
+    "Chapter 6 The New Modernities": 130,
+    "Chapter 7 Divisions of Interest and Languages of Ownership": 149,
+    "Chapter 8 Potential Poperty: Intellectual Rights and Property in Persons": 174,
+    "Chapter 9 What is Intellectual Property after?": 192,
+    "Chapter 10 Puzzles of Scale": 217,
+    "Chapter 1 The Ethnographic Effect II": 242,
+    "Writing societies, writing persons": 246,
+}
+
+# Naven の正解データ（誤着地2章のみ・1-indexed 物理頁）。
+# 2026-07-19 目視確認: P116 = CHAPTER VII The Sociology of Naven,
+# P190 = CHAPTER XII The Preferred Types（いずれも実測と一致、修正不要）。I-26 の対象章。
+NAVEN_GROUND_TRUTH = {
+    "Chap. VII. THE SOCIOLOGY OF NAVEN": 116,
+    "Chap. XII. THE PREFERRED TYPES": 190,
+}
 
 
 def _match_key(title: str) -> str:
@@ -130,6 +157,7 @@ class Recorder:
     def __init__(self):
         self.regressions: list[str] = []
         self.known_defects: list[str] = []
+        self.metrics: dict[str, tuple[int, int]] = {}
 
     def ok(self, msg: str):
         print(f"  OK  {msg}")
@@ -142,11 +170,35 @@ class Recorder:
         self.known_defects.append(f"{defect_id}: {msg}")
         print(f"  --  [known defect {defect_id}] {msg}")
 
+    def metric(self, key: str, value: int, total: int) -> None:
+        """回帰判定ではなく、推移を追う指標として記録する。"""
+        self.metrics[key] = (value, total)
+
 
 def _find_by_title(chapters, title: str):
     key = _match_key(title)
     matches = [c for c in chapters if _match_key(c["title"]) == key]
     return matches[0] if matches else None
+
+
+def report_ground_truth(rec: "Recorder", name: str, chapters: list, truth: dict) -> None:
+    """正解データとの一致章数を報告する（regression ではなく指標として記録）。
+
+    章境界の改善は「一致章数が増える」ことで評価する。減った場合のみ regression とする。
+    """
+    by_title = {ch["title"]: ch["page_range"][0] for ch in chapters if ch.get("page_range")}
+    hits = []
+    misses = []
+    for title, expected in truth.items():
+        actual = by_title.get(title)
+        if actual == expected:
+            hits.append(title)
+        else:
+            misses.append(f"{title[:40]}: 期待P{expected} 実際P{actual}")
+    print(f"  [{name}] 正解一致: {len(hits)}/{len(truth)}")
+    for m in misses:
+        print(f"      × {m}")
+    rec.metric(f"{name}_ground_truth_hits", len(hits), len(truth))
 
 
 def verify_exact_boundaries(rec: Recorder, name: str, chapters):
@@ -285,6 +337,11 @@ def main() -> int:
                 total_pages = len(doc)
             verify_pse(rec, chapters, total_pages)
 
+        if name == "PSE":
+            report_ground_truth(rec, "PSE", chapters, PSE_GROUND_TRUTH)
+        if name == "Naven":
+            report_ground_truth(rec, "Naven", chapters, NAVEN_GROUND_TRUTH)
+
     print(f"\n===== 集計 =====")
     print(f"regression（新規の退行）: {len(rec.regressions)} 件")
     for msg in rec.regressions:
@@ -292,6 +349,10 @@ def main() -> int:
     print(f"known defect（既知の欠陥・記録のみ）: {len(rec.known_defects)} 件")
     for msg in rec.known_defects:
         print(f"  - {msg}")
+
+    print(f"\n===== 指標 =====")
+    for key, (value, total) in rec.metrics.items():
+        print(f"  {key}: {value}/{total}")
 
     return 1 if rec.regressions else 0
 

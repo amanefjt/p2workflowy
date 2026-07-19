@@ -363,26 +363,14 @@ class PDFSplitter:
 
         return results
 
-    # OCR で数字と誤読されやすい文字の対応表
-    _OCR_DIGIT_MAP = str.maketrans(
-        {'I': '1', 'l': '1', '|': '1', 'i': '1', 'r': '1',
-         'O': '0', 'o': '0', 'S': '5', 'B': '8'}
-    )
     def _parse_page_number(self, line: str) -> Optional[int]:
-        """行を頁番号として解釈する。OCR 崩れ（'3 I'→31, 'r 72'→172）に耐える。
+        """行を頁番号として解釈する。実装は page_number_map に委譲する。
 
-        数字を1文字も含まない文字列（ローマ数字 'XIII' や 'I'）は
-        頁番号として扱わない。章マーカーとの誤認を防ぐため。
+        照合ループ（_classify_match / _rescue_by_local_offset）から呼ばれるため、
+        挙動は従来と完全に同一でなければならない。
         """
-        t = line.strip()
-        if not t or len(t) > 8:
-            return None
-        if not any(c.isdigit() for c in t):
-            return None
-        normalized = t.translate(self._OCR_DIGIT_MAP).replace(' ', '')
-        if normalized.isdigit() and 1 <= int(normalized) <= 9999:
-            return int(normalized)
-        return None
+        from .page_number_map import parse_page_number
+        return parse_page_number(line)
 
     def _extract_leading_numeral(self, title: str) -> Optional[str]:
         """TOC タイトルの先頭章番号を取り出す（'4 Things' → '4'）。"""

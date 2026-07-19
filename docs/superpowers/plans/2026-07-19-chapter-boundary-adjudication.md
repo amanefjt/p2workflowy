@@ -12,7 +12,15 @@
 
 ## Global Constraints
 
-- 既存の照合ループ（`_classify_match` / `_score_candidate` / `_rescue_by_local_offset` / 探索窓 `logical-5 … logical+49`）は変更しない
+- 既存の照合ループ（`_classify_match` / `_score_candidate` / `_rescue_by_local_offset` / 探索窓）の**既存入力に対する振る舞いを変えない**。
+  判定ロジック（`_classify_match` / `_score_candidate` / `_rescue_by_local_offset`）の中身は変更禁止。
+  `_apply_content_scan` には、層1が新たに生む入力（`start_page=None`）への分岐と、
+  層2へ渡す情報（`matched` / `start_page_logical`）の記録を追加してよい。
+  ただし **`start_page` が数値である従来の入力に対しては、探索窓の式・採用される候補・
+  ログ出力のすべてが従来と同一でなければならない**。これはテストで担保する（Task 5 Step 5）。
+  （2026-07-19 ユーザー判断: 当初は「探索窓を変更しない」と書いていたが、
+  層1が参照先を失った章に `None` を渡す以上ループ側の対応が不可避であり、
+  制約を「既存入力に対する振る舞い不変」へ緩めた。）
 - 層1は **Route 3（LLM TOC 抽出）のみ**に適用する。Route 1（ローカル TOC ファイル＝手動修正済み）と Route 2（ネイティブ outline＝物理頁直参照）には適用しない
 - 定数はモジュール先頭にまとめる。マジックナンバーを関数内に直書きしない
 - 外部ライブラリを追加しない（`fitz` / 標準ライブラリのみ）
@@ -1050,12 +1058,64 @@ Expected: FAIL — `test_route3_calls_verify_and_fix_toc` が
 **注意**: これは探索窓の「変更」ではない。`has_logical_hint` が真の場合の式は
 従来と完全に同一である。偽の場合は従来なら存在しなかった入力への対応である。
 
-- [ ] **Step 5: テストを実行して通ることを確認する**
+- [ ] **Step 5: 既存入力に対する振る舞い不変をテストで担保する**
+
+Global Constraints は「既存入力に対する振る舞いを変えない」を要求する。
+`start_page` が数値である従来の入力では、探索窓の式が従来と完全に同一であることを
+明示的に検証する。`tests/unit/test_pdf_splitter.py` に追加する。
+
+```python
+class TestSearchWindowInvariance:
+    """start_page が数値の場合、探索窓は従来の式と完全に同一でなければならない。"""
+
+    def test_numeric_logical_page_uses_original_window(self):
+        s = make_splitter()
+        # 論理頁50 → 従来の窓は idx45..99（logical-5 … logical+49、総頁数でクリップ）
+        doc = make_mock_doc(["x\n"] * 200)
+        scanned = []
+
+        original_getitem = doc.__getitem__
+
+        def record(idx):
+            scanned.append(idx)
+            return original_getitem(idx)
+
+        doc.__getitem__ = MagicMock(side_effect=record)
+        s._apply_content_scan(doc, [{"title": "NotPresent", "start_page": 50, "role": "chapter"}])
+
+        assert min(scanned) == 45, "探索開始が logical-5 でない"
+        assert max(scanned) == 99, "探索終了が logical+49 でない"
+
+    def test_none_logical_page_scans_from_previous_chapter(self):
+        s = make_splitter()
+        doc = make_mock_doc(["x\n"] * 20)
+        scanned = []
+        original_getitem = doc.__getitem__
+
+        def record(idx):
+            scanned.append(idx)
+            return original_getitem(idx)
+
+        doc.__getitem__ = MagicMock(side_effect=record)
+        s._apply_content_scan(doc, [{"title": "NotPresent", "start_page": None, "role": "chapter"}])
+
+        assert min(scanned) == 0
+        assert max(scanned) == 19
+```
+
+**注意**: `_apply_content_scan` は末尾で層2・層3を呼ぶ（Task 8 で配線）。
+Task 5 の時点ではまだ配線されていないため、このテストはそのまま通る。
+Task 8 実装後にこのテストが落ちる場合は、層3が候補頁を読んだことによる
+`scanned` の汚染である。その場合は `_adjudicate_boundaries` を
+`patch.object(s, "_adjudicate_boundaries", side_effect=lambda doc, r: r)` で
+無効化してから計測するようテストを修正すること。
+
+- [ ] **Step 6: テストを実行して通ることを確認する**
 
 Run: `source venv/bin/activate && python3 -m pytest tests/unit/test_pdf_splitter.py -v`
-Expected: PASS（既存91件＋新規2件）
+Expected: PASS（既存91件＋新規4件）
 
-- [ ] **Step 6: 実PDF 4冊で層1の効果を確認する**
+- [ ] **Step 7: 実PDF 4冊で層1の効果を確認する**
 
 Run: `source venv/bin/activate && python3 scripts/verify_chapter_boundaries.py 2>&1 | tail -40`
 Expected:
@@ -1066,7 +1126,7 @@ Expected:
 
 一致数が増えない場合は先に進まず、`detect_toc_shift` の実データでの挙動を調べること。
 
-- [ ] **Step 7: コミット**
+- [ ] **Step 8: コミット**
 
 ```bash
 git add core/engine/p1_ingest/pdf_splitter.py tests/unit/test_pdf_splitter.py

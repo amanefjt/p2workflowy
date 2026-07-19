@@ -11,6 +11,7 @@ PDFSplitter のユニットテスト
 
 import json
 import pytest
+import fitz
 from pathlib import Path
 from unittest.mock import MagicMock, patch, mock_open
 
@@ -338,6 +339,49 @@ class TestApplyContentScan:
         # 9 < 39 なので順序違反なし → 両方保持
         assert len(result) == 2
         assert result[1]["start_page"] == 39
+
+    def test_plain_fallback_clamped_to_document_bounds(self):
+        """C2: TOC の論理ページが文書の総頁数を大きく超える場合、
+        フォールバックは文書末尾を超えてはならない。
+
+        PSEpdf.pdf 実測相当: 175頁の文書に対し TOC 論理ページが500まで
+        ある場合、補正なしフォールバック(499)をそのまま採用すると
+        insert_pdf() が範囲外の from_page を渡され、PyMuPDF が黙って
+        末尾頁にクランプして無関係な頁（索引頁等）を複製してしまう
+        (I-27)。クランプ後は必ず [0, total_pages-1] に収まる。
+        """
+        s = make_splitter()
+        pages = ["unrelated content"] * 10  # total_pages = 10
+        doc = make_mock_doc(pages)
+
+        llm_toc = [{"title": "Ghost Chapter", "start_page": 500, "role": "chapter"}]
+        result = s._apply_content_scan(doc, llm_toc)
+
+        assert len(result) == 1
+        assert 0 <= result[0]["start_page"] < len(pages)
+        assert result[0]["start_page"] == 9  # min(499, total_pages-1)
+
+    def test_clamped_fallback_that_violates_monotonicity_is_skipped_not_duplicated(self):
+        """C2: クランプ後のフォールバックが前章と同じ（または前章より前の）
+        物理ページになり、かつ配置可能な空きページも残っていない場合は、
+        rescued_fallback 分岐と同じパターンで章をスキップする（欠落を
+        受け入れる方が、無関係な頁を章として複製するより安全）。
+        """
+        s = make_splitter()
+        # 物理ページ9（0-indexed, 文書最終頁）に一致する本文を置く。
+        pages = ["filler"] * 9 + ["Ghost Chapter One\n\nBody text begins here for real content."]
+        doc = make_mock_doc(pages)  # total_pages = 10
+
+        llm_toc = [
+            {"title": "Ghost Chapter One", "start_page": 10, "role": "chapter"},
+            # 本文に存在せず、クランプ後のフォールバックが最終頁(9)と衝突する
+            {"title": "Ghost Chapter Two", "start_page": 500, "role": "chapter"},
+        ]
+        result = s._apply_content_scan(doc, llm_toc)
+
+        assert len(result) == 1
+        assert result[0]["title"] == "Ghost Chapter One"
+        assert result[0]["start_page"] == 9
 
     def test_plain_fallback_branch_advances_watermark_for_monotonicity(self):
         """Finding 3: 順序違反のない通常フォールバック分岐（本文未検出かつ
@@ -691,6 +735,56 @@ class TestSplitRouting:
         # TOC がなければ全編単独章として返す
         assert len(result) == 1
         assert result[0]["path"] == "dummy.pdf"
+
+
+# ============================================================
+# split: 範囲外 start_page の防御 (C2 defence in depth)
+# ============================================================
+
+class TestSplitOutOfRangeGuard:
+    def test_split_skips_chapter_with_out_of_range_start_page(self, tmp_path):
+        """C2 defence in depth: start_page が文書範囲外なら split() が
+        insert_pdf() を呼ぶ前に確実にスキップする。
+
+        _apply_content_scan() のクランプ (C2) は Route 3 専用であり、
+        Route 1（ローカル TOC）・Route 2（PDF outline）はこの補正を経由
+        しない。それらの経路が範囲外の start_page を返した場合でも
+        split() 自身がガードしなければ、insert_pdf() に渡った
+        PyMuPDF が黙って末尾頁にクランプし、無関係な頁を「章」として
+        出力してしまう（実測: PSEpdf.pdf で索引頁が複数章に複製された）。
+        実際の fitz.Document（5頁）を使い、insert_pdf の実挙動込みで
+        検証する。
+        """
+        src = tmp_path / "tiny.pdf"
+        real_doc = fitz.open()
+        for _ in range(5):
+            real_doc.new_page()
+        real_doc.save(str(src))
+        real_doc.close()
+
+        s = make_splitter()
+        # Chapter 2 の end_page は「末尾章なら len(doc)-1」ではなく
+        # 次エントリ(Chapter 3)の start_page-1 から計算されるため、
+        # start_page(10) 自体が文書外でも既存の
+        # "start_page > end_page" 判定だけでは弾けない
+        # （10 <= end_page(14) のため通過してしまう）。
+        # ここで新設した "start_page >= len(doc)" 判定が唯一の防波堤になる。
+        bad_toc = [
+            {"title": "Chapter 1", "start_page": 0, "role": "chapter"},
+            # 文書は5頁 (idx 0-4) しかないのに start_page=10 は範囲外
+            {"title": "Chapter 2: Out of Range", "start_page": 10, "role": "chapter"},
+            {"title": "Chapter 3", "start_page": 15, "role": "chapter"},
+        ]
+        out_dir = tmp_path / "out"
+        with patch.object(s, "_get_chapters_from_outline", return_value=bad_toc):
+            results = s.split(str(src), out_dir)
+
+        titles = [r["title"] for r in results]
+        assert "Chapter 2: Out of Range" not in titles
+        assert any(t == "Chapter 1" for t in titles)
+        # 範囲外の章に対応するファイルが生成されていないこと
+        produced_files = list(out_dir.glob("*.pdf")) if out_dir.exists() else []
+        assert all("Out_of_Range" not in f.name for f in produced_files)
 
 
 # ============================================================

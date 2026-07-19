@@ -130,7 +130,15 @@ class PDFSplitter:
             else:
                 end_page = len(doc) - 1
 
-            if start_page > end_page or start_page < 0:
+            if start_page > end_page or start_page < 0 or start_page >= len(doc):
+                # C2 defence in depth: start_page が文書範囲外の場合、
+                # insert_pdf() に渡すと PyMuPDF が黙って末尾頁にクランプし、
+                # 無関係な頁を「章」として出力してしまう。ここで確実に弾く。
+                if start_page >= len(doc):
+                    print_log(
+                        f"    - スキップ (開始ページが文書範囲外): {title} "
+                        f"(P{start_page+1} > 総頁数{len(doc)})"
+                    )
                 continue
 
             safe_title = re.sub(r'[^\w\s-]', '', title).strip().replace(' ', '_')
@@ -307,7 +315,22 @@ class PDFSplitter:
                 last_found_phys = best_phys
                 results.append({**entry, "start_page": best_phys})
             else:
-                fallback = max(0, logical_page - 1)
+                raw_fallback = max(0, logical_page - 1)
+                # C2: 論理ページが文書の総頁数を超える場合、そのまま採用すると
+                # insert_pdf() に範囲外の from_page/to_page を渡すことになる。
+                # PyMuPDF はこれを例外にせず黙って末尾頁へクランプするため、
+                # 検知不能なまま無関係な頁（多くは索引頁）が複製される
+                # （実測: PSEpdf.pdf の Chapter 9-11・Writing societies が
+                # いずれも索引頁1頁のみの同一内容ファイルになった。I-27）。
+                # rescued_fallback 分岐（すぐ下）は総頁数超過を既に検査して
+                # いるため、この双子の分岐にも同じ上限を課す。
+                fallback = min(raw_fallback, total_pages - 1)
+                if fallback != raw_fallback:
+                    print_log(
+                        f"  [Splitter] 警告: '{title}' の論理ページ {logical_page} "
+                        f"は文書の総頁数 {total_pages} を超えるため、"
+                        f"フォールバックを文書末尾 P{fallback+1} にクランプします。"
+                    )
                 if fallback <= last_found_phys:
                     # フォールバックも前章より前になる場合、単調性のためそのまま
                     # 採用はできないが、章を結果から消してはならない（欠落防止）。

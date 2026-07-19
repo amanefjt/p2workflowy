@@ -102,7 +102,7 @@ def resolve_input_pdf(path: str) -> str:
 - [ ] **Step 4: 実行してベースラインを取得する**
 
 Run: `source venv/bin/activate && python3 scripts/verify_chapter_boundaries.py 2>&1 | tee /tmp/baseline_after_harness_fix.txt`
-Expected: corfra 10章・PSE 13章・Naven 17章・relations 16章が表示される。
+Expected: corfra 10章・PSE 13章・Naven 17章・relations 12章が表示される。
 PSE で「範囲外」「スキップ」の警告が出ないこと（分割前は3章スキップされていた）。
 
 - [ ] **Step 5: 期待値定数を実測値へ更新する**
@@ -110,9 +110,13 @@ PSE で「範囲外」「スキップ」の警告が出ないこと（分割前�
 Step 4 の出力を見て、`EXPECTED_CHAPTER_COUNT` と各書籍の期待頁範囲定数を実測値へ書き換える。
 PSE と corfra は文書が変わった（175→350頁、106→212頁）ため全面的に取り直す。
 
-**注意**: ここで書き込む値は「現状の出力」であり「正しい章境界」ではない。
-PSE の正解は Task 2 で別途定義する。この定数は回帰検出用のスナップショットである。
-その旨をコメントで明記すること。
+**注意**: PSE 関連の値は「現状の出力」であり「正しい章境界」ではない。
+PSE の正解は Task 2 で別途定義する。この定数は回帰検出用のスナップショットである
+旨をコメントで明記すること。
+
+corfra / relations / Naven の期待値は事情が異なる。これらは前計画で実際に
+検証された正解であり、スナップショットではない。注記の対象は PSE に限ること。
+（spec §0.1 のとおり、誤った文書で検証されていたのは PSE のみである。）
 
 ```python
 # 注意: この定数は「現時点の出力」のスナップショットであり、正解ではない。

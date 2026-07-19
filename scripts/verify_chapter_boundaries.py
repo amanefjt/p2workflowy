@@ -14,9 +14,14 @@ Naven / PSE にはそれぞれ既知の未対応欠陥がある:
 - PSE (I-27): ランニングヘッダーが書名でありコンテンツスキャンがほぼ
   機能しないため、個々の章境界は信頼できない。境界の正誤は検証しない。
   代わりに C2（範囲外フォールバックのクランプ）が実際に効いているかを
-  検証する: (a) 章数が175に遠く及ばないこと、(b) 全章の頁範囲が文書内に
-  収まること、(c) 同一頁範囲を持つ章が無いこと（＝索引頁等の複製バグが
-  再発していないこと）。
+  検証する: (a) 章数が350（見開き分割後の頁数）に遠く及ばないこと、
+  (b) 全章の頁範囲が文書内に収まること、(c) 同一頁範囲を持つ章が無いこと
+  （＝索引頁等の複製バグが再発していないこと）。
+
+見開きスキャンPDF（corfra / PSE）は実パイプライン（book_manager.py:182-185）と
+同じく resolve_input_pdf() で is_spread_pdf()→split_spread_pdf() を通してから
+検証する。分割前の元PDFを直接検証すると本番が一度も見ない文書を検証すること
+になる（I-27 の誤診断の原因だった）。
 
 失敗は2種類に分類して集計する:
   - regressions: 新規の退行。存在すれば exit status を非0にする。
@@ -33,9 +38,23 @@ import fitz
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.engine.p1_ingest.pdf_splitter import PDFSplitter  # noqa: E402
 from core.config import PROJECT_ROOT  # noqa: E402
+from core.engine.p1_ingest.spread_splitter import is_spread_pdf, split_spread_pdf  # noqa: E402
+
+
+def resolve_input_pdf(path: str) -> str:
+    """実パイプライン（book_manager.py:182-185）と同じ前処理を通す。
+
+    見開きスキャンPDFは PDFSplitter に渡る前に単ページへ分割される。
+    これを通さないと、本番が一度も見ない文書を検証することになる（I-27 の誤診断の原因）。
+    """
+    if is_spread_pdf(path):
+        print(f"  [verify] 見開きスキャンを検出。分割してから検証します: {Path(path).name}")
+        return split_spread_pdf(path)
+    return path
+
 
 BOOKS = {
-    "corfra": "data/input/Booksample/corfra/corfrapdf_split.pdf",
+    "corfra": "data/input/Booksample/corfra/corfrapdf.pdf",
     "relations": "data/input/Booksample/relations/relationspdf.pdf",
     "Naven": "data/input/Booksample/Naven/Naven.pdf",
     "PSE": "data/input/Booksample/pse/PSEpdf.pdf",
@@ -88,9 +107,13 @@ NAVEN_KNOWN_BAD_TITLES = {
     "Chap. XII. THE PREFERRED TYPES": "I-26",
 }
 
-# PSE: outline 棄却(I-24)後、175章への破綻は回避されるがこれを大きく
-# 下回ることのみを確定済み正解とする（境界自体は I-27 により信頼できない
-# ため厳密な章数は固定しない）。
+# PSE: outline 棄却(I-24)後、350章（見開き分割後の頁数。分割前は175頁）への
+# 破綻は回避されるがこれを大きく下回ることのみを確定済み正解とする（境界自体は
+# I-27 により信頼できないため厳密な章数は固定しない）。
+#
+# 注意: 以下の PSE 関連の値・メッセージは「現時点の出力」のスナップショットで
+# あり「正しい章境界」ではない。回帰（意図しない変化）の検出のみに使う。
+# PSE の正しい章境界は Task 2 で別途定義する（PSE_GROUND_TRUTH 追加予定）。
 PSE_MAX_PLAUSIBLE_CHAPTER_COUNT = 20
 
 
@@ -186,7 +209,8 @@ def verify_pse(rec: Recorder, chapters, total_pages: int):
     """
     if len(chapters) < PSE_MAX_PLAUSIBLE_CHAPTER_COUNT:
         rec.ok(
-            f"章数 {len(chapters)} は175から大きく乖離（I-24 outline 棄却が機能）"
+            f"章数 {len(chapters)} は{total_pages}（分割後総頁数）から大きく乖離"
+            f"（I-24 outline 棄却が機能）"
         )
     else:
         rec.regression(
@@ -242,8 +266,10 @@ def main() -> int:
     for name, rel in BOOKS.items():
         path = str(PROJECT_ROOT / rel)
         print(f"\n===== {name} =====")
+        # is_spread_pdf() は毎回PDFを開くため、ここで1回だけ解決して使い回す。
+        resolved_path = resolve_input_pdf(path)
         splitter = PDFSplitter(api_key=api_key)
-        chapters = splitter.split(path, out_root / name)
+        chapters = splitter.split(resolved_path, out_root / name)
         print(f"  章数: {len(chapters)}")
 
         for ch in chapters:
@@ -255,7 +281,7 @@ def main() -> int:
         elif name == "Naven":
             verify_naven(rec, chapters)
         elif name == "PSE":
-            with fitz.open(path) as doc:
+            with fitz.open(resolved_path) as doc:
                 total_pages = len(doc)
             verify_pse(rec, chapters, total_pages)
 

@@ -14,7 +14,6 @@ class PDFSplitter:
     CACHE_PATH = PROJECT_ROOT / "state" / "vlm_cache.json"
 
     # --- Route 2 (outline) 妥当性検査 (I-24) ---
-    OUTLINE_MAX_ENTRY_RATIO = 0.10
     OUTLINE_MIN_PAGES_PER_CHAPTER = 3
     OUTLINE_LABEL_SEQ_RATIO = 0.5
 
@@ -146,20 +145,16 @@ class PDFSplitter:
         if not entries or total_pages <= 0:
             return False
 
-        # 指標A: エントリ数がページ数に対して多すぎる
-        if (len(entries) / total_pages) > self.OUTLINE_MAX_ENTRY_RATIO:
+        # 指標A: 1章あたり平均頁数が少なすぎる
+        pages_per_chapter = total_pages / len(entries)
+        if pages_per_chapter < self.OUTLINE_MIN_PAGES_PER_CHAPTER:
             print_log(
                 f"  [Splitter] outline 棄却: {len(entries)}件/{total_pages}頁 "
-                f"= 比{len(entries)/total_pages:.2f} が上限{self.OUTLINE_MAX_ENTRY_RATIO}超"
+                f"= 1章あたり平均{pages_per_chapter:.2f}頁が下限{self.OUTLINE_MIN_PAGES_PER_CHAPTER}頁未満"
             )
             return False
 
-        # 指標B: 1章あたり平均頁数が少なすぎる
-        if (total_pages / len(entries)) < self.OUTLINE_MIN_PAGES_PER_CHAPTER:
-            print_log(f"  [Splitter] outline 棄却: 1章あたり平均頁数が過小")
-            return False
-
-        # 指標C: 連番ページラベル形式（共通接頭辞 + 数字のみ）が大半
+        # 指標B: 連番ページラベル形式（共通接頭辞 + 数字のみ）が大半
         label_like = 0
         for title, _ in entries:
             t = title.strip()

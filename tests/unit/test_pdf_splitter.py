@@ -153,33 +153,59 @@ class TestGetChaptersFromOutline:
 
 class TestApplyContentScan:
     def test_corrects_fixed_offset(self):
-        """前付け11ページによる固定オフセットを補正できる。"""
+        """前付け11ページによる固定オフセットを補正できる。
+
+        [I-22 更新] 旧タイトルは "Chapter 1" のみ（章番号のみで説明語なし）
+        だったが、_normalize_title が章番号プレフィックスを完全に剥がすため
+        norm_title が空文字列になる。新しい _classify_match は
+        `if not norm_title: return None` を仕様として持つため
+        （本文中の "chapter 1" への無差別な部分文字列一致という旧来の
+        誤検出源をなくすため。brief の実測8件はいずれも章番号の後に
+        説明的なタイトル語が続く）、空タイトルでは一致できず本来のオフセット
+        補正機能を検証できなくなってしまう。そのため入力タイトルに説明語を
+        補い、テストの本来の意図（固定オフセット補正）を保ったまま検証する。
+        """
         s = make_splitter()
         # 物理ページ 0-11: 前付け, 12: Chapter 1 本文
-        pages = ["front matter"] * 12 + ["Chapter 1\nIntroduction text..."] + ["body"] * 50
+        pages = ["front matter"] * 12 + ["Chapter 1: Introduction\nIntroduction text..."] + ["body"] * 50
         doc = make_mock_doc(pages)
 
-        llm_toc = [{"title": "Chapter 1", "start_page": 1, "role": "chapter"}]
+        llm_toc = [{"title": "Chapter 1: Introduction", "start_page": 1, "role": "chapter"}]
         result = s._apply_content_scan(doc, llm_toc)
 
         assert result[0]["start_page"] == 12  # 0-indexed 物理ページ
 
     def test_corrects_variable_offset(self):
-        """前付け分のオフセットが章ごとに異なる場合も補正できる。"""
+        """前付け分のオフセットが章ごとに異なる場合も補正できる。
+
+        [I-22 更新] 旧版は本文全ページに "chapter 1 content" のように
+        章番号の裸文字列を撒いて任意ページに一致させていたが、これは
+        まさに I-22 が排除対象とする「本文中への無差別な部分文字列一致」
+        の一種であり、新しい _classify_match（norm_title が空なら
+        一致させない）とは根本的に相容れない。見出しページのみに説明的な
+        タイトル文字列を置く形に書き換え、固定/可変オフセット補正という
+        テストの本来の意図を保つ。
+        """
         s = make_splitter()
-        # Chapter 1: 論理1 → 物理12, Chapter 5: 論理105 → 物理110
-        pages = ["front"] * 12 + ["chapter 1 content"] * 97 + ["chapter 5 content"] * 50
+        # Chapter 1 見出しページ: 物理12, Chapter 5 見出しページ: 物理109
+        pages = (
+            ["front"] * 12
+            + ["Chapter 1: Foundations\nIntroduction text..."]
+            + ["chapter 1 body text"] * 96
+            + ["Chapter 5: Analysis\nFurther text..."]
+            + ["chapter 5 body text"] * 49
+        )
         doc = make_mock_doc(pages)
 
         llm_toc = [
-            {"title": "Chapter 1", "start_page": 1, "role": "chapter"},
-            {"title": "Chapter 5", "start_page": 105, "role": "chapter"},
+            {"title": "Chapter 1: Foundations", "start_page": 1, "role": "chapter"},
+            {"title": "Chapter 5: Analysis", "start_page": 105, "role": "chapter"},
         ]
         result = s._apply_content_scan(doc, llm_toc)
 
-        # Chapter 1: ページ12 (0-indexed) に "chapter 1" が含まれる
+        # Chapter 1: ページ12 (0-indexed) の見出しに一致する
         assert result[0]["start_page"] == 12
-        # Chapter 5: ページ109 (0-indexed) に "chapter 5" が含まれる
+        # Chapter 5: ページ109 (0-indexed) の見出しに一致する
         assert result[1]["start_page"] == 109
 
     def test_fallback_when_title_not_found(self):
@@ -310,6 +336,134 @@ class TestApplyContentScan:
         # 9 < 39 なので順序違反なし → 両方保持
         assert len(result) == 2
         assert result[1]["start_page"] == 39
+
+
+# ============================================================
+# _parse_page_number / _is_chapter_marker (I-22)
+# ============================================================
+
+class TestParsePageNumber:
+    def test_plain_number(self):
+        assert make_splitter()._parse_page_number("29") == 29
+
+    def test_ocr_i_for_one(self):
+        """Naven 実測: '3 I' は 31 の OCR 崩れ。"""
+        assert make_splitter()._parse_page_number("3 I") == 31
+
+    def test_ocr_r_for_one(self):
+        """Naven 実測: 'r 72' は 172 の OCR 崩れ。"""
+        assert make_splitter()._parse_page_number("r 72") == 172
+
+    def test_roman_numeral_is_not_page_number(self):
+        """章マーカー 'XIII' を頁番号と誤認してはならない。"""
+        assert make_splitter()._parse_page_number("XIII") is None
+
+    def test_bare_i_is_not_page_number(self):
+        """数字を1文字も含まない文字列は頁番号ではない。"""
+        assert make_splitter()._parse_page_number("I") is None
+
+    def test_prose_is_not_page_number(self):
+        assert make_splitter()._parse_page_number("In this distributed process") is None
+
+
+class TestIsChapterMarker:
+    def test_chapter_word(self):
+        assert make_splitter()._is_chapter_marker("CHAPTER", None) is True
+
+    def test_matching_arabic_numeral(self):
+        """corfra 実測: 扉頁は '4' / 'Things'。"""
+        assert make_splitter()._is_chapter_marker("4", "4") is True
+
+    def test_matching_roman_numeral(self):
+        """Naven 実測: 扉頁は 'CHAPTER' / 'XIII'。"""
+        assert make_splitter()._is_chapter_marker("XIII", "XIII") is True
+
+    def test_non_matching_number_is_not_marker(self):
+        """Naven 実測: 本文頁の '29' は第III章の章マーカーではない。"""
+        assert make_splitter()._is_chapter_marker("29", "III") is False
+
+
+# ============================================================
+# _classify_match (I-22)
+# ============================================================
+
+class TestClassifyMatch:
+    def test_same_line_running_header_is_header(self):
+        """corfra 実測: 'Knowing | 147' はランニングヘッダー。"""
+        s = make_splitter()
+        text = "Knowing | 147\nwoman drove it fast, with her sunglasses\nhand. As we snaked"
+        assert s._classify_match(text, "knowing", None) == "header"
+
+    def test_adjacent_line_running_header_is_header(self):
+        """Naven 実測: タイトルと頁番号が別行のヘッダー。"""
+        s = make_splitter()
+        text = "The Concepts of Structure and Function\n29\nnot more so than is the use"
+        assert s._classify_match(text, "the concepts of structure and function", "III") == "header"
+
+    def test_chapter_number_adjacent_is_title(self):
+        """corfra 実測: 扉頁 '4' / 'Things'。"""
+        s = make_splitter()
+        text = "4\nThings\nThe difference between ambiguity"
+        assert s._classify_match(text, "things", "4") == "title"
+
+    def test_multiline_title_page_is_title(self):
+        """Naven 実測: 'CHAPTER' / 'XIII' / 2行に割れたタイトル。"""
+        s = make_splitter()
+        text = ("CHAPTER\nXIII\nEthological Contrast, Competition\n"
+                "and Schismogenesis\nT\nHE foregoing description")
+        kind = s._classify_match(
+            text, "ethological contrast competition and schismogenesis", "XIII")
+        assert kind == "title"
+
+    def test_body_prose_prefix_is_not_title_page(self):
+        """corfra 実測: 本文行 'things, and it is against them…' で誤検出しない。"""
+        s = make_splitter()
+        text = ("Place | 81\nIn this distributed process, people are helped by\n"
+                "things, and it is against them that we measure\nthe terrain can")
+        assert s._classify_match(text, "things", "4") != "title"
+
+    def test_no_match_returns_none(self):
+        s = make_splitter()
+        assert s._classify_match("unrelated body text\nmore text", "knowing", None) is None
+
+
+# ============================================================
+# 候補スコアリング (I-22)
+# ============================================================
+
+class TestCandidateScoring:
+    def test_title_page_outranks_earlier_body_match(self):
+        """corfra 実測: idx89(本文) より idx93(扉) を選ぶ。"""
+        s = make_splitter()
+        body = ("Place | 81\nIn this distributed process, people are helped\n"
+                "things, and it is against them that we measure\n" + "x " * 800)
+        title_pg = "4\nThings\nThe difference between ambiguity and clarity"
+        pages = ["filler"] * 80 + [body] + ["filler"] * 3 + [title_pg] + ["filler"] * 30
+        doc = make_mock_doc(pages)
+        result = s._apply_content_scan(doc, [{"title": "4 Things", "start_page": 85}])
+        assert result[0]["start_page"] == 84
+
+    def test_joined_match_does_not_beat_standalone_title(self):
+        """corfra 実測: '3 Place' が本文結合一致(idx73)へ退行しない。"""
+        s = make_splitter()
+        body = "Mystery | 65\nslowly snakes up the tall stone house\n" + "y " * 900
+        title_pg = "3\nPlace\nThis then, may be a way out of the dichotomy"
+        pages = ["filler"] * 64 + [body] + ["filler"] * 3 + [title_pg] + ["filler"] * 40
+        doc = make_mock_doc(pages)
+        result = s._apply_content_scan(doc, [{"title": "3 Place", "start_page": 69}])
+        assert result[0]["start_page"] == 68
+
+    def test_monotonic_ordering_enforced(self):
+        """後続章が前章より前に着地してはならない。"""
+        s = make_splitter()
+        pages = ["filler"] * 20 + ["1\nAlpha\nbody"] + ["filler"] * 20 + ["2\nBeta\nbody"] \
+            + ["filler"] * 20
+        doc = make_mock_doc(pages)
+        result = s._apply_content_scan(doc, [
+            {"title": "1 Alpha", "start_page": 21},
+            {"title": "2 Beta", "start_page": 42},
+        ])
+        assert result[0]["start_page"] < result[1]["start_page"]
 
 
 # ============================================================

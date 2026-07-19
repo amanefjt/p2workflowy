@@ -22,6 +22,14 @@ class PDFSplitter:
     TOC_SAMPLE_PAGES = 8
     TOC_FALLBACK_PAGES = 15
 
+    # --- コンテンツスキャンの判定 (I-22) ---
+    HEADING_SCAN_LINES = 15
+    JOINED_SCAN_LINES = 5
+    SCORE_HEADER_PENALTY = -100
+    SCORE_CHAPTER_MARKER = 30
+    SCORE_SPARSE_PAGE_CHARS = 1500
+    SCORE_SPARSE_BONUS = 20
+
     def __init__(self, api_key: str, model: Optional[str] = None):
         self.api_key = api_key
         # model_optimization.md に基づき、TOC 解析には安定性の高いデフォルトモデルを使用
@@ -208,7 +216,8 @@ class PDFSplitter:
         紙面ページと PDF 物理ページのオフセットは前付けや図版ページにより
         章ごとに変動するため、ページ番号への依存を断ち本文照合で補正する。
 
-        照合は _matches_heading() による行単位の一致で行う。
+        照合は _classify_match() で章扉/ランニングヘッダーを判別し、窓内の
+        全候補を _score_candidate() で採点して最良のものを選ぶ（I-22）。
         本文中の「see Chapter 5」や「methods were applied」等との誤ヒットを防ぐ。
         照合失敗時は論理ページをフォールバックとして使用し警告を出す。
         """
@@ -222,23 +231,32 @@ class PDFSplitter:
             logical_page = int(entry.get("start_page", 1))  # 1-indexed logical
 
             norm_title = self._normalize_title(title)
-            title_lower = title.lower()
 
             # 探索範囲: 論理ページ前後を広めに取り可変オフセットに対応
             search_start = max(0, logical_page - 5)
             search_end = min(total_pages - 1, logical_page + 49)
 
+            chapter_numeral = self._extract_leading_numeral(title)
+
             best_phys = None
+            best_score = None
+            best_kind = None
             for phys_idx in range(search_start, search_end + 1):
+                if phys_idx <= last_found_phys:
+                    continue          # 単調性: 前章より前は採らない
                 raw_page = doc[phys_idx].get_text("text")
 
                 # 目次ページをスキップ（3章以上のタイトルを含むページ＝TOC）
                 if self._is_toc_page(raw_page, all_titles):
                     continue
 
-                if self._matches_heading(raw_page, norm_title, title_lower):
-                    best_phys = phys_idx
-                    break
+                kind = self._classify_match(raw_page, norm_title, chapter_numeral)
+                if kind is None:
+                    continue
+
+                score = self._score_candidate(raw_page, kind, chapter_numeral)
+                if best_score is None or score > best_score:
+                    best_phys, best_score, best_kind = phys_idx, score, kind
 
             if best_phys is not None:
                 phys_display = best_phys + 1
@@ -267,45 +285,124 @@ class PDFSplitter:
 
         return results
 
-    def _matches_heading(self, page_text: str, norm_title: str, title_lower: str) -> bool:
-        """ページが章見出しページかどうかを行単位で判定する。
+    # OCR で数字と誤読されやすい文字の対応表
+    _OCR_DIGIT_MAP = str.maketrans(
+        {'I': '1', 'l': '1', '|': '1', 'i': '1', 'r': '1',
+         'O': '0', 'o': '0', 'S': '5', 'B': '8'}
+    )
+    _ROMAN_RE = re.compile(r'^[IVXLC]+$', re.IGNORECASE)
 
-        章見出しはページ冒頭の行に単独で現れる（本文の句中に埋め込まれない）。
-        行単位の照合により、短いタイトル（"Methods" 等）が本文中に出現しても
-        誤ヒットしない。
+    def _parse_page_number(self, line: str) -> Optional[int]:
+        """行を頁番号として解釈する。OCR 崩れ（'3 I'→31, 'r 72'→172）に耐える。
 
-        Pass 1: 1行単位の照合（行全体または行頭が norm_title と一致）
-        Pass 2: 冒頭5行を結合して照合（見出しと副題が別行に分割されているケース）
-                例: TOC="Introductions: The Compulsion of Relations" に対し
-                    実ページが "Introductions" + "The Compulsion of Relations" の2行
+        数字を1文字も含まない文字列（ローマ数字 'XIII' や 'I'）は
+        頁番号として扱わない。章マーカーとの誤認を防ぐため。
         """
-        lines = page_text.split("\n")
+        t = line.strip()
+        if not t or len(t) > 8:
+            return None
+        if not any(c.isdigit() for c in t):
+            return None
+        normalized = t.translate(self._OCR_DIGIT_MAP).replace(' ', '')
+        if normalized.isdigit() and 1 <= int(normalized) <= 9999:
+            return int(normalized)
+        return None
 
-        # Pass 1: 1行単位
-        for line in lines[:15]:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            line_norm = self._normalize_title(stripped)
-            if norm_title:
-                if line_norm == norm_title or line_norm.startswith(norm_title + " "):
-                    return True
-            else:
-                if title_lower and title_lower in stripped.lower():
-                    return True
+    def _extract_leading_numeral(self, title: str) -> Optional[str]:
+        """TOC タイトルの先頭章番号を取り出す（'4 Things' → '4'）。"""
+        m = re.match(
+            r'^\s*(?:Chap(?:ter)?\.?|Part|Section)?\s*([\dIVXLCivxlc]+)[.:]?\s+',
+            title,
+        )
+        return m.group(1) if m else None
 
-        # Pass 2: 冒頭5行を結合（複数行に分かれた見出し）
-        # 4語以上のタイトルにのみ適用。短いタイトルは本文にも頻出するため
-        # 結合マッチは誤ヒットリスクが高い。
-        # 例: "Introductions: The Compulsion of Relations"（5語）→ 適用
-        #     "Methods"（1語）や "Power and Politics"（3語）→ 適用しない
-        if norm_title and len(norm_title.split()) >= 4:
-            joined = " ".join(l.strip() for l in lines[:5] if l.strip())
-            joined_norm = self._normalize_title(joined)
-            if norm_title in joined_norm:
-                return True
+    def _is_chapter_marker(self, line: str, chapter_numeral: Optional[str]) -> bool:
+        """行が章マーカー（'CHAPTER' / その章の番号）かを判定する。
 
+        単なる数字を無条件に章マーカーとすると本文頁の頁番号と区別
+        できないため、TOC 由来の章番号と一致する場合のみ真とする。
+        """
+        t = line.strip()
+        if not t or len(t) > 12:
+            return False
+        if t.upper().rstrip('.') in ('CHAPTER', 'CHAP', 'PART'):
+            return True
+        if chapter_numeral:
+            return t.strip('.').upper() == chapter_numeral.strip('.').upper()
         return False
+
+    def _classify_match(
+        self, page_text: str, norm_title: str, chapter_numeral: Optional[str]
+    ) -> Optional[str]:
+        """ページが章扉かランニングヘッダーかを判定する (I-22)。
+
+        判別軸は一致行の隣接行である。裸の頁番号が隣接していれば
+        ランニングヘッダー、章マーカーが隣接していれば章扉とみなす。
+        exact / joined という一致の種類は判定に使わない（Naven では
+        本文頁のヘッダーが exact、章扉が joined になり順位が反転するため）。
+        """
+        if not norm_title:
+            return None
+
+        lines = [l.strip() for l in page_text.split("\n")]
+        nonempty = [l for l in lines if l]
+        if not nonempty:
+            return None
+
+        # Pass 1: 行単位
+        for pos, line in enumerate(nonempty[:self.HEADING_SCAN_LINES]):
+            line_norm = self._normalize_title(line)
+            if line_norm == norm_title:
+                pass
+            elif line_norm.startswith(norm_title + " "):
+                rest = line_norm[len(norm_title):].strip()
+                if self._parse_page_number(rest) is not None:
+                    return "header"   # 'Knowing | 147'
+                if not self._is_chapter_marker(rest, chapter_numeral):
+                    continue          # 本文行の前方一致は一致とみなさない
+            else:
+                continue
+
+            neighbors = []
+            if pos > 0:
+                neighbors.append(nonempty[pos - 1])
+            if pos + 1 < len(nonempty):
+                neighbors.append(nonempty[pos + 1])
+
+            if any(self._is_chapter_marker(n, chapter_numeral) for n in neighbors):
+                return "title"
+            if any(self._parse_page_number(n) is not None for n in neighbors):
+                return "header"
+            return "title"
+
+        # Pass 2: 冒頭数行の結合（複数行に割れたタイトル）
+        #
+        # 部分文字列一致にしてはならない。短いタイトルが本文を掴むため
+        # （'things' は "…people are helped by things, and it is against…"
+        # に含まれてしまう）。章扉はタイトルで始まる性質を使い、先頭の
+        # 章マーカー（'CHAPTER' / 'XIII' / '8'）を剥がしてから前方一致を見る。
+        joined_norm = self._normalize_title(" ".join(nonempty[:self.JOINED_SCAN_LINES]))
+        tokens = joined_norm.split()
+        while tokens and self._is_chapter_marker(tokens[0], chapter_numeral):
+            tokens.pop(0)
+        if tokens and " ".join(tokens).startswith(norm_title):
+            return "title"
+
+        return None
+
+    def _score_candidate(
+        self, page_text: str, kind: str, chapter_numeral: Optional[str]
+    ) -> int:
+        """候補ページを章扉らしさで採点する (I-22)。"""
+        score = 0
+        if kind == "header":
+            score += self.SCORE_HEADER_PENALTY
+        head = [l.strip() for l in page_text.split("\n") if l.strip()][:self.JOINED_SCAN_LINES]
+        if any(self._is_chapter_marker(l, chapter_numeral) for l in head):
+            score += self.SCORE_CHAPTER_MARKER
+        if len(page_text.strip()) < self.SCORE_SPARSE_PAGE_CHARS:
+            score += self.SCORE_SPARSE_BONUS
+        return score
 
     def _is_toc_page(self, page_text: str, all_titles: List[str]) -> bool:
         """ページが目次ページかどうかを判定する。
@@ -330,7 +427,9 @@ class PDFSplitter:
 
     def _normalize_title(self, text: str) -> str:
         """タイトル照合用の正規化（章番号・記号除去・小文字化）。"""
-        t = re.sub(r'^(?:Chapter|CHAPTER|Part|PART|Section|SECTION)\s+[\dIVXivx]+\s*[.:]?\s*', '', text)
+        t = re.sub(
+            r'^(?:Chapter|CHAPTER|Chap\.?|CHAP\.?|Part|PART|Section|SECTION)\s+[\dIVXivx]+\s*[.:]?\s*',
+            '', text)
         t = re.sub(r'^[\dIVXivx]+[.:]?\s+', '', t)
         t = re.sub(r'[^\w\s]', ' ', t)
         return ' '.join(t.lower().split())

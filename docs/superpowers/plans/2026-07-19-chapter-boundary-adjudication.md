@@ -1936,8 +1936,10 @@ spec §5。`.claude/hooks/check_management_logs.sh` が要求する管理ログ�
 > **[2026-07-19 原因確定・当初診断の全面訂正]** I-27 の当初診断は2箇所で誤っていた。
 > **(1) 検証が実パイプラインと異なる文書に対して行われていた。** `scripts/verify_chapter_boundaries.py`
 > は元PDFを直接 `PDFSplitter.split()` に渡していたが、実パイプラインは `book_manager.py:182-185` で
-> `is_spread_pdf()`→`split_spread_pdf()` を先に通す。PSE は `is_spread=True` のため、
-> 本番が一度も見ない175頁の文書で検証されていた（実際は分割後350頁）。記録されていた主症状
+> `is_spread_pdf()`→`split_spread_pdf()` を先に通す。PSE は `is_spread=True` かつ `BOOKS` が
+> 元PDFを指していたため、本番が一度も見ない175頁の文書で検証されていた（実際は分割後350頁）。
+> corfra も `is_spread=True` だが `BOOKS` が分割済みファイルを直接指しており、分割判定を
+> 迂回してはいたが見ていた文書自体は正しかった。記録されていた主症状
 > 「範囲外フォールバックによる索引頁複製」は本番では発生し得ない。
 > **(2) 原因は「ランニングヘッダーが書名」ではない。** PSE の奇数頁（recto）ヘッダーは章タイトルを
 > 載せている（例 P150: `Divisions of Interest` / `137`）。書名が出るのは偶数頁のみで、
@@ -1962,9 +1964,12 @@ spec §5。`.claude/hooks/check_management_logs.sh` が要求する管理ログ�
 - **事象**: `scripts/verify_chapter_boundaries.py:246` が元PDFを直接 `PDFSplitter.split()` に
   渡しており、実パイプライン（`core/book_manager.py:182-185`）が前段で行う見開き分割を
   通していなかった。`is_spread_pdf()` の実測は corfra=True / PSE=True / Naven=False /
-  relations=False であり、**4冊中2冊が本番の見ない文書で検証されていた**。
+  relations=False。ただし実害を受けたのは **PSE のみ**である。corfra は `BOOKS` 辞書で
+  分割済みファイルが直接ハードコードされており、分割判定を迂回してはいたが結果として
+  正しい文書を見ていた。**PSE だけが元PDF（175頁）で検証され、本番が見る350頁の文書を
+  一度も検証していなかった。**
 - **影響**: (1) I-27 の原因診断が誤った（詳細は I-27 の訂正ブロック）。(2) マージ済み
-  I-22/I-24/I-25 が主張する「実PDF 4冊で退行0件」も、4冊中2冊は無意味な検証だった
+  I-22/I-24/I-25 が主張する「実PDF 4冊で退行0件」のうち PSE の分は無意味な検証だった
   （再測の結果、正しい文書上でも退行は無かったため結論自体は維持される）。
 - **対策**: `resolve_input_pdf()` を追加し、`book_manager` と同じ前処理を通す。
   期待値定数も分割後の文書で取り直した。

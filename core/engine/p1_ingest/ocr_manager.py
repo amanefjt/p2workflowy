@@ -55,10 +55,10 @@ class OCRManager:
    - 出力は抽出したテキストのみとし、挨拶や解説は一切含めないでください。
 </rules>"""
 
-    # --- 1-2ページ目：メタデータから本編への移行に特化したプロンプト ---
+    # --- 1ページ目：メタデータから本編への移行に特化したプロンプト ---
     VLM_FRONT_MATTER_PROMPT = f"""<task>
-画像（見開き）からテキストを抽出し、論文の「構造」をMarkdown形式で出力してください。
-**左側が1ページ目、右側が2ページ目です。両方の内容を出力してください。**
+画像からテキストを抽出し、論文の「構造」をMarkdown形式で出力してください。
+**これは1ページ目の画像です。このページの内容を出力してください。**
 特に、AbstractやKeywordsなどのメタデータセクションが終わり、本文（Main Narrative）が始まる境界を厳格に特定してください。
 </task>
 
@@ -69,20 +69,32 @@ class OCRManager:
 </specific_rules>
 {VLM_BASE_RULES}"""
 
-    # --- 3ページ目以降：継続的なコンテキスト維持に特化したプロンプト ---
-    VLM_CONTINUITY_PROMPT = f"""<task>
-画像（見開き）からテキストを抽出してください。
-**左側が「前のページ（文脈用）」、右側が「現在のページ（抽出対象）」です。右側のページの内容のみを出力してください。**
+    # --- 前ページ文脈として渡すネイティブテキスト末尾の最大長 ---
+    CONTEXT_TAIL_CHARS = 500
+
+    # --- 2ページ目以降：現ページ1枚＋前ページのテキスト文脈（I-21） ---
+    # 2-up 結合をやめ、現ページ画像1枚のみを渡す。前ページはテキスト文脈として
+    # 継続判定にのみ使い、決して繰り返させない。図版ページ（キャプションのみ）にも対応する。
+    VLM_SINGLE_PAGE_PROMPT = f"""<task>
+これは書籍または論文の**1ページ**の画像です。このページに印刷されているテキストのみを
+Markdown 形式で抽出してください。
 </task>
 
+<previous_page_context>
+{{prev_context}}
+</previous_page_context>
+
 <specific_rules>
-- **連続性の判定**：左側（前ページ）から文章が物理的・論理的に続いている場合、右側（現ページ）の冒頭に見出しタグ `# ` を付けてはいけません。
-- 新しい章や節が右側のページ内で始まる場合のみ、`# ` を付与してください。
+- 上の <previous_page_context> は**直前ページの末尾**のテキストです。これは、このページの
+  1行目が前ページの続きなのか新しい見出しなのかを判断するためだけに使ってください。
+  **この文脈テキストを出力に繰り返してはいけません。**
+- 前ページから文章が物理的・論理的に続いている場合、このページ冒頭に見出しタグ `# ` を
+  付けてはいけません。新しい章や節がこのページ内で始まる場合のみ `# ` を付与してください。
+- **図版ページの注意**: このページが写真・図表など画像主体で、キャプションだけしか印刷
+  テキストが無いことがあります。その場合はキャプションのみを出力し、本文が無ければ空を
+  返してください。画像の内容を描写せず、印刷されている文字だけを抽出してください。
 </specific_rules>
 {VLM_BASE_RULES}"""
-
-    # 互換性のための古いプロンプト
-    VLM_PROMPT = VLM_CONTINUITY_PROMPT
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key
@@ -154,62 +166,47 @@ class OCRManager:
         
         return False
 
-    async def process_page_vlm(self, current_img: Image.Image, prev_img: Optional[Image.Image] = None, page_idx: int = 0, session_dir: Optional[Path] = None) -> str:
-        """
-        見開き結合（2-up）方式でページを OCR 処理する。
+    async def process_page_vlm(
+        self, current_img: Image.Image, prev_context_text: str = "",
+        page_idx: int = 0, session_dir: Optional[Path] = None,
+    ) -> str:
+        """現ページ1枚を OCR する。前ページはテキスト文脈として渡す（I-21）。
+
+        2-up 結合はしない。1画像に対象ページしか入らないため、図版ページ等で
+        隣ページを書き起こす失敗モードが構造的に起きない。
         """
         async with self.semaphore:
-            # プロンプトの選択
-            if page_idx <= 1:
+            # プロンプト選択: 先頭ページは front-matter、以降は単ページ＋文脈
+            if page_idx == 0:
                 prompt_text = self.VLM_FRONT_MATTER_PROMPT
             else:
-                prompt_text = self.VLM_CONTINUITY_PROMPT
+                prompt_text = self.VLM_SINGLE_PAGE_PROMPT.replace(
+                    "{prev_context}", prev_context_text or "（前ページなし）"
+                )
 
-            # 画像の結合
-            if prev_img:
-                combined_img = self._merge_images_horizontal(prev_img, current_img)
-            else:
-                combined_img = current_img
-
-            # キャッシュチェック (画像ハッシュ)
+            # キャッシュキー: 単一画像バイト列 ＋ 文脈テキスト
+            # （文脈が変われば出力も変わりうるため画像だけでは不十分）
             img_byte_arr = io.BytesIO()
-            combined_img.save(img_byte_arr, format='PNG')
-            img_hash = hashlib.md5(img_byte_arr.getvalue()).hexdigest()
-            
+            current_img.save(img_byte_arr, format="PNG")
+            key_src = img_byte_arr.getvalue() + prompt_text.encode("utf-8")
+            img_hash = hashlib.md5(key_src).hexdigest()
+
             if img_hash in self.cache:
                 print_log(f"  [OCRManager] Cache hit: Page {page_idx}")
                 return self.cache[img_hash]
 
-            # デバッグ保存
             if session_dir:
                 debug_dir = session_dir / "debug_vlm"
                 debug_dir.mkdir(parents=True, exist_ok=True)
-                combined_img.save(debug_dir / f"page_{page_idx:03d}_vlm_input.png")
+                current_img.save(debug_dir / f"page_{page_idx:03d}_vlm_input.png")
 
-            # VLM 呼び出し
-            result = await self._call_gemini_raw([combined_img, prompt_text])
-            
-            # キャッシュ保存
+            result = await self._call_gemini_raw([current_img, prompt_text])
+
             if result:
                 self.cache[img_hash] = result
                 self._save_cache()
-                
-            return result
 
-    def _merge_images_horizontal(self, img1: Image.Image, img2: Image.Image) -> Image.Image:
-        """2枚の画像を横に結合する。"""
-        w1, h1 = img1.size
-        w2, h2 = img2.size
-        
-        # 高さを揃える（大きい方に合わせ、背景白）
-        max_h = max(h1, h2)
-        total_w = w1 + w2
-        
-        new_img = Image.new('RGB', (total_w, max_h), (255, 255, 255))
-        new_img.paste(img1, (0, (max_h - h1) // 2))
-        new_img.paste(img2, (w1, (max_h - h2) // 2))
-        
-        return new_img
+            return result
 
     async def _call_gemini_raw(self, content: list) -> str:
         try:

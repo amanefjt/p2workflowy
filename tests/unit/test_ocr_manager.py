@@ -27,22 +27,54 @@ def _make_ocr_manager() -> OCRManager:
 
 
 class TestProcessPageVlmSignature:
-    def test_signature_matches_pdf_ingester_call_site(self):
-        """pdf_ingester.py:67 は (curr_img, prev_img=, page_idx=, session_dir=) で呼ぶ。
-        生存すべきシグネチャはこれと一致する画像引数版でなければならない。"""
+    def test_signature_uses_prev_context_text(self):
+        """process_page_vlm は前ページを画像ではなくテキスト文脈で受け取る（I-21）。"""
         sig = inspect.signature(OCRManager.process_page_vlm)
         assert list(sig.parameters.keys()) == [
-            "self", "current_img", "prev_img", "page_idx", "session_dir",
+            "self", "current_img", "prev_context_text", "page_idx", "session_dir",
         ]
 
     @pytest.mark.asyncio
-    async def test_call_with_pdf_ingester_call_pattern_succeeds(self):
+    async def test_call_pattern_succeeds(self):
         manager = _make_ocr_manager()
         img = Image.new("RGB", (10, 10), color="white")
-
         result = await manager.process_page_vlm(
-            img, prev_img=None, page_idx=0, session_dir=None
+            img, prev_context_text="", page_idx=0, session_dir=None
         )
-
         assert result == "# Heading\nBody text"
         manager._call_gemini_raw.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_single_image_not_merged(self):
+        """VLM には現ページ画像1枚だけが渡り、2-up 結合されない（I-21 の核心）。"""
+        manager = _make_ocr_manager()
+        img = Image.new("RGB", (10, 20), color="white")
+        await manager.process_page_vlm(
+            img, prev_context_text="前ページ末尾テキスト", page_idx=2, session_dir=None
+        )
+        # _call_gemini_raw の第1引数（content list）の画像が入力画像と同一寸法であること
+        # （結合していれば幅が倍化する）
+        call_args = manager._call_gemini_raw.await_args.args[0]
+        passed_img = call_args[0]
+        assert passed_img.size == (10, 20), "結合されず現ページ画像がそのまま渡るべき"
+
+    @pytest.mark.asyncio
+    async def test_prev_context_injected_into_prompt(self):
+        """page_idx>=1 では前文脈がプロンプトに差し込まれる。"""
+        manager = _make_ocr_manager()
+        img = Image.new("RGB", (10, 10), color="white")
+        await manager.process_page_vlm(
+            img, prev_context_text="...ending mid sentence and", page_idx=3, session_dir=None
+        )
+        prompt = manager._call_gemini_raw.await_args.args[0][1]
+        assert "...ending mid sentence and" in prompt
+        assert "{prev_context}" not in prompt, "プレースホルダが未置換で残ってはならない"
+
+    @pytest.mark.asyncio
+    async def test_page0_uses_front_matter_prompt(self):
+        """先頭ページ(page_idx==0)は FRONT_MATTER プロンプトを使う。"""
+        manager = _make_ocr_manager()
+        img = Image.new("RGB", (10, 10), color="white")
+        await manager.process_page_vlm(img, prev_context_text="", page_idx=0, session_dir=None)
+        prompt = manager._call_gemini_raw.await_args.args[0][1]
+        assert prompt == OCRManager.VLM_FRONT_MATTER_PROMPT

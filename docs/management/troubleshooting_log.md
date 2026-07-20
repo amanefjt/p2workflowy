@@ -269,6 +269,21 @@ Phase 2 (Meta Generation) において、文献の第一ページからタイト
 - **再現手順**: `python3 main.py data/input/Booksample/corfra/corfrapdf.pdf --book --max-chapters 3`（`--pdf-mode` 未指定、規則②により自動的に VLM ルート選択）を実行し、`corfrapdf_p2.md` の「1 Arbitrary Location」章、"scorn on their keenness" を含む段落の出現回数を確認する。
 - **教訓**: 長らく機能していなかった処理経路（今回は VLM OCR）を修理する際は、「動くようになったこと」自体の確認だけでなく、実際に流したコンテンツを人間が読んで品質を確認する工程が不可欠である。ルーティング・呼び出し成功のログだけでは、この種のコンテンツレベルの静かな劣化は検出できない。
 
+> **[2026-07-20 解決]** ブランチ `feature/chapter-boundary-adjudication` で解決。真因は
+> **実装が元設計から逸脱していたこと**だった。元設計の意図は「画像は現ページのみ渡し、
+> 前ページは OCR テキストをヒントとして渡す」だったが、実装は 2-up 画像結合
+> (`_merge_images_horizontal`) になっており、図版ページ（抽出対象=右がほぼ空白・隣=左が
+> 本文だらけ）で VLM が「右だけ」の指示に反して左（前ページ）を書き起こしていた。
+> 対策は挙動（なぜ VLM が左を書くか）ではなく**構造**を潰す方針を採り、VLM に渡す画像を
+> 常に現ページ1枚だけにした。前ページ文脈は second image ではなくネイティブテキストで
+> 渡す（`build_prev_contexts` → `VLM_SINGLE_PAGE_PROMPT` の {prev_context}）。1画像に
+> 対象ページしか入らないため、隣ページの書き起こしが構造的に起きない。図版ページ検出の
+> ヒューリスティックは採らなかった（真の引き金は「図版であること」ではなく「対象が隣より
+> 極端に文字が少ないこと」で、章の短い頁も巻き込む雑な signal になるため。構造を潰せば
+> 検出は不要）。文脈にネイティブテキストを使うのは並列処理を直列化させないため。実PDF検証で
+> corfra「1 Arbitrary Location」章の重複段落・重複見出しが解消したことを確認。詳細は
+> `docs/superpowers/specs/2026-07-20-vlm-single-page-ocr-design.md`。
+
 ### I-22. PDFSplitter の章境界ページ補正が実際の抽出範囲と一致せず、隣接章の内容が数ページ単位で混入する
 
 - **事象**: `corfrapdf.pdf` フルラン（全10章）完了後、ユーザーが出力を確認したところ、2箇所で章境界の混入を発見した。(1) 第7章「Knowing」の出力末尾に第8章「Anonymous Introduction」のタイトルが混入。(2) 第4章「Things」の出力冒頭に、本来は第3章「Place」末尾にあるはずの見出し「Difference Out of Similarity, Similarity Out of Difference」が混入。

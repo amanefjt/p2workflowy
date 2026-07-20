@@ -100,12 +100,8 @@ NAVEN_EXPECTED_GOOD = {
     "Chap. XV. THE EIDOS OF IATMUL CULTURE": 247,
 }
 
-# Naven: 境界が既知に誤っている2章（I-26）。「存在すること」だけを検証し、
-# 境界の正誤は検証しない（境界の誤りは既知の欠陥として別集計する）。
-NAVEN_KNOWN_BAD_TITLES = {
-    "Chap. VII. THE SOCIOLOGY OF NAVEN": "I-26",
-    "Chap. XII. THE PREFERRED TYPES": "I-26",
-}
+# Naven の VII/XII（旧 I-26）は層3で解決済み。正解境界は NAVEN_GROUND_TRUTH で
+# 厳密に検査する（旧 NAVEN_KNOWN_BAD_TITLES による「存在のみ検証」は撤去）。
 
 # PSE: outline 棄却(I-24)後、350章（見開き分割後の頁数。分割前は175頁）への
 # 破綻は回避されるがこれを大きく下回ることのみを確定済み正解とする（境界自体は
@@ -181,24 +177,38 @@ def _find_by_title(chapters, title: str):
     return matches[0] if matches else None
 
 
-def report_ground_truth(rec: "Recorder", name: str, chapters: list, truth: dict) -> None:
-    """正解データとの一致章数を報告する（regression ではなく指標として記録）。
+def report_ground_truth(
+    rec: "Recorder", name: str, chapters: list, truth: dict, floor: int
+) -> None:
+    """正解データとの一致章数を報告し、下限を割ったら regression とする。
 
-    章境界の改善は「一致章数が増える」ことで評価する。減った場合のみ regression とする。
+    照合は**物理頁番号**で行う（タイトルではない）。TOC の LLM 抽出は非決定的で、
+    再抽出のたびに書式が揺れる（'Chapter 1' が 'Chapter 1:' や 'Chapter 11' に
+    化ける。`state/` は gitignore のため新規 checkout では必ず再抽出される）。
+    タイトル完全一致だと真値12/13が1/13に化けるため使えない。「正解の扉頁に章境界が
+    実際に立っているか」を数えるのが、書式非依存で境界精度そのものを測る正しい指標。
+
+    一致数が `floor` を下回ったら regression として exit code を非0にする
+    （spec は Writing societies/Preface が構造的に到達不能なため 13/13 を求めない。
+    floor はそれらを除いた到達可能な全章の正解を要求する値）。
     """
-    by_title = {ch["title"]: ch["page_range"][0] for ch in chapters if ch.get("page_range")}
+    actual_starts = {ch["page_range"][0] for ch in chapters if ch.get("page_range")}
     hits = []
     misses = []
     for title, expected in truth.items():
-        actual = by_title.get(title)
-        if actual == expected:
+        if expected in actual_starts:
             hits.append(title)
         else:
-            misses.append(f"{title[:40]}: 期待P{expected} 実際P{actual}")
-    print(f"  [{name}] 正解一致: {len(hits)}/{len(truth)}")
+            misses.append(f"{title[:40]}: 期待P{expected} に章境界なし")
+    print(f"  [{name}] 正解一致（頁境界ベース）: {len(hits)}/{len(truth)}")
     for m in misses:
         print(f"      × {m}")
     rec.metric(f"{name}_ground_truth_hits", len(hits), len(truth))
+    if len(hits) < floor:
+        rec.regression(
+            f"{name} の章境界一致 {len(hits)}/{len(truth)} が下限 {floor} を下回った"
+            f"（境界精度の退行）"
+        )
 
 
 def verify_exact_boundaries(rec: Recorder, name: str, chapters):
@@ -242,17 +252,10 @@ def verify_naven(rec: Recorder, chapters):
         else:
             rec.regression(f"'{title}' 期待idx{expected_idx} 実際idx{actual}")
 
-    for title, defect_id in NAVEN_KNOWN_BAD_TITLES.items():
-        match = _find_by_title(chapters, title)
-        if match is None:
-            # 存在自体が消えた場合は既知の境界誤りを超える新規の退行。
-            rec.regression(f"'{title}' が章リストに無い（{defect_id} の前提が崩れている）")
-            continue
-        actual = match["page_range"][0] - 1
-        rec.known_defect(
-            defect_id,
-            f"'{title}' は存在するが境界は未検証（実際idx{actual}、リガチャ崩れによる既知の誤り）",
-        )
+    # I-26（VII/XII のリガチャ崩れによる誤着地）は層3の LLM 裁定で解決済み。
+    # 両章の境界は report_ground_truth(Naven, floor=2) が正解頁 P116/P190 に対して
+    # 頁ベースで厳密に検査し、下回れば regression を立てる。ここで known_defect として
+    # 「境界未検証」と記録していた従来の扱いは撤去した（もはや未検証ではない）。
 
 
 def verify_pse(rec: Recorder, chapters, total_pages: int):
@@ -300,11 +303,13 @@ def verify_pse(rec: Recorder, chapters, total_pages: int):
     if not duplicates_found:
         rec.ok("重複する頁範囲の章は無い（索引頁複製バグは再発していない）")
 
+    # I-27 の真因は TOC 抽出の系統的ずれで、層1の検算が解消した。境界は
+    # report_ground_truth(PSE, floor=12) が正解頁に対して厳密に検査する。
+    # 残る唯一の未達は Preface（前付けの端症例・正解 P8 に対し P11 のランニング
+    # ヘッダー継続頁へ着地）で、これは章境界ではなく前付け処理の既知限界として残す。
     rec.known_defect(
-        "I-27",
-        "個々の章境界の正誤は検証していない（ランニングヘッダーが書名のため"
-        "コンテンツスキャンが機能せず境界は信頼できない。詳細は "
-        "troubleshooting_log.md 参照）",
+        "I-27-residual",
+        "Preface の扉頁のみ未達（前付けの端症例。章本文の境界は全て正解と一致）",
     )
 
 
@@ -338,9 +343,11 @@ def main() -> int:
             verify_pse(rec, chapters, total_pages)
 
         if name == "PSE":
-            report_ground_truth(rec, "PSE", chapters, PSE_GROUND_TRUTH)
+            # floor=12: Preface（前付けの端症例・P8 vs P11）を除く到達可能な全章を要求。
+            report_ground_truth(rec, "PSE", chapters, PSE_GROUND_TRUTH, floor=12)
         if name == "Naven":
-            report_ground_truth(rec, "Naven", chapters, NAVEN_GROUND_TRUTH)
+            # floor=2: I-26 の VII/XII は層3で解決済み。両方の正解境界を厳密に要求する。
+            report_ground_truth(rec, "Naven", chapters, NAVEN_GROUND_TRUTH, floor=2)
 
     print(f"\n===== 集計 =====")
     print(f"regression（新規の退行）: {len(rec.regressions)} 件")

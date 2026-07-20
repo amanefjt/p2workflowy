@@ -239,3 +239,34 @@ shift 補正＝層1）/ `boundary_adjudicator.py`（逸脱検出＝層2・LLM �
   `FIGURE 1.1. A *crucetta*` / `FIGURE 1.2. Corsica. ...` のキャプションのみを正しく
   出力した。見出し「A Corsican Whole」は要約レイヤーと本文レイヤーに1回ずつの計2回（正しい
   構造）で、修正前のような余分な重複は無い。
+
+## 2026-07-20: Phase 4 バッチサイズ上限を flash-lite 前提で見直し（PAID 10/11,000→18/20,000、FREE 5/6,000→8/9,000）
+
+`core/llm_client.py::apply_tier_settings()` と `core/engine/p4_translate/parallel_translator.py::ParallelTranslator`
+の `max_batch_chunks` / `max_batch_chars` を、PAID: 10チャンク/11,000字 → **18チャンク/20,000字**、
+FREE: 5チャンク/6,000字 → **8チャンク/9,000字** に変更した。
+
+- **背景**: この定数は 2026-04-03/04 の初期実装時から未変更で、選定根拠の記録も残っていなかった
+  （`git log -p` 確認済み）。2026-07-11 のハイブリッド化以降 Phase 4 翻訳は PAID/FREE とも
+  `gemini-3.1-flash-lite` で動くようになったが、この定数は旧モデル（`gemini-3.5-flash`）前提の
+  ままだった。ユーザーからの「flash-lite の実力を踏まえて考え直そう」という指示を受けて再検討した。
+- **引き上げ幅の根拠**: 出力上限 65,536tok に対し、`docs/model_optimization.md` §5.2 実測比率
+  （11,000字入力→最大約13,000字≒13,000tok出力、thinking除く）から入力1字あたり最悪約1.18tokと
+  見積もり、thinking＋バッファに出力予算の60%を確保する保守的前提を置いても、入力文字数の理論上限は
+  約22,200字（26,214tok ÷ 1.18tok/字）。またパーサーの「1チャンク3,000字超で切り捨て」安全弁
+  （`core/llm_client.py:461-466`）との掛け算（`max_batch_chunks`×3,000字）も出力上限を超えない
+  範囲であることを確認した上で、この理論上限より余裕を残した PAID 20,000字/18チャンクを候補とした。
+- **検証**: AL論文・NST論文それぞれで PAID候補・FREE候補を実行（計4パターン・65バッチ、実 API
+  呼び出し）。全バッチで「タグ正常抽出」、3,000字切り捨て警告・`MAX_TOKENS`・翻訳失敗はいずれも
+  0件。AL: PAID 11バッチ/Phase4約53秒（旧設定17バッチ相当から削減）、FREE 19バッチ/約91秒。
+  NST: PAID 16バッチ（全16セクションが1バッチで収束）/約54秒、FREE 19バッチ/約93秒。翻訳品質の
+  詳細レビューは今回未実施（エラー有無の確認のみで採否判断する、というユーザー判断）。
+- **なぜ FREE を PAID と完全同一値にしなかったか**: バッチ失敗時は該当チャンク全体が
+  `【翻訳失敗】` プレースホルダになりチャンク単位の再試行はない（`parallel_translator.py` の
+  失敗フォールバック）。FREE は `TierManager` のダウンシフト対象＝429/503 に遭遇しやすいティア
+  であるため、1回の失敗の被害を PAID より抑える設計判断を維持した（PAID比のバッチ規模比率は
+  変更前後でおよそ同水準）。
+- **変更箇所**: `core/llm_client.py::apply_tier_settings()`（PAID/FREE の `settings` 辞書）、
+  `core/engine/p4_translate/parallel_translator.py::ParallelTranslator`
+  （`DEFAULT_MAX_BATCH_CHUNKS`/`DEFAULT_MAX_BATCH_CHARS`）。詳細な数値根拠・検証ログは
+  `docs/model_optimization.md` §5.4 参照。

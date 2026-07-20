@@ -12,8 +12,8 @@ class ParallelTranslator:
     非同期並列翻訳を制御するエンジン。
     セマフォ、レートリミッター、バッチング、およびエラーハンドリングを専門に扱う。
     """
-    DEFAULT_MAX_BATCH_CHUNKS = 10
-    DEFAULT_MAX_BATCH_CHARS = 11000
+    DEFAULT_MAX_BATCH_CHUNKS = 18
+    DEFAULT_MAX_BATCH_CHARS = 20000
 
     def __init__(
         self,

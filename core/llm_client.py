@@ -569,11 +569,11 @@ def apply_tier_settings(tier: str | GeminiTier) -> Tuple[AsyncLimiter, dict]:
 
     with _LIMITER_LOCK:
         if tier == GeminiTier.FREE:
-            settings = {"max_batch_chunks": 5, "max_batch_chars": 6000}
+            settings = {"max_batch_chunks": 8, "max_batch_chars": 9000}
             if tier not in _CACHED_LIMITERS:
                 _CACHED_LIMITERS[tier] = AsyncLimiter(1, 4.0)  # 1 request per 4 seconds
         else:
-            settings = {"max_batch_chunks": 10, "max_batch_chars": 11000}
+            settings = {"max_batch_chunks": 18, "max_batch_chars": 20000}
             if tier not in _CACHED_LIMITERS:
                 _CACHED_LIMITERS[tier] = AsyncLimiter(100, 60.0)  # 100 requests per minute
 

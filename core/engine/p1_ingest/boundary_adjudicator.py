@@ -163,19 +163,43 @@ class BoundaryAdjudicator:
                 matched=target.matched,
             )
 
-        # spec §2.4: 全補正適用後の単調性の再検査。昇順処理かつ lower 境界を
-        # 更新済み result から取るため理論上は非単調にならないが、将来の回帰を
-        # 捕まえる防御として、start_page が単調増加になっているか検査し、
-        # 破れていれば警告する（値は変更しない——安全側に倒し人間に気づかせる）。
+        return self._enforce_monotonic(result)
+
+    def _enforce_monotonic(
+        self, result: List[ChapterPlacement]
+    ) -> List[ChapterPlacement]:
+        """全補正適用後、start_page の狭義単調増加を強制する（spec §2.4）。
+
+        層3の LLM 経路は非単調化しうる。区間検証は前後の**確定章**だけを境界に
+        使うため、同一確定区間に挟まれた複数の要審査章が独立に裁定されると、
+        LLM が順序を誤ったとき互いに追い越しうる（例: A=確定10, B・C=fallback,
+        D=確定50 で LLM が B→40・C→20 を返すと [10,40,20,50] になる）。決定論的な
+        baseline 経路は同一オフセットの補間で必ず昇順になるため安全で、crossover を
+        生むのは LLM 経路のみ。この失敗モードは、まさに層3が対象とする「fallback が
+        クラスタ化する書籍」（層1適用前の PSE は12連続 fallback）で現実に起こりうる。
+
+        単調性が破れると `split()` は `start_page > end_page` の章を**無言で
+        スキップ**し章が消失する。警告だけでは防げないため、違反章を直前章の
+        直後（prev+1）へ前方クランプして単調性を回復する。クランプ後の位置は
+        真の扉頁とは限らないが、章の消失・頁範囲の重複よりは安全側である。
+        """
         prev_sp = -1
+        adjusted = []
         for p in result:
             if p.start_page <= prev_sp:
+                clamped = prev_sp + 1
                 print_log(
-                    f"  [Adjudicator] 警告: 補正後に単調性が破れています "
-                    f"（'{p.title[:30]}' P{p.start_page + 1} <= 前章 P{prev_sp + 1}）。"
+                    f"  [Adjudicator] 単調性を修復: '{p.title[:30]}' "
+                    f"P{p.start_page + 1} → P{clamped + 1}（前章 P{prev_sp + 1} と"
+                    f"の追い越しを解消。LLM 裁定の順序誤りの可能性）。"
                 )
+                p = ChapterPlacement(
+                    index=p.index, title=p.title, logical_page=p.logical_page,
+                    start_page=clamped, matched=p.matched,
+                )
+            adjusted.append(p)
             prev_sp = p.start_page
-        return result
+        return adjusted
 
     def _interval(
         self, placements: List[ChapterPlacement], index: int, total_pages: int

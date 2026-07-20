@@ -7,7 +7,6 @@ page_number_map のユニットテスト
   - estimate_offset: 文書全体から最頻オフセット（物理idx - 印刷頁）を推定
 """
 
-import pytest
 from unittest.mock import MagicMock
 
 from core.engine.p1_ingest.page_number_map import (

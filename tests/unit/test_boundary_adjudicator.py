@@ -267,3 +267,36 @@ class TestAdjudicate:
             result = adj.adjudicate(doc, p, "hash")
         assert not mock_llm.called, "キャッシュヒット時は LLM を呼ばない"
         assert result[2].start_page == 60
+
+    def test_llm_crossover_is_repaired_not_dropped(self):
+        """同一確定区間内の連続要審査章で LLM が順序を誤っても、章が消えず単調に修復される。
+
+        最終ブランチレビュー I-1 の回帰テスト。A=確定(10), B・C=fallback, D=確定(50) で
+        LLM が B→40・C→20 を返すと、修復前は [10,40,20,50] になり split() が
+        C を無言でスキップ（start_page 20 < 前章末尾）して章が消える。修復後は
+        C が前章直後（41）へクランプされ、全章が残り start_page が狭義単調増加する。
+        """
+        p = placements([
+            (10, 10, True),    # A 確定
+            (20, 20, False),   # B fallback（要審査）
+            (30, 30, False),   # C fallback（要審査）
+            (40, 50, True),    # D 確定
+        ])
+        doc = make_mock_doc(["x\n"] * 100)
+
+        def per_chapter(prompt, **kwargs):
+            if "Ch1" in prompt:      # B
+                return '{"page": 40, "reason": "B"}'
+            if "Ch2" in prompt:      # C（B より手前を誤って返す）
+                return '{"page": 20, "reason": "C"}'
+            return '{"page": null, "reason": "x"}'
+
+        adj = BoundaryAdjudicator(api_key="k", model="m", cache={}, save_cache=lambda: None)
+        with patch("core.engine.p1_ingest.boundary_adjudicator.call_gemini",
+                   side_effect=per_chapter):
+            result = adj.adjudicate(doc, p, "hash")
+
+        starts = [x.start_page for x in result]
+        assert len(result) == 4, "章が消失してはならない"
+        assert starts == sorted(set(starts)), f"start_page が狭義単調増加でない: {starts}"
+        assert starts[2] > starts[1], "C は B を追い越したまま残ってはならない"

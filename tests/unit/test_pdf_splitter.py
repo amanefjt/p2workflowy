@@ -18,6 +18,23 @@ from unittest.mock import MagicMock, patch, mock_open
 from core.engine.p1_ingest.pdf_splitter import PDFSplitter
 
 
+@pytest.fixture(autouse=True)
+def _no_real_llm_calls():
+    """層3（BoundaryAdjudicator）は要審査の章について実際に Gemini を呼ぶ。
+    本ファイルのテストは api_key="test_key" という無効なキーを使うため、
+    モックしない場合は本物の call_gemini がリトライ付きで実ネットワーク
+    呼び出しを試み、テストが極端に遅く・不安定になる。ここで一律に
+    モックし、LLM は常に判断不能（page: null 相当）として扱う。
+    個々のテストで層3の挙動そのものを検証したい場合は、このモックの
+    戻り値をテスト内でさらに上書きする。
+    """
+    with patch(
+        "core.engine.p1_ingest.boundary_adjudicator.call_gemini",
+        return_value='{"page": null}',
+    ):
+        yield
+
+
 def make_splitter() -> PDFSplitter:
     with patch.object(PDFSplitter, "_load_cache"):
         s = PDFSplitter(api_key="test_key")
@@ -313,7 +330,14 @@ class TestApplyContentScan:
             {"title": "Chapter 11: The Ethnographic Effect II", "start_page": 229, "role": "chapter"},
             {"title": "Writing societies, writing persons", "start_page": 233, "role": "chapter"},
         ]
-        result = s._apply_content_scan(doc, llm_toc)
+        # このテストの対象は層1（本文照合ループ自体のフォールバック配置）で
+        # あり、層2・層3（要審査の章のオフセット補間・LLM 裁定）が対象では
+        # ない。ここでは唯一の確定隣接章が Chapter 11 のみのため、層3は
+        # 補間オフセットに基づき Writing societies を再配置しうるが、それは
+        # 本テストが検証したい「順序違反時に前章直後へ配置する」という
+        # 層1の契約とは別の関心事なので、層2・層3は無効化して測定する。
+        with patch.object(s, "_adjudicate_boundaries", side_effect=lambda d, results: results):
+            result = s._apply_content_scan(doc, llm_toc)
 
         # Chapter 11 は物理P241（0-indexed）で見つかる
         assert len(result) == 2
@@ -411,7 +435,15 @@ class TestApplyContentScan:
             {"title": "Beta", "start_page": 41, "role": "chapter"},
             {"title": "Gamma", "start_page": 21, "role": "chapter"},
         ]
-        result = s._apply_content_scan(doc, llm_toc)
+        # このテストの対象は層1（本文照合ループの watermark 更新）であり、
+        # 層2・層3が対象ではない。TOC の論理ページが本来の順序に反する
+        # （Gamma の論理ページ21がBetaの41より前）人工的な入力のため、
+        # 層3の補間オフセットに掛けると Beta と Gamma がともに唯一の確定
+        # 隣接章 Alpha を基準に補正され、本テストが検証したい watermark
+        # 由来の単調性とは無関係に非単調な結果になりうる。層2・層3を
+        # 無効化して層1の契約のみを測定する。
+        with patch.object(s, "_adjudicate_boundaries", side_effect=lambda d, results: results):
+            result = s._apply_content_scan(doc, llm_toc)
 
         starts = [e["start_page"] for e in result]
         assert starts == sorted(starts), f"non-monotonic result: {starts}"
@@ -1163,6 +1195,7 @@ class TestTocVerifierWiring:
 
         with patch("fitz.open", return_value=doc), \
              patch.object(s, "_get_chapters_from_outline", return_value=outline_toc), \
+             patch.object(s, "_get_pdf_hash", return_value="dummyhash"), \
              patch("core.engine.p1_ingest.toc_verifier.verify_and_fix_toc") as mock_verify:
             s.split("dummy.pdf", tmp_path)
 
@@ -1174,7 +1207,14 @@ class TestTocVerifierWiring:
 # ============================================================
 
 class TestSearchWindowInvariance:
-    """start_page が数値の場合、探索窓は従来の式と完全に同一でなければならない。"""
+    """start_page が数値の場合、探索窓は従来の式と完全に同一でなければならない。
+
+    層2・層3（_adjudicate_boundaries）は要審査の章についてさらに doc の
+    ページを読むため、モックしないと doc.__getitem__ の呼び出し記録が
+    汚染され、このテストが検証したい「本文照合ループの探索窓」を正しく
+    測れなくなる。ここでは _adjudicate_boundaries を無効化（results を
+    そのまま返す）してから記録する。
+    """
 
     def test_numeric_logical_page_uses_original_window(self):
         s = make_splitter()
@@ -1189,7 +1229,8 @@ class TestSearchWindowInvariance:
             return original_getitem(idx)
 
         doc.__getitem__ = MagicMock(side_effect=record)
-        s._apply_content_scan(doc, [{"title": "NotPresent", "start_page": 50, "role": "chapter"}])
+        with patch.object(s, "_adjudicate_boundaries", side_effect=lambda d, results: results):
+            s._apply_content_scan(doc, [{"title": "NotPresent", "start_page": 50, "role": "chapter"}])
 
         assert min(scanned) == 45, "探索開始が logical-5 でない"
         assert max(scanned) == 99, "探索終了が logical+49 でない"
@@ -1205,7 +1246,30 @@ class TestSearchWindowInvariance:
             return original_getitem(idx)
 
         doc.__getitem__ = MagicMock(side_effect=record)
-        s._apply_content_scan(doc, [{"title": "NotPresent", "start_page": None, "role": "chapter"}])
+        with patch.object(s, "_adjudicate_boundaries", side_effect=lambda d, results: results):
+            s._apply_content_scan(doc, [{"title": "NotPresent", "start_page": None, "role": "chapter"}])
 
         assert min(scanned) == 0
         assert max(scanned) == 19
+
+
+# ============================================================
+# 層2・層3の配線（Task 8）
+# ============================================================
+
+class TestAdjudicatorWiring:
+    def test_content_scan_records_matched_flag(self):
+        """フォールバックした章と照合成立した章が区別できること。"""
+        s = make_splitter()
+        doc = make_mock_doc([
+            "x\n", "x\n",
+            "Alpha\n本文\n",
+            "x\n", "x\n", "x\n",
+        ])
+        llm_toc = [
+            {"title": "Alpha", "start_page": 3, "role": "chapter"},
+            {"title": "NotPresent", "start_page": 5, "role": "chapter"},
+        ]
+        result = s._apply_content_scan(doc, llm_toc)
+        assert result[0].get("matched") is True
+        assert result[1].get("matched") is False

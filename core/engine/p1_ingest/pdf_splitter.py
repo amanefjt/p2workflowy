@@ -45,6 +45,7 @@ class PDFSplitter:
         self.model = model or get_default_model("default")
         self.cache: Dict[str, Any] = {}
         self._load_cache()
+        self._current_pdf_hash: Optional[str] = None
 
     def _load_cache(self):
         """キャッシュファイルをロードする。"""
@@ -69,6 +70,7 @@ class PDFSplitter:
         """PDF を分割し、章ごとの情報（物理ページ補正済み）を返す。"""
         output_dir.mkdir(parents=True, exist_ok=True)
         doc = fitz.open(pdf_path)
+        self._current_pdf_hash = self._get_pdf_hash(pdf_path)
 
         # Route 1: ローカル TOC ファイル（手動修正済みの最優先）
         local_toc = Path(pdf_path + ".toc.json")
@@ -92,7 +94,7 @@ class PDFSplitter:
         # Route 3: LLM TOC 抽出 + コンテンツスキャンで物理ページ補正
         # （可変オフセット問題を回避するため、ページ番号に頼らず本文照合する）
         if not toc_data:
-            pdf_hash = self._get_pdf_hash(pdf_path)
+            pdf_hash = self._current_pdf_hash
             cache_key = f"{pdf_hash}_toc"
             if cache_key in self.cache:
                 print_log(f"  [Splitter] ルート: キャッシュ + コンテンツスキャン")
@@ -330,7 +332,10 @@ class PDFSplitter:
                         f"論理P{logical_page} → 物理P{phys_display}"
                     )
                 last_found_phys = best_phys
-                results.append({**entry, "start_page": best_phys})
+                results.append({
+                    **entry, "start_page": best_phys,
+                    "start_page_logical": logical_page, "matched": True,
+                })
             else:
                 raw_fallback = max(0, logical_page - 1)
                 # C2: 論理ページが文書の総頁数を超える場合、そのまま採用すると
@@ -365,7 +370,10 @@ class PDFSplitter:
                         f"章の欠落を避けるため前章直後の物理P{rescued_fallback+1}に配置します。"
                     )
                     last_found_phys = rescued_fallback
-                    results.append({**entry, "start_page": rescued_fallback})
+                    results.append({
+                        **entry, "start_page": rescued_fallback,
+                        "start_page_logical": logical_page, "matched": False,
+                    })
                     continue
                 print_log(
                     f"  [Splitter] 警告: '{title}' が本文で見つかりません。"
@@ -376,9 +384,44 @@ class PDFSplitter:
                 # フォールバック位置より手前の頁に誤って一致しうる
                 # （結果リストが非単調になり split() で章が消失する。Finding 3）。
                 last_found_phys = fallback
-                results.append({**entry, "start_page": fallback})
+                results.append({
+                    **entry, "start_page": fallback,
+                    "start_page_logical": logical_page, "matched": False,
+                })
 
-        return results
+        return self._adjudicate_boundaries(doc, results)
+
+    def _adjudicate_boundaries(
+        self, doc: fitz.Document, results: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """層2（逸脱検出）と層3（LLM 裁定）を適用する。
+
+        要審査の章が無ければ results をそのまま返す。したがって、現在正しい
+        境界を持つ書籍（実測では corfra）は出力が一切変化しない。
+        """
+        from .boundary_adjudicator import BoundaryAdjudicator, ChapterPlacement
+
+        placements = [
+            ChapterPlacement(
+                index=i,
+                title=entry.get("title", ""),
+                logical_page=int(entry.get("start_page_logical", entry.get("start_page", 0))),
+                start_page=int(entry.get("start_page", 0)),
+                matched=bool(entry.get("matched", False)),
+            )
+            for i, entry in enumerate(results)
+        ]
+
+        adjudicator = BoundaryAdjudicator(
+            api_key=self.api_key, model=self.model,
+            cache=self.cache, save_cache=self._save_cache,
+        )
+        decided = adjudicator.adjudicate(doc, placements, self._current_pdf_hash or "")
+
+        adjusted = []
+        for entry, placement in zip(results, decided):
+            adjusted.append({**entry, "start_page": placement.start_page})
+        return adjusted
 
     def _parse_page_number(self, line: str) -> Optional[int]:
         """行を頁番号として解釈する。実装は page_number_map に委譲する。

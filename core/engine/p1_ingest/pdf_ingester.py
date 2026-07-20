@@ -99,12 +99,13 @@ async def run_pdf_ingestion_async(
         async def _vlm_slice_job(lc_idx: int, curr_img: Image.Image, prev_context_text: str):
             nonlocal completed_count
             try:
+                # 空文字列は「このページに印刷テキストが無い」という正当な結果
+                # （OCRManager.NO_TEXT_MARKER 経由）であり、失敗ではない。
+                # 例外のみを本物の VLM 失敗として扱いフォールバックする。
                 vlm_res = await ocr.process_page_vlm(
                     curr_img, prev_context_text=prev_context_text,
                     page_idx=lc_idx, session_dir=session_dir,
                 )
-                if not vlm_res:
-                    raise ValueError("VLM returned empty output.")
             except Exception as e:
                 print_log(f"  [Ingester] VLM 失敗 (Page {lc_idx}): {e}. ネイティブPDFテキストにフォールバック。")
                 native_text = ""

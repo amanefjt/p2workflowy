@@ -72,6 +72,10 @@ class OCRManager:
     # --- 前ページ文脈として渡すネイティブテキスト末尾の最大長 ---
     CONTEXT_TAIL_CHARS = 500
 
+    # --- 印刷テキストが一切無いページの合図（call_gemini_async は空応答=異常として
+    #     リトライし続けるため、真の空文字列は返させず必ずこのマーカーを返させる） ---
+    NO_TEXT_MARKER = "[NO_PRINTED_TEXT]"
+
     # --- 2ページ目以降：現ページ1枚＋前ページのテキスト文脈（I-21） ---
     # 2-up 結合をやめ、現ページ画像1枚のみを渡す。前ページはテキスト文脈として
     # 継続判定にのみ使い、決して繰り返させない。図版ページ（キャプションのみ）にも対応する。
@@ -91,8 +95,9 @@ Markdown 形式で抽出してください。
 - 前ページから文章が物理的・論理的に続いている場合、このページ冒頭に見出しタグ `# ` を
   付けてはいけません。新しい章や節がこのページ内で始まる場合のみ `# ` を付与してください。
 - **図版ページの注意**: このページが写真・図表など画像主体で、キャプションだけしか印刷
-  テキストが無いことがあります。その場合はキャプションのみを出力し、本文が無ければ空を
-  返してください。画像の内容を描写せず、印刷されている文字だけを抽出してください。
+  テキストが無いことがあります。その場合はキャプションのみを出力してください。印刷されて
+  いる文字が一切無い場合は、空文字列ではなく必ず `{NO_TEXT_MARKER}` という文字列だけを
+  出力してください。画像の内容を描写せず、印刷されている文字だけを抽出してください。
 </specific_rules>
 {VLM_BASE_RULES}"""
 
@@ -193,22 +198,30 @@ Markdown 形式で抽出してください。
 
             if img_hash in self.cache:
                 print_log(f"  [OCRManager] Cache hit: Page {page_idx}")
-                return self.cache[img_hash]
+                raw_result = self.cache[img_hash]
+            else:
+                if session_dir:
+                    debug_dir = session_dir / "debug_vlm"
+                    debug_dir.mkdir(parents=True, exist_ok=True)
+                    current_img.save(debug_dir / f"page_{page_idx:03d}_vlm_input.png")
 
-            if session_dir:
-                debug_dir = session_dir / "debug_vlm"
-                debug_dir.mkdir(parents=True, exist_ok=True)
-                current_img.save(debug_dir / f"page_{page_idx:03d}_vlm_input.png")
+                raw_result = await self._call_gemini_raw([current_img, prompt_text])
 
-            result = await self._call_gemini_raw([current_img, prompt_text])
+                if raw_result:
+                    self.cache[img_hash] = raw_result
+                    self._save_cache()
 
-            if result:
-                self.cache[img_hash] = result
-                self._save_cache()
-
-            return result
+            # NO_TEXT_MARKER は「印刷テキストが無い」という正当な結果であり、
+            # 失敗ではない（呼び出し元に空文字列として伝える）。
+            if raw_result.strip() == self.NO_TEXT_MARKER:
+                return ""
+            return raw_result
 
     async def _call_gemini_raw(self, content: list) -> str:
+        # 例外は握り潰さず呼び出し元へ伝播させる。call_gemini_async は空応答を
+        # 常に異常とみなしリトライ（I-19）するため、ここに到達する時点で
+        # 「空文字列」は絶対に返らない。空文字列と「本当の失敗」を区別できなく
+        # なると、呼び出し元（pdf_ingester）がフォールバックすべきか判断できない。
         try:
             result = await call_gemini_async(
                 prompt=content,
@@ -223,4 +236,4 @@ Markdown 形式で抽出してください。
             return result.strip()
         except Exception as e:
             print_log(f"  [OCRManager] VLM失敗: {e}")
-            return ""
+            raise

@@ -78,3 +78,42 @@ class TestProcessPageVlmSignature:
         await manager.process_page_vlm(img, prev_context_text="", page_idx=0, session_dir=None)
         prompt = manager._call_gemini_raw.await_args.args[0][1]
         assert prompt == OCRManager.VLM_FRONT_MATTER_PROMPT
+
+
+class TestNoTextMarker:
+    """印刷テキストが無いページの合図（NO_TEXT_MARKER）は空文字列として
+    呼び出し元に伝わり、失敗（例外）とは区別される。"""
+
+    @pytest.mark.asyncio
+    async def test_marker_converted_to_empty_string(self):
+        manager = _make_ocr_manager()
+        manager._call_gemini_raw = AsyncMock(return_value=OCRManager.NO_TEXT_MARKER)
+        img = Image.new("RGB", (10, 10), color="white")
+        result = await manager.process_page_vlm(
+            img, prev_context_text="", page_idx=2, session_dir=None
+        )
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_marker_converted_to_empty_string_on_cache_hit(self):
+        """キャッシュ経由でマーカーが返る場合も同様に空文字列へ変換される。"""
+        manager = _make_ocr_manager()
+        img = Image.new("RGB", (10, 10), color="white")
+        # 1回目でキャッシュに書き込ませる
+        manager._call_gemini_raw = AsyncMock(return_value=OCRManager.NO_TEXT_MARKER)
+        await manager.process_page_vlm(img, prev_context_text="", page_idx=2, session_dir=None)
+        manager._call_gemini_raw.reset_mock()
+        # 2回目はキャッシュヒットのはず（_call_gemini_raw は呼ばれない）
+        result = await manager.process_page_vlm(img, prev_context_text="", page_idx=2, session_dir=None)
+        assert result == ""
+        manager._call_gemini_raw.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_genuine_failure_propagates_instead_of_becoming_empty(self):
+        """本物の VLM 失敗（例外）は空文字列に化けず、呼び出し元まで伝播する。
+        空文字列と失敗を区別できないと、フォールバック要否を判断できない。"""
+        manager = _make_ocr_manager()
+        manager._call_gemini_raw = AsyncMock(side_effect=RuntimeError("Gemini API 非同期呼び出し失敗"))
+        img = Image.new("RGB", (10, 10), color="white")
+        with pytest.raises(RuntimeError):
+            await manager.process_page_vlm(img, prev_context_text="", page_idx=2, session_dir=None)

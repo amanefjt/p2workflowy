@@ -1871,51 +1871,89 @@ LLM 裁定へ渡す。要審査の章が無ければ結果をそのまま返す�
 
 ---
 
-### Task 9: 実PDF 4冊での検証
+### Task 9: 実PDF 4冊での検証と、指標を実効ある gate にする
 
-spec §4.4。
+spec §4.4。**当初は「検証を走らせる」だけだったが、Task 8 完了時の実データ検証で
+`report_ground_truth` の指標が (a) 完全一致照合のため TOC 再抽出でタイトル書式が
+変わると全滅し、(b) `rec.metric()` で記録するだけで regression を発火させない、
+という二重の欠陥を持つことが判明した（PSE の真値 12/13 が表示 1/13 になり、しかも
+10→1 の激減が「regression 0」を通った）。指標を正しく直し、かつ実効ある gate に
+することを本タスクに含める。**
 
 **Files:**
-- 変更なし（検証のみ）
+- Modify: `scripts/verify_chapter_boundaries.py`（`report_ground_truth` の正規化・フロア gate 化、Naven strict 化）
 
 **Interfaces:**
 - Consumes: Task 1-8 のすべて
-- Produces: 検証結果（次タスクのドキュメント記述に使う）
+- Produces: 検証結果（Task 10 のドキュメント記述に使う）
 
-- [ ] **Step 1: 全単体テストを実行する**
+- [ ] **Step 1: `report_ground_truth` を正規化照合に直す**
 
-Run: `source venv/bin/activate && python3 -m pytest tests/unit/ -q`
-Expected: 全件 PASS。件数を控えておく（着手前は 322 件）。
+タイトルを正規化してから正解キーと突き合わせる。正規化は「章番号プレフィックス
+（`Chapter N` / ローマ数字）を除去し、英字のみに落とす」。これにより
+`'Chapter 1: The Ethnographic Effect I'`（コロン付き・TOC 再抽出で発生）と
+正解キー `'Chapter 1 The Ethnographic Effect I'` が一致する。TOC の LLM 抽出が
+非決定的で書式が揺れる（`state/` は gitignore で新規 checkout では再抽出される）
+ため、書式に頑健な照合が必須。ただし**章番号を落とすと Ch1-II と Ch11 の別体系が
+衝突しうるので、頁番号での照合を主とし、タイトルは補助**とする設計にする
+（正解の頁 → その頁に着地した章があるか、で数える）。
 
-- [ ] **Step 2: 実PDF 4冊を検証する**
+- [ ] **Step 2: 下限フロアを hard regression にする**
 
-Run: `source venv/bin/activate && python3 scripts/verify_chapter_boundaries.py 2>&1 | tee /tmp/verify_final.txt | tail -50`
+`report_ground_truth` が一致数を `rec.metric()` で記録するのに加え、
+**一致数が下限を下回ったら `rec.regression()` を呼ぶ**。下限は
+`PSE >= 12`、`Naven == 2`（Writing societies/Preface は構造的に到達不能なため
+13/13 は求めない。この2つを除いた全章の正解を要求する値）。これにより将来の
+境界退行が exit code を非0にし、CI/人手で検知できる。
+
+- [ ] **Step 3: Naven VII/XII を known_defect から strict check に上げる**
+
+現状 `NAVEN_KNOWN_BAD_TITLES`（I-26）で「存在するが境界未検証」としている
+VII/XII を、`NAVEN_GROUND_TRUTH`（P116/P190）に対する厳密な境界一致検査に格上げする。
+I-26 は層3で解決済みなので、退行したら regression として検知されるべき。
+
+- [ ] **Step 4: mutation テストで指標が赤に転じることを確認する**
+
+「正規化して緑にする」だけの指標は無意味。**正解データを1件わざと1頁ずらして
+`report_ground_truth` を呼び、一致数が下限を割って regression が立つことを確認**し、
+確認後に戻す。この赤転を実際に観測できて初めて gate が機能していると言える。
+結果を Task 10 のドキュメントに記録する。
+
+- [ ] **Step 5: 全単体テストと実PDF 4冊を検証する**
+
+Run: `source venv/bin/activate && python3 -m pytest tests/unit/ -q`（全件 PASS、着手前 380 件）
+Run: `source venv/bin/activate && python3 scripts/verify_chapter_boundaries.py > $CLAUDE_JOB_DIR/tmp/verify_final.txt 2>&1`（層3は Gemini を呼ぶが要審査章のみ・キャッシュ有効）
 
 Expected:
 - `regression（新規の退行）: 0 件`
-- `PSE_ground_truth_hits` が Task 2 のベースラインより増えている
-- `Naven_ground_truth_hits: 2/2`（VII と XII が正解に一致）
+- `PSE_ground_truth_hits >= 12/13`、`Naven_ground_truth_hits: 2/2`
+- corfra は10章・頁範囲が Task 1/5 のベースラインと**完全一致**（層1 shift=0・層2 要審査0件）
+- 発火ログ: PSE `TOC のエントリと頁番号が -1 ずれています` / 他3冊 `TOC 検算: ずれなし` /
+  Naven `要審査の章: 2件`＋VII/XII 補正 / relations `Notes` P236→P199（ボーナス修正）
 
-- [ ] **Step 3: corfra が不変であることを個別に確認する**
+- [ ] **Step 6: verify-and-note（Task 10 用の観測を控える）**
 
-Run: `grep -A 12 '===== corfra' /tmp/verify_final.txt`
-Expected: 10章、頁範囲が Task 1 で記録したベースラインと**完全に一致**する。
+- relations `Notes` P199 が真の Notes 扉頁であること（`Notes / Introductions...`。
+  P236 は中盤 `228 Notes to Conclusions`）＝層2/3 のボーナス修正
+- PSE `Preface` P11 vs 正解 P8 は前付けの既知限界（P11 はランニングヘッダー継続頁）。
+  これは Task 8 の退行ではなく Task 5 時点から残る前付けの端症例
+- TOC 再抽出の非決定性（`state/` gitignore）により新規 checkout で数値が完全再現
+  しない可能性 ＝ 正規化照合で書式差は吸収するが、この caveat を記録する
 
-corfra は層1で shift=0、層2で要審査0件のはずなので、変化があってはならない。
-変化がある場合は層2の誤検知か層1の誤補正である。先に進まずに原因を特定すること。
+- [ ] **Step 7: コミット**
 
-- [ ] **Step 4: 層1・層2・層3の発火をログで確認する**
+```bash
+git add scripts/verify_chapter_boundaries.py
+git commit -m "test: 章境界の指標を正規化＋フロア gate 化し Naven を strict 検査に
 
-Run: `grep -E 'TOCVerifier|Adjudicator' /tmp/verify_final.txt`
-Expected:
-- PSE: `TOC のエントリと頁番号が -1 ずれています`
-- corfra / Naven / relations: `TOC 検算: ずれなし`
-- Naven: `要審査の章: 2件` と、VII / XII の境界補正ログ
+report_ground_truth が完全一致照合＋非 gate だったため、TOC 再抽出で
+タイトル書式が変わると真値12/13が1/13に化け、しかも激減が regression 0
+を通っていた。頁番号主体の正規化照合に直し、下限（PSE>=12・Naven==2）を
+hard regression 化。I-26 解決済みの Naven VII/XII を known_defect から
+strict 検査へ格上げ。mutation テストで赤転を確認済み。
 
-- [ ] **Step 5: 結果を記録する**
-
-`/tmp/verify_final.txt` の要点（各書籍の章数・正解一致数・発火した層）を
-次タスクのドキュメント記述用に控える。
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+```
 
 ---
 

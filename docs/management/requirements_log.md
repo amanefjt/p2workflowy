@@ -329,3 +329,19 @@ Web側で本当に5並行を許可する設計に変えることで露呈する�
   `core/book_manager.py`（章ディレクトリ移設）、
   `core/engine/p4_translate/parallel_translator.py`、`main.py`、`server.py`、`.env.example`。
   設計の詳細は `docs/model_optimization.md` §6 参照。
+
+- [2026-07-21] Phase 2 レジュメ生成の論文モード・サンプリング閾値を書籍モード相当に引き上げ
+    - **経緯**: 745,144 文字の文書（`--book` なしの単一文書処理）を Phase 2 に投入したところ、
+      `MAX_INPUT_CHARS=500_000`（論文モード）を超えたため冒頭 100,000 字＋末尾 50,000 字に
+      サンプリングされ、中間部分がレジュメ生成から欠落した。
+    - **判断根拠**: レジュメ生成モデル（`DEFAULT_MODEL_RESUME` 経由、既定は `gemini-3.5-flash` /
+      `gemini-3.1-flash-lite`）は両方とも入力上限 1,048,576 tok（`docs/model_optimization.md` §5.1）。
+      745,144 文字は概算でも数十万トークン程度でこの上限に対して十分余裕がある。論文モードの
+      500,000 字という閾値は 2026-03-12 の変更（`86b29c1`）で `5_000_000` から「仕様書に基づき」
+      縮小されたものだが、当時の縮小理由はログに残っておらず、現行のモデル入力上限から見て
+      過度に保守的だった。書籍モード（`MAX_BOOK_CHARS=1,500,000`）は同一モデル・同一コンテキスト窓
+      で実運用済みのため、論文モードとサンプリング閾値を分ける技術的根拠がない。
+    - **実装**: `core/phase2_meta.py` の `MAX_INPUT_CHARS`/`HEAD_CHARS`/`TAIL_CHARS` を書籍モードの
+      値（1,500,000 / 1,000,000 / 500,000）に統一し、論文・書籍で閾値を分けていた
+      `MAX_BOOK_CHARS`/`BOOK_HEAD_CHARS`/`BOOK_TAIL_CHARS` は削除（`_sample_text` から
+      `is_book` によるサイズ分岐を除去、ログラベルの Book/Paper 表示のみ `is_book` を使用）。

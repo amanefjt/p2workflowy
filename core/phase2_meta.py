@@ -13,14 +13,13 @@ from .llm_client import call_gemini, get_default_model
 from .engine.p2_meta.meta_analyzer import MetaAnalyzer
 
 
-# サンプリング閾値 (仕様書に基づき調整)
-MAX_INPUT_CHARS = 500_000   # 論文モード：これ以上の場合はサンプリング
-HEAD_CHARS = 100_000        # 冒頭部分
-TAIL_CHARS = 50_000         # 末尾部分
-
-MAX_BOOK_CHARS = 1_500_000  # 書籍モード：セーフティ・ハードリミット
-BOOK_HEAD_CHARS = 1_000_000 # 書籍モード冒頭
-BOOK_TAIL_CHARS = 500_000   # 書籍モード末尾
+# サンプリング閾値：レジュメ用モデル（gemini-3.5-flash / gemini-3.1-flash-lite）の
+# 入力上限 1,048,576 tok（docs/model_optimization.md §5.1）に対する安全マージンとして設定。
+# 論文・書籍とも同一モデルの同一コンテキスト窓を使うため、モードで閾値を分ける技術的根拠はない。
+# 書籍モードで実運用実績のある値をそのまま両モード共通の閾値として使う。
+MAX_INPUT_CHARS = 1_500_000  # これ以上の場合のみサンプリング（通常の論文・書籍全文はこの範囲に収まる）
+HEAD_CHARS = 1_000_000       # 冒頭部分
+TAIL_CHARS = 500_000         # 末尾部分
 
 
 def _build_full_text(chunks_path: str | Path) -> str:
@@ -31,16 +30,12 @@ def _build_full_text(chunks_path: str | Path) -> str:
 
 def _sample_text(full_text: str, is_book: bool = False) -> str:
     """テキストが長すぎる場合、冒頭 + 末尾をサンプリングする。"""
-    limit = MAX_BOOK_CHARS if is_book else MAX_INPUT_CHARS
-    head_size = BOOK_HEAD_CHARS if is_book else HEAD_CHARS
-    tail_size = BOOK_TAIL_CHARS if is_book else TAIL_CHARS
-
-    if len(full_text) <= limit:
+    if len(full_text) <= MAX_INPUT_CHARS:
         return full_text
 
-    head = full_text[:head_size]
-    tail = full_text[-tail_size:]
-    print_log(f"  [Phase 2] テキストサンプリング ({'Book' if is_book else 'Paper'}): {len(full_text)} 文字 → 冒頭 {head_size} + 末尾 {tail_size}")
+    head = full_text[:HEAD_CHARS]
+    tail = full_text[-TAIL_CHARS:]
+    print_log(f"  [Phase 2] テキストサンプリング ({'Book' if is_book else 'Paper'}): {len(full_text)} 文字 → 冒頭 {HEAD_CHARS} + 末尾 {TAIL_CHARS}")
     return head + "\n\n[...中略...]\n\n" + tail
 
 

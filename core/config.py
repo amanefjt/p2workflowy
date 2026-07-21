@@ -23,6 +23,21 @@ MAX_SESSION_HISTORY = 10
 
 # LLM 設定 (環境変数から取得)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+
+# CLI (main.py) 用の無料枠キー2本。429/503時に free1→free2→GEMINI_API_KEY(有料) の順で
+# 自動フォールバックする（core/llm_client.py::KeyRotator）。各キーは別GCPプロジェクトである
+# 必要がある（無料枠のRPM/RPD/TPMはキー単位ではなくプロジェクト単位、docs/gemini_models.md §4）。
+GEMINI_API_KEY_FREE_1 = os.environ.get("GEMINI_API_KEY_FREE_1")
+GEMINI_API_KEY_FREE_2 = os.environ.get("GEMINI_API_KEY_FREE_2")
+
+# Webアプリ (server.py) 用の無料枠キー（最大5本）。429/503フォールバック用途ではなく、
+# 同時実行数の上限として使う「並行スロット」（core/llm_client.py::WebKeyPool は server.py 側）。
+# 各キーは別GCPプロジェクトかつ、CLI用の2本とも別プロジェクトである必要がある。
+_GEMINI_API_KEY_WEB_RAW = [
+    os.environ.get(f"GEMINI_API_KEY_WEB_{i}") for i in range(1, 6)
+]
+GEMINI_API_KEY_WEB_KEYS: List[str] = [k for k in _GEMINI_API_KEY_WEB_RAW if k]
+
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
 APP_ADMIN_PASSCODE = os.environ.get("APP_ADMIN_PASSCODE")
 if not GEMINI_API_KEY:

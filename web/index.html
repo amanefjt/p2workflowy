@@ -23,26 +23,16 @@
             <section class="overview">
                 <p>学術論文・学術書をWorkflowyに最適な構造化された日本語アウトラインへ変換します。</p>
                 <p>質を追求しているため、翻訳はゆっくりです（通常数分程度）。</p>
+                <div class="important-note">
+                    ⚠️ 無料枠のAPIキーで動いているため、Googleの規約上、入力内容がモデル改善に利用される場合があります。機密性の高い文書の取り扱いにはご注意ください。
+                </div>
             </section>
 
             <form id="process-form">
                 <div class="setup-grid">
-                    <!-- BYOK -->
-                    <div class="setup-item">
-                        <h3>1. Gemini APIキー</h3>
-                        <span class="api-badge">✅ 無料で使えます（カード登録不要）</span>
-                        <div class="form-group">
-                            <div class="api-key-row">
-                                <input type="password" id="api_key" placeholder="APIキーを入力してください...">
-                                <button type="button" class="btn-api-modal" onclick="openApiModal()">🔑 取得方法を見る</button>
-                            </div>
-                            <p class="api-key-hint">入力したAPIキーはブラウザにのみ保存されます。</p>
-                        </div>
-                    </div>
-
                     <!-- Expertise -->
                     <div class="setup-item">
-                        <h3>2. 翻訳の専門設定</h3>
+                        <h3>1. 翻訳の専門設定</h3>
                         <div class="form-group">
                             <label>専門分野（例：文化人類学、社会学、心理学...）</label>
                             <input type="text" id="expertise" name="expertise" value="文化人類学" placeholder="専門分野名を入力...">
@@ -51,11 +41,30 @@
 
                     <!-- Glossary -->
                     <div class="setup-item">
-                        <h3>3. 用語集 (任意)</h3>
+                        <h3>2. 用語集 (任意)</h3>
                         <div class="file-row">
                             <input type="file" id="glossary_file" name="glossary" accept=".csv">
                             <a id="sample-glossary-link" href="/api/glossary/sample"
                                 class="link-download">サンプルCSVをダウンロード</a>
+                        </div>
+                    </div>
+
+                    <!-- Paper / Book -->
+                    <div class="setup-item">
+                        <h3>3. 論文 / 書籍</h3>
+                        <div class="pill-toggle">
+                            <button type="button" id="tab-paper" class="pill-btn active" onclick="switchBookMode(false)">論文</button>
+                            <button type="button" id="tab-book" class="pill-btn" onclick="switchBookMode(true)">書籍（PDFのみ）</button>
+                        </div>
+                        <input type="checkbox" id="is_book" name="is_book" class="hidden">
+                        <div id="book-options" style="display: none; margin-top: 0.75rem;">
+                            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.5rem;">📚 書籍モードは章ごとに解析するため、論文モードよりも大幅に時間がかかります（目安: 1時間程度〜）。</p>
+                            <label style="font-size: 0.85rem; color: #475569; display: flex; align-items: center; gap: 0.5rem;">
+                                最大章数（省略で全章）:
+                                <input type="number" id="max_chapters" name="max_chapters" min="1" max="99"
+                                    style="width: 70px; padding: 0.25rem 0.5rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.85rem;"
+                                    placeholder="全章">
+                            </label>
                         </div>
                     </div>
 
@@ -64,15 +73,9 @@
                         <h3>4. 入力（PDF または テキスト）</h3>
 
                         <!-- タブ切り替え -->
-                        <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
-                            <button type="button" id="tab-pdf" onclick="switchInputTab('pdf')"
-                                style="padding: 0.4rem 1rem; border-radius: 6px; border: 2px solid var(--accent, #6366f1); background: var(--accent, #6366f1); color: white; cursor: pointer; font-weight: 600;">
-                                PDF
-                            </button>
-                            <button type="button" id="tab-text" onclick="switchInputTab('text')"
-                                style="padding: 0.4rem 1rem; border-radius: 6px; border: 2px solid #cbd5e1; background: white; color: #64748b; cursor: pointer; font-weight: 600;">
-                                テキスト貼り付け
-                            </button>
+                        <div class="pill-toggle">
+                            <button type="button" id="tab-pdf" class="pill-btn active" onclick="switchInputTab('pdf')">PDF</button>
+                            <button type="button" id="tab-text" class="pill-btn" onclick="switchInputTab('text')">テキスト貼り付け</button>
                         </div>
 
                         <!-- PDF入力 -->
@@ -80,23 +83,6 @@
                             <div class="form-group">
                                 <label>PDFファイルをアップロード</label>
                                 <input type="file" id="pdf_file" name="pdf_file" accept=".pdf" style="margin-bottom: 1rem;">
-                            </div>
-                            <div class="form-group-checkbox" style="margin-top: 0.5rem; padding: 1rem; background: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1;">
-                                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
-                                    <input type="checkbox" id="is_book" name="is_book" style="width: auto;" onchange="document.getElementById('book-options').style.display = this.checked ? 'block' : 'none'">
-                                    <span><strong>書籍モード</strong> (章立て・目次抽出を有効にする)</span>
-                                </label>
-                                <div id="book-options" style="display: none; margin-top: 0.75rem;">
-                                    <label style="font-size: 0.85rem; color: #475569; display: flex; align-items: center; gap: 0.5rem;">
-                                        最大章数（省略で全章）:
-                                        <input type="number" id="max_chapters" name="max_chapters" min="1" max="99"
-                                            style="width: 70px; padding: 0.25rem 0.5rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.85rem;"
-                                            placeholder="全章">
-                                    </label>
-                                </div>
-                                <div class="important-note" style="margin-top: 0.5rem; font-size: 0.85rem; color: #64748b; line-height: 1.5;">
-                                    <p>💡 <strong>スキャン書籍への対応:</strong> 高精度な視覚的解析エンジンにより、画像ベースのPDFでも論理構造（セクション等）を高い精度で抽出できます。</p>
-                                </div>
                             </div>
                         </div>
 
@@ -140,52 +126,6 @@
     <footer class="container">
         <p>&copy; 2026 p2workflowy. 人文社会科学系のためのデジタルツール.</p>
     </footer>
-
-    <!-- API Key Modal -->
-    <div id="api-modal" class="modal-overlay" onclick="handleOverlayClick(event)"
-         role="dialog" aria-modal="true" aria-labelledby="modal-title">
-        <div class="modal-box">
-            <div class="modal-header">
-                <h4 id="modal-title">🔑 Gemini APIキーについて</h4>
-                <button class="modal-close" onclick="closeApiModal()" aria-label="閉じる">✕</button>
-            </div>
-            <div class="modal-body">
-                <div class="modal-free-badge">
-                    <div class="badge-title">✅ 無料で使えます</div>
-                    <div class="badge-sub">カード登録は不要です。Gmailアカウントだけで始められます。</div>
-                </div>
-
-                <div class="modal-section-title">📋 APIキーの取得手順</div>
-                <ol class="modal-steps">
-                    <li><a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio</a> をGmailで開く</li>
-                    <li>「<strong>APIキーを作成</strong>」ボタンをクリック</li>
-                    <li>「<strong>新しいプロジェクトでAPIキーを作成</strong>」を選択</li>
-                    <li>表示されたキー（<code>AIza...</code>）をコピー</li>
-                    <li>このページの入力欄に貼り付け</li>
-                </ol>
-
-                <hr class="modal-divider">
-
-                <div class="modal-section-title">💰 料金について</div>
-                <div class="plan-cards">
-                    <div class="plan-card free">
-                        <div class="plan-title">🟢 無料プラン（カード不要）</div>
-                        <div class="plan-desc">1日500リクエストまで無料。論文数本分の処理に相当します。</div>
-                    </div>
-                    <div class="plan-card paid">
-                        <div class="plan-title">🟡 有料プラン（より多く使いたい場合）</div>
-                        <div class="plan-desc">従量課金制。論文1本あたり数円〜10円程度の目安です。</div>
-                    </div>
-                </div>
-
-                <div class="modal-privacy">
-                    ⚠️ <strong>プライバシーについて：</strong>
-                    無料プランではGoogleの規約上、入力内容がモデル改善に使用される可能性があります。
-                    機密性の高い文書を扱う場合は有料プランをご検討ください。
-                </div>
-            </div>
-        </div>
-    </div>
 
     <script src="/common.js"></script>
     <script src="/app.js"></script>

@@ -127,6 +127,22 @@ def main():
 
     args = parser.parse_args()
 
+    # --- APIキー選択: 無料キー2本→有料キーの順に自動フォールバック（開発時も通常利用時も常に無料から） ---
+    from core.config import GEMINI_API_KEY, GEMINI_API_KEY_FREE_1, GEMINI_API_KEY_FREE_2
+    from core.llm_client import key_rotator
+
+    ordered_keys = [GEMINI_API_KEY_FREE_1, GEMINI_API_KEY_FREE_2, GEMINI_API_KEY]
+    key_rotator.configure(ordered_keys)
+
+    if not key_rotator.is_configured():
+        print("エラー: GEMINI_API_KEY_FREE_1/2 / GEMINI_API_KEY のいずれも未設定です。.env を確認してください。")
+        return
+
+    selected_api_key = key_rotator.current()
+    free_count = sum(1 for k in (GEMINI_API_KEY_FREE_1, GEMINI_API_KEY_FREE_2) if k)
+    print(f"使用APIキー: 無料キー{free_count}本設定済み（1本目から使用）"
+          f"{' + 有料キーあり（429/503が続いた場合の最終フォールバック）' if GEMINI_API_KEY else ''}")
+
     # 引数がない場合は対話モード
     if not args.input_files:
         print("\n=== p2workflowy V2 対話モード ===")
@@ -171,11 +187,10 @@ def main():
     if args.book:
         # --- 書籍モード: BookManager による一括オーケストレーション ---
         from core.book_manager import BookManager
-        from core.config import GEMINI_API_KEY
-        
+
         # 代表的な入力パスを選択（ディレクトリ指定時は展開済みリストの[0]）
         main_input = input_files[0]
-        manager = BookManager(input_path=main_input, api_key=GEMINI_API_KEY, model=args.model)
+        manager = BookManager(input_path=main_input, api_key=selected_api_key, model=args.model)
         
         try:
             output_paths = manager.run(
@@ -225,6 +240,7 @@ def main():
                     glossary_path=args.glossary,
                     title=args.title if len(input_files) == 1 else None,
                     resume_from=args.resume,
+                    api_key=selected_api_key,
                     session_id=args.session,
                     export_mode=export_mode,
                     model=args.model,

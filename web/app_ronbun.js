@@ -14,9 +14,7 @@ const API_BASE = window.location.hostname === 'localhost' || window.location.hos
 
 // Load saved values from localStorage
 document.addEventListener('DOMContentLoaded', () => {
-    const savedApiKey = localStorage.getItem('p2workflowy_api_key');
     const savedExpertise = localStorage.getItem('p2workflowy_expertise');
-    if (savedApiKey) document.getElementById('api_key').value = savedApiKey;
     if (savedExpertise) document.getElementById('expertise').value = savedExpertise;
 
     // Set sample glossary link
@@ -26,11 +24,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+// 論文 / 書籍 トグル
+function switchBookMode(isBook) {
+    document.getElementById('is_book').checked = isBook;
+    document.getElementById('tab-paper').classList.toggle('active', !isBook);
+    document.getElementById('tab-book').classList.toggle('active', isBook);
+    document.getElementById('book-options').style.display = isBook ? 'block' : 'none';
+}
+
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
 
     const formData = new FormData(form);
-    const apiKey = document.getElementById('api_key').value;
     const expertise = document.getElementById('expertise').value;
     const pdfFile = document.getElementById('pdf_file').files[0];
 
@@ -40,16 +45,8 @@ form.addEventListener('submit', async (e) => {
     }
 
     // 設定の保存
-    if (apiKey) {
-        localStorage.setItem('p2workflowy_api_key', apiKey);
-    } else {
-        localStorage.removeItem('p2workflowy_api_key');
-    }
     localStorage.setItem('p2workflowy_expertise', expertise);
 
-    if (apiKey) {
-        formData.set('api_key', apiKey);
-    }
     formData.set('expertise', expertise); // name属性で既に入っている場合があるためsetで上書き
     formData.set('export_mode', 'ronbunnihongo');
 
@@ -58,6 +55,7 @@ form.addEventListener('submit', async (e) => {
     submitBtn.innerText = 'Processing...';
     statusContainer.classList.remove('hidden');
     downloadLinks.classList.add('hidden');
+    statusText.classList.remove('status-busy-text');
     logViewer.innerHTML = 'Submitting task...<br>';
     progressFill.style.width = '5%';
     percentText.innerText = '5%';
@@ -116,9 +114,15 @@ async function pollStatus(taskId, downloadToken) {
                 statusText.innerText = '完了！';
                 showDownloads(taskId, downloadToken);
                 resetButton();
+            } else if (data.status === 'busy') {
+                // プール枯渇: 障害ではなく想定内の混雑状態なので穏やかな表示にする
+                clearInterval(interval);
+                statusText.innerText = data.error || 'ただいま混み合っています。';
+                statusText.classList.add('status-busy-text');
+                resetButton();
             } else if (data.status === 'failed') {
                 clearInterval(interval);
-                statusText.innerText = 'エラーが発生しました';
+                statusText.innerText = data.error || 'エラーが発生しました';
                 resetButton();
             }
         } catch (err) {

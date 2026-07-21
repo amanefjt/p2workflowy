@@ -23,29 +23,15 @@
             <section class="overview">
                 <p>RonbunNihongoは、学術論文・学術書をわかりやすい日本語で深く読むための翻訳専用ツールです。</p>
                 <p>質を追求しているため、翻訳はゆっくりです（通常数分程度）。</p>
+                <div class="important-note">
+                    ⚠️ 無料枠のAPIキーで動いているため、Googleの規約上、入力内容がモデル改善に利用される場合があります。機密性の高い文書の取り扱いにはご注意ください。
+                </div>
             </section>
 
             <form id="process-form">
                 <div class="setup-grid">
-                    <!-- BYOK -->
                     <div class="setup-item">
-                        <h3>1. Gemini APIキー</h3>
-                        <div class="form-group">
-                            <input type="password" id="api_key" placeholder="あなたのAPIキーを入力してください...">
-                            <div class="api-note">
-                                <p>🔑 <strong>APIキーについて</strong>: <a href="https://aistudio.google.com/app/apikey"
-                                        target="_blank">Google AI
-                                        Studio</a>
-                                    から取得可能です。無料枠で利用可能なツールですが、Googleの仕様上、支払い手段の登録が必要です。登録したAPIキーはブラウザにのみ保存され、ツール制作者には送信されません。
-                                </p>
-                                <p>⚠️ <strong>学習への利用について</strong>:
-                                    無料枠のAPIキーを使用する場合、入力データはGoogleのモデル改善のために利用される可能性があります。機密性の高い資料を扱う際はご注意ください。</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="setup-item">
-                        <h3>2. 翻訳の専門設定</h3>
+                        <h3>1. 翻訳の専門設定</h3>
                         <div class="form-group">
                             <label>専門分野（例：文化人類学、社会学、心理学...）</label>
                             <input type="text" id="expertise" name="expertise" value="文化人類学" placeholder="専門分野名を入力...">
@@ -54,31 +40,38 @@
 
                     <!-- Glossary -->
                     <div class="setup-item">
-                        <h3>3. 用語集 (任意)</h3>
+                        <h3>2. 用語集 (任意)</h3>
                         <div class="file-row">
                             <input type="file" id="glossary_file" name="glossary" accept=".csv">
                             <a id="sample-glossary-link" href="/api/glossary/sample" class="link-download">サンプルCSVをダウンロード</a>
                         </div>
                     </div>
 
+                    <!-- Paper / Book -->
+                    <div class="setup-item">
+                        <h3>3. 論文 / 書籍</h3>
+                        <div class="pill-toggle">
+                            <button type="button" id="tab-paper" class="pill-btn active" onclick="switchBookMode(false)">論文</button>
+                            <button type="button" id="tab-book" class="pill-btn" onclick="switchBookMode(true)">書籍（章立て・目次抽出）</button>
+                        </div>
+                        <input type="checkbox" id="is_book" name="is_book" class="hidden">
+                        <div id="book-options" style="display: none; margin-top: 0.75rem;">
+                            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.5rem;">📚 書籍モードは章ごとに解析するため、論文モードよりも大幅に時間がかかります（目安: 1時間程度〜）。</p>
+                            <label style="font-size: 0.85rem; color: #475569; display: flex; align-items: center; gap: 0.5rem;">
+                                最大章数（省略で全章）:
+                                <input type="number" id="max_chapters" name="max_chapters" min="1" max="99"
+                                    style="width: 70px; padding: 0.25rem 0.5rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.85rem;"
+                                    placeholder="全章">
+                            </label>
+                        </div>
+                    </div>
+
                     <!-- Input -->
                     <div class="setup-item">
                         <h3>4. 論文PDFの選択</h3>
-                        <div class="important-note" style="margin-top: 0; margin-bottom: 1rem;">
-                            <strong>Note:</strong> 解析するPDFファイルをアップロードしてください。
-                        </div>
                         <div class="form-group">
                             <label>PDFファイルをアップロード</label>
                             <input type="file" id="pdf_file" name="pdf_file" accept=".pdf" style="margin-bottom: 1rem;">
-                        </div>
-                        <div class="form-group-checkbox" style="margin-top: 0.5rem; padding: 1rem; background: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1;">
-                            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
-                                <input type="checkbox" id="is_book" name="is_book" style="width: auto;">
-                                <span><strong>書籍モード</strong> (章立て・目次抽出を有効にする)</span>
-                            </label>
-                            <div class="important-note" style="margin-top: 0.5rem; font-size: 0.85rem; color: #64748b; line-height: 1.5;">
-                                <p>💡 <strong>スキャン書籍への対応:</strong> 高精度な視覚的解析エンジンにより、画像ベースのPDFでも論理構造（セクション等）を高い精度で抽出できます。</p>
-                            </div>
                         </div>
                     </div>
                 </div>

@@ -79,13 +79,14 @@ async def test_call_gemini_async_raises_on_empty_text_response():
 
 
 def test_reset_pipeline_state_clears_client_cache():
-    """reset_pipeline_state() は _CLIENTS もクリアし、次のパイプラインが新しい
-    genai.Client（＝新しい非同期トランスポート）を生成するようにする。"""
+    """reset_pipeline_state() はクライアントキャッシュ（呼び出しスレッドごとに独立した辞書）
+    もクリアし、次のパイプラインが新しい genai.Client（＝新しい非同期トランスポート）を
+    生成するようにする。"""
     from core import llm_client
 
     _get_client(api_key="dummy-test-key")
-    assert "dummy-test-key" in llm_client._CLIENTS
+    assert "dummy-test-key" in llm_client._get_clients_dict()
 
     reset_pipeline_state()
 
-    assert "dummy-test-key" not in llm_client._CLIENTS
+    assert "dummy-test-key" not in llm_client._get_clients_dict()

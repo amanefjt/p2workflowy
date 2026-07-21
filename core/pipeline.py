@@ -39,6 +39,8 @@ def run_pipeline(
     resume_content: Optional[str] = None,
     simple_mode: bool = False,
     max_concurrent_sections: int = 4,
+    cleanup_sessions: bool = True,
+    state_base_dir: Optional[Path] = None,
 ) -> List[Path]:
     """パイプライン全体を実行する。"""
     from .llm_client import tier_manager, GeminiTier, reset_pipeline_state
@@ -56,7 +58,7 @@ def run_pipeline(
         api_key = GEMINI_API_KEY
 
     start_phase = resume_from or 1
-    state = SessionState(session_id=session_id, mode="book" if is_book else "paper")
+    state = SessionState(session_id=session_id, base_dir=state_base_dir, mode="book" if is_book else "paper")
     original_input_path = input_path
 
     # Track if the caller explicitly provided a title (e.g. BookManager passing chapter titles)
@@ -162,7 +164,8 @@ def run_pipeline(
             print_log(f"  [Phase 3] 構造化完了: {len(tree)} セクション")
 
         if structure_only:
-            state.cleanup_old_sessions()
+            if cleanup_sessions:
+                state.cleanup_old_sessions()
             return []
 
     # --- Phase 4: Sliding-Window Translation ---
@@ -205,6 +208,7 @@ def run_pipeline(
         )
         print_log(f"  完了: 出力ファイル作成済\n")
 
-    state.cleanup_old_sessions()
+    if cleanup_sessions:
+        state.cleanup_old_sessions()
     print_log("=== Pipeline 完了 ===")
     return output_paths

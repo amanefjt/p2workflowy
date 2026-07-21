@@ -14,9 +14,7 @@ const API_BASE = window.location.hostname === 'localhost' || window.location.hos
 
 // Load saved values from localStorage
 document.addEventListener('DOMContentLoaded', () => {
-    const savedApiKey = localStorage.getItem('p2workflowy_api_key');
     const savedExpertise = localStorage.getItem('p2workflowy_expertise');
-    if (savedApiKey) document.getElementById('api_key').value = savedApiKey;
     if (savedExpertise) document.getElementById('expertise').value = savedExpertise;
 
     // Set sample glossary link
@@ -26,26 +24,35 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-// タブ切り替え
+// タブ切り替え（PDF / テキスト貼り付け）
 function switchInputTab(tab) {
     const isPdf = tab === 'pdf';
     document.getElementById('input-pdf').style.display = isPdf ? '' : 'none';
     document.getElementById('input-text').style.display = isPdf ? 'none' : '';
-    const tabPdf  = document.getElementById('tab-pdf');
-    const tabText = document.getElementById('tab-text');
-    tabPdf.style.background    = isPdf ? 'var(--accent, #6366f1)' : 'white';
-    tabPdf.style.color         = isPdf ? 'white' : '#64748b';
-    tabPdf.style.borderColor   = isPdf ? 'var(--accent, #6366f1)' : '#cbd5e1';
-    tabText.style.background   = isPdf ? 'white' : 'var(--accent, #6366f1)';
-    tabText.style.color        = isPdf ? '#64748b' : 'white';
-    tabText.style.borderColor  = isPdf ? '#cbd5e1' : 'var(--accent, #6366f1)';
+    document.getElementById('tab-pdf').classList.toggle('active', isPdf);
+    document.getElementById('tab-text').classList.toggle('active', !isPdf);
+    if (!isPdf) {
+        // 書籍モードはPDF専用。テキスト貼り付けに切り替えたら必ずリセットする
+        // （切り替えても is_book の値だけ残ってテキスト入力と一緒に送られてしまうのを防ぐ）。
+        switchBookMode(false);
+    }
+}
+
+// 論文 / 書籍 トグル（書籍はPDF専用のため、選択時は入力タブをPDFに固定する）
+function switchBookMode(isBook) {
+    document.getElementById('is_book').checked = isBook;
+    document.getElementById('tab-paper').classList.toggle('active', !isBook);
+    document.getElementById('tab-book').classList.toggle('active', isBook);
+    document.getElementById('book-options').style.display = isBook ? 'block' : 'none';
+    if (isBook) {
+        switchInputTab('pdf');
+    }
 }
 
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
 
     const formData = new FormData(form);
-    const apiKey = document.getElementById('api_key').value;
     const expertise = document.getElementById('expertise').value;
     const pdfFile = document.getElementById('pdf_file').files[0];
     const textInput = document.getElementById('text_input').value.trim();
@@ -68,20 +75,12 @@ form.addEventListener('submit', async (e) => {
     }
 
     // 設定の保存
-    if (apiKey) {
-        localStorage.setItem('p2workflowy_api_key', apiKey);
-    } else {
-        localStorage.removeItem('p2workflowy_api_key');
-    }
     localStorage.setItem('p2workflowy_expertise', expertise);
 
     const isBook = document.getElementById('is_book').checked;
     const maxChaptersEl = document.getElementById('max_chapters');
     const maxChapters = maxChaptersEl && maxChaptersEl.value ? parseInt(maxChaptersEl.value) : null;
 
-    if (apiKey) {
-        formData.set('api_key', apiKey);
-    }
     formData.set('expertise', expertise);
     formData.set('export_mode', 'p2workflowy');
     formData.set('is_book', isBook ? 'true' : 'false');
@@ -94,6 +93,7 @@ form.addEventListener('submit', async (e) => {
     submitBtn.innerText = '処理中...';
     statusContainer.classList.remove('hidden');
     downloadLinks.classList.add('hidden');
+    statusText.classList.remove('status-busy-text');
     logViewer.innerHTML = '処理を開始中...<br>';
     progressFill.style.width = '5%';
     percentText.innerText = '5%';
@@ -155,6 +155,15 @@ async function pollStatus(taskId, downloadToken) {
                 statusText.innerText = '完了！';
                 showDownloads(taskId, downloadToken);
                 resetButton();
+            } else if (data.status === 'busy') {
+                // プール枯渇: 障害ではなく想定内の混雑状態なので穏やかな表示にする
+                clearInterval(interval);
+                const msg = data.error || 'ただいま混み合っています。';
+                statusText.innerText = msg;
+                statusText.classList.add('status-busy-text');
+                const safeMsg = msg.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                logViewer.innerHTML += `<span class="log-busy">${safeMsg}</span><br>`;
+                resetButton();
             } else if (data.status === 'failed') {
                 clearInterval(interval);
                 const errDetail = data.error || data.progress || '詳細不明';
@@ -176,28 +185,4 @@ function showDownloads(taskId, downloadToken) {
     downloadLinks.classList.remove('hidden');
     // Scroll to download section
     downloadLinks.scrollIntoView({ behavior: 'smooth' });
-}
-
-// API Key Modal
-function openApiModal() {
-    document.getElementById('api-modal').classList.add('is-open');
-    document.removeEventListener('keydown', handleModalEsc);
-    document.addEventListener('keydown', handleModalEsc);
-}
-
-function closeApiModal() {
-    document.getElementById('api-modal').classList.remove('is-open');
-    document.removeEventListener('keydown', handleModalEsc);
-}
-
-function handleModalEsc(e) {
-    if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        closeApiModal();
-    }
-}
-
-function handleOverlayClick(e) {
-    if (e.target === document.getElementById('api-modal')) closeApiModal();
 }

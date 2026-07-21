@@ -64,15 +64,45 @@ class GeminiTier(enum.Enum):
     UNKNOWN = "unknown"
 
 class TierManager:
-    """APIキーのティア（有料/無料）状態を管理するシングルトン。"""
+    """APIキーのティア（有料/無料）状態を管理するシングルトン。
+
+    Webアプリの並行パイプライン実行はそれぞれ別スレッド（server.py の asyncio.to_thread）で
+    動くため、内部状態は threading.local() を裏に持つプロパティとしてスレッドごとに分離する。
+    `tier_manager` オブジェクト自体は今まで通りプロセス全体で単一のシングルトンとして import
+    され続け、外部からの属性アクセス（`tier_manager.current_tier` 等の読み書き）も無変更。
+    """
     _instance = None
-    
+    _local = threading.local()
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance.current_tier = GeminiTier.UNKNOWN
-            cls._instance.was_downgraded = False
         return cls._instance
+
+    def _ensure_local(self):
+        if not hasattr(self._local, "current_tier"):
+            self._local.current_tier = GeminiTier.UNKNOWN
+            self._local.was_downgraded = False
+
+    @property
+    def current_tier(self) -> GeminiTier:
+        self._ensure_local()
+        return self._local.current_tier
+
+    @current_tier.setter
+    def current_tier(self, value: GeminiTier):
+        self._ensure_local()
+        self._local.current_tier = value
+
+    @property
+    def was_downgraded(self) -> bool:
+        self._ensure_local()
+        return self._local.was_downgraded
+
+    @was_downgraded.setter
+    def was_downgraded(self, value: bool):
+        self._ensure_local()
+        self._local.was_downgraded = value
 
     def set_tier(self, tier: GeminiTier):
         if self.current_tier != tier:
@@ -91,20 +121,71 @@ class TierManager:
 tier_manager = TierManager()
 
 
-# Gemini クライアントのキャッシュ（シングルトン辞書）
-_CLIENTS: Dict[str, genai.Client] = {}
+class KeyRotator:
+    """CLI (main.py) 用の複数APIキーローテーション管理シングルトン。
+
+    プロセスグローバルな状態のまま（スレッドローカル化しない）— CLIはスレッドを使わず単一
+    プロセス内で完結するため（Phase4の並行も単一イベントループ内の asyncio.Semaphore のみ）。
+    forward-only（一度進んだキーインデックスは戻らない、TierManager.downgrade() と同じ設計
+    思想）。main.py が起動時に configure() を一度だけ呼ぶ。server.py は一切呼ばないため、
+    Webアプリの挙動には影響しない（is_configured() が常に False のまま）。
+    """
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._keys = []
+            cls._instance._index = 0
+        return cls._instance
+
+    def configure(self, keys: List[Optional[str]]) -> None:
+        self._keys = [k for k in keys if k]
+        self._index = 0
+
+    def is_configured(self) -> bool:
+        return bool(self._keys)
+
+    def current(self) -> Optional[str]:
+        return self._keys[self._index] if self._keys else None
+
+    def has_next(self) -> bool:
+        return bool(self._keys) and self._index < len(self._keys) - 1
+
+    def advance(self) -> Optional[str]:
+        if self.has_next():
+            self._index += 1
+        return self.current()
+
+    @property
+    def index(self) -> int:
+        return self._index
+
+    @property
+    def count(self) -> int:
+        return len(self._keys)
+
+key_rotator = KeyRotator()
+
+
+# Gemini クライアントのキャッシュ（スレッドごとに独立した辞書）
+_clients_local = threading.local()
+
+def _get_clients_dict() -> Dict[str, genai.Client]:
+    if not hasattr(_clients_local, "clients"):
+        _clients_local.clients = {}
+    return _clients_local.clients
 
 def _get_client(api_key: str | None = None) -> genai.Client:
-    """APIキーごとにクライアントをキャッシュして提供する。"""
-    global _CLIENTS
-    
+    """APIキーごとにクライアントをキャッシュして提供する（呼び出しスレッドごとに独立）。"""
     key = api_key or GEMINI_API_KEY
     if not key:
         raise ValueError("GEMINI_API_KEY (または GOOGLE_API_KEY) がセットされていません。.env ファイルを確認してください。")
-    
-    if key not in _CLIENTS:
-        _CLIENTS[key] = genai.Client(api_key=key)
-    return _CLIENTS[key]
+
+    clients = _get_clients_dict()
+    if key not in clients:
+        clients[key] = genai.Client(api_key=key)
+    return clients[key]
 
 
 def run_async(coro):
@@ -197,6 +278,10 @@ def _log_metrics(metrics_metadata: dict, prompt_len: int, p_tokens: int, c_token
         print_log(f"  [LLM] Metrics logging failed: {e_log}")
 
 
+# キーローテーション直後の待機秒数（新しいプロジェクトの枠なのでクールダウン不要、短いジッターのみ）
+ROTATION_RETRY_DELAY_BASE = 1.5
+
+
 def _calc_retry_wait(msg: str, attempt: int, retry_delay: float) -> tuple[float, bool]:
     """429/503 ならダウンシフトしてバックオフ秒数を計算する。戻り値: (wait_seconds, is_resource_limit)"""
     is_resource_limit = any(code in msg for code in ["429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE"])
@@ -227,7 +312,8 @@ def call_gemini(
     Gemini API を同期ストリーミングで呼び出し、TTFT/TPS 等を計測する。
     """
     use_default_model = (model is None)
-    client = _get_client(api_key=api_key)
+    effective_key = key_rotator.current() if key_rotator.is_configured() else api_key
+    client = _get_client(api_key=effective_key)
 
     # デバッグプロンプトのダンプ
     _dump_debug_prompt(prompt, log_dir, kwargs.get("metrics_metadata"))
@@ -298,10 +384,17 @@ def call_gemini(
             last_error = e
             msg = str(e)
             print_log(f"  [LLM] リトライ {attempt}/{max_retries}: {type(e).__name__}: {msg}")
-            
+
             if attempt < max_retries:
                 wait_time, is_resource_limit = _calc_retry_wait(msg, attempt, retry_delay)
-                if is_resource_limit:
+                rotated = False
+                if is_resource_limit and key_rotator.is_configured() and key_rotator.has_next():
+                    new_key = key_rotator.advance()
+                    client = _get_client(api_key=new_key)
+                    wait_time = ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
+                    rotated = True
+                    print_log(f"  [LLM] キーローテーション: {key_rotator.index + 1}/{key_rotator.count} 番目のキーに切替")
+                if is_resource_limit and not rotated:
                     print_log(f"  [LLM] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
                 time.sleep(wait_time)
     raise RuntimeError(f"Gemini API 呼び出し失敗: {last_error}")
@@ -325,7 +418,8 @@ async def call_gemini_async(
     Gemini API を非同期ストリーミングで呼び出し、TTFT/TPS 等を計測する。
     """
     use_default_model = (model is None)
-    client = _get_client(api_key=api_key)
+    effective_key = key_rotator.current() if key_rotator.is_configured() else api_key
+    client = _get_client(api_key=effective_key)
 
     # デバッグプロンプトのダンプ
     _dump_debug_prompt(prompt, log_dir, kwargs.get("metrics_metadata"), is_async=True)
@@ -399,10 +493,17 @@ async def call_gemini_async(
             last_error = e
             msg = str(e)
             print_log(f"  [LLM async] リトライ {attempt}/{max_retries}: {type(e).__name__}: {msg}")
-            
+
             if attempt < max_retries:
                 wait_time, is_resource_limit = _calc_retry_wait(msg, attempt, retry_delay)
-                if is_resource_limit:
+                rotated = False
+                if is_resource_limit and key_rotator.is_configured() and key_rotator.has_next():
+                    new_key = key_rotator.advance()
+                    client = _get_client(api_key=new_key)
+                    wait_time = ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
+                    rotated = True
+                    print_log(f"  [LLM async] キーローテーション: {key_rotator.index + 1}/{key_rotator.count} 番目のキーに切替")
+                if is_resource_limit and not rotated:
                     print_log(f"  [LLM async] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
                 await asyncio.sleep(wait_time)
 
@@ -529,8 +630,12 @@ async def translate_batch(
     return results
 
 
-_CACHED_LIMITERS = {}
-_LIMITER_LOCK = threading.Lock()
+_limiters_local = threading.local()
+
+def _get_limiters_dict() -> dict:
+    if not hasattr(_limiters_local, "limiters"):
+        _limiters_local.limiters = {}
+    return _limiters_local.limiters
 
 
 def reset_pipeline_state() -> None:
@@ -542,21 +647,23 @@ def reset_pipeline_state() -> None:
     の（すでに閉じた）ループに紐付いたクライアントを再利用してしまい、非同期呼び出しの
     1回目が "RuntimeError: Event loop is closed" で失敗する。
     TierManager も paid にリセットして前回の downgrade 状態を引き継がないようにする。
+    _CLIENTS・_CACHED_LIMITERS・TierManager はいずれもスレッドごとに独立しているため、
+    ここでのクリア・リセットは呼び出したスレッド自身の状態にしか影響しない（Web側で複数の
+    パイプラインが別スレッドで並行実行されていても、互いの状態を消し合わない）。
     """
-    global _CACHED_LIMITERS, _CLIENTS
-    with _LIMITER_LOCK:
-        _CACHED_LIMITERS.clear()
-    _CLIENTS.clear()
+    _get_limiters_dict().clear()
+    _get_clients_dict().clear()
     tier_manager.set_tier(GeminiTier.PAID)
 
 
-def apply_tier_settings(tier: str | GeminiTier) -> Tuple[AsyncLimiter, dict]:
+def apply_tier_settings(tier: str | GeminiTier, api_key: str | None = None) -> Tuple[AsyncLimiter, dict]:
     """
     ティアに応じたレートリミッターと設定を返す。
     ティアの文字列表記を受け入れ、tier_manager のグローバル状態を更新する。
+    api_key を渡すと (tier, api_key) 単位でレートリミッタを分離する（同一プロセス内で複数
+    キーを切り替える場合や、Webアプリで複数キーを同時使用する場合に、キーごとに正しい
+    残余レートを持たせるため）。省略時は従来通り tier のみでキーイングする。
     """
-    global _CACHED_LIMITERS
-
     if isinstance(tier, str):
         try:
             tier = GeminiTier(tier.lower())
@@ -567,16 +674,17 @@ def apply_tier_settings(tier: str | GeminiTier) -> Tuple[AsyncLimiter, dict]:
     # グローバルなティア状態を更新
     tier_manager.set_tier(tier)
 
-    with _LIMITER_LOCK:
-        if tier == GeminiTier.FREE:
-            settings = {"max_batch_chunks": 8, "max_batch_chars": 9000}
-            if tier not in _CACHED_LIMITERS:
-                _CACHED_LIMITERS[tier] = AsyncLimiter(1, 4.0)  # 1 request per 4 seconds
-        else:
-            settings = {"max_batch_chunks": 18, "max_batch_chars": 20000}
-            if tier not in _CACHED_LIMITERS:
-                _CACHED_LIMITERS[tier] = AsyncLimiter(100, 60.0)  # 100 requests per minute
+    cache_key = tier if api_key is None else (tier, api_key)
+    limiters = _get_limiters_dict()
+    if tier == GeminiTier.FREE:
+        settings = {"max_batch_chunks": 8, "max_batch_chars": 9000}
+        if cache_key not in limiters:
+            limiters[cache_key] = AsyncLimiter(1, 4.0)  # 1 request per 4 seconds
+    else:
+        settings = {"max_batch_chunks": 18, "max_batch_chars": 20000}
+        if cache_key not in limiters:
+            limiters[cache_key] = AsyncLimiter(100, 60.0)  # 100 requests per minute
 
-        rate_limiter = _CACHED_LIMITERS[tier]
+    rate_limiter = limiters[cache_key]
 
     return rate_limiter, settings

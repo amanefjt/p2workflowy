@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from core.pipeline import run_pipeline
-from core.config import DATA_DIR, STATE_DIR, PROJECT_ROOT, APP_ADMIN_PASSCODE, GEMINI_API_KEY
+from core.config import DATA_DIR, STATE_DIR, PROJECT_ROOT, APP_ADMIN_PASSCODE, GEMINI_API_KEY, GEMINI_API_KEY_WEB_KEYS
 from core.llm_client import get_default_model
 
 def _humanize_error(e: Exception) -> str:
@@ -48,6 +48,41 @@ def _humanize_error(e: Exception) -> str:
 
     return "処理中にエラーが発生しました。サーバーログを確認してください。"
 
+# 無料キープールが枯渇している時に表示するメッセージ（例外経由ではなく直接分岐で使う。
+# 混雑は障害ではなく想定内の状態のため、_humanize_error や traceback ログには乗せない。
+# task_status["status"] も "failed" ではなく "busy" にして、フロントエンドが本物のエラーと
+# 区別して穏やかな表示にできるようにする）。
+WEB_POOL_BUSY_MESSAGE = "ただいまアクセスが集中していて、APIの利用枠がいっぱいです。ごめんなさい🙏 少し時間をおいてから再度お試しください。"
+
+
+class WebKeyPool:
+    """無料枠キーを同時実行の「並行スロット」として貸し出すプール。
+
+    あるキーが使用中の間は、別のリクエストには別の空きキーを割り当てる。空きが無ければ
+    try_acquire() は None を返す（待たせずに即座に「混雑中」と判定させるため、queueは持たない）。
+    try_acquire()/release() は run_pipeline_in_background のイベントループ側コードからのみ
+    呼ばれ、asyncio.to_thread でオフロードされたワーカースレッド内からは呼ばれないため、
+    asyncio.Lock で十分（既存の _get_pipeline_semaphore と同じ前提）。
+    """
+
+    def __init__(self, keys: list[str]):
+        self._available: set[str] = set(keys)
+        self._in_use: set[str] = set()
+        self._lock = asyncio.Lock()
+
+    async def try_acquire(self) -> Optional[str]:
+        async with self._lock:
+            if not self._available:
+                return None
+            key = self._available.pop()
+            self._in_use.add(key)
+            return key
+
+    async def release(self, key: str) -> None:
+        async with self._lock:
+            self._in_use.discard(key)
+            self._available.add(key)
+
 app = FastAPI(title="p2workflowy Web")
 
 # CORS 設定: Cloudflare Pages からの通信を許可
@@ -70,23 +105,24 @@ UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 MAX_TASK_STATUS_ENTRIES = 50
 task_status: Dict[str, dict] = {}
 
-# パイプライン直列化: 同時実行を1タスクに制限する
-# asyncio.Semaphore はイベントループ生成後に初期化する必要があるため遅延初期化
-_pipeline_semaphore: Optional[asyncio.Semaphore] = None
-_pipeline_queue: list = []  # 待機中のタスクIDを順番に保持
+# 無料キープール: あるキーが使用中の間は別のリクエストに別の空きキーを割り当てる並行スロット。
+# asyncio.Lock はイベントループ生成後に初期化する必要があるため遅延初期化。
+# GEMINI_API_KEY_WEB_KEYS が空（未設定）ならプール自体を作らない＝今まで通り無制限・
+# GEMINI_API_KEY(有料)フォールバックのまま動く。
+_web_key_pool: Optional[WebKeyPool] = None
 
-def _get_pipeline_semaphore() -> asyncio.Semaphore:
-    global _pipeline_semaphore
-    if _pipeline_semaphore is None:
-        _pipeline_semaphore = asyncio.Semaphore(1)
-    return _pipeline_semaphore
+def _get_web_key_pool() -> Optional[WebKeyPool]:
+    global _web_key_pool
+    if _web_key_pool is None and GEMINI_API_KEY_WEB_KEYS:
+        _web_key_pool = WebKeyPool(GEMINI_API_KEY_WEB_KEYS)
+    return _web_key_pool
 
 def _cleanup_task_status():
     """完了済みタスクが多すぎる場合、古いエントリを削除する。"""
     if len(task_status) <= MAX_TASK_STATUS_ENTRIES:
         return
     # 完了 or 失敗のタスクを古い順に削除
-    completed = [tid for tid, info in task_status.items() if info.get('status') in ('completed', 'failed')]
+    completed = [tid for tid, info in task_status.items() if info.get('status') in ('completed', 'failed', 'busy')]
     num_to_delete = len(task_status) - MAX_TASK_STATUS_ENTRIES
     for tid in completed[:num_to_delete]:
         # 【重要】物理ファイルも削除する
@@ -111,67 +147,72 @@ async def ronbunnihongo_page():
 
 # パイプラインを別スレッドで実行するための非同期ラッパー関数
 async def run_pipeline_in_background(task_id: str, input_path: str, glossary_path: Optional[str], title: Optional[str], api_key: Optional[str], expertise: str, export_mode: str, is_book: bool, max_chapters: Optional[int] = None):
-    semaphore = _get_pipeline_semaphore()
+    pool = _get_web_key_pool()
+    # プールが有効かつ「デフォルト経路」（管理者パスコードもユーザー自身のキーも指定していない、
+    # api_key is None）の時だけプールを介する。管理者・ユーザー自身のキーはプールの枠にカウント
+    # されず、今まで通り無制限に動く。
+    using_pool = pool is not None and api_key is None
+    acquired_key: Optional[str] = None
 
-    # キューに追加して待機状態を通知
-    _pipeline_queue.append(task_id)
-    queue_pos = len(_pipeline_queue)
-    if queue_pos > 1:
-        task_status[task_id]["status"] = "queued"
-        task_status[task_id]["progress"] = f"待機中... (キュー位置: {queue_pos - 1})"
-        task_status[task_id]["percentage"] = 0
-        print(f"Task {task_id}: キュー待機中 (位置: {queue_pos - 1})")
+    if using_pool:
+        acquired_key = await pool.try_acquire()
+        if acquired_key is None:
+            print(f"Task {task_id}: 無料キープールが枯渇のため拒否します。")
+            task_status[task_id]["status"] = "busy"
+            task_status[task_id]["error"] = WEB_POOL_BUSY_MESSAGE
+            return
+    effective_api_key = acquired_key if using_pool else api_key
+
+    task_status[task_id]["status"] = "processing"
+    task_status[task_id]["progress"] = "準備中..."
+    task_status[task_id]["percentage"] = 5
+
+    print(f"Task {task_id}: バックグラウンドスレッドでパイプラインを開始します...")
 
     try:
-        async with semaphore:
-            # キュー位置表示を更新
-            _pipeline_queue.remove(task_id)
-            task_status[task_id]["status"] = "processing"
-            task_status[task_id]["progress"] = "準備中..."
-            task_status[task_id]["percentage"] = 5
-
-            print(f"Task {task_id}: バックグラウンドスレッドでパイプラインを開始します...")
-
-            # asyncio.to_thread で同期関数である run_pipeline をスレッドプールにオフロード
-            if is_book:
-                from core.book_manager import BookManager
-                manager = BookManager(input_path=input_path, api_key=api_key)
-                await asyncio.to_thread(
-                    manager.run,
-                    glossary_path=glossary_path,
-                    thinking_level="High",
-                    pdf_mode=None,
-                    tier="free",
-                    max_chapters=max_chapters,
-                )
-            else:
-                await asyncio.to_thread(
-                    run_pipeline,
-                    input_path=input_path,
-                    glossary_path=glossary_path,
-                    title=title,
-                    api_key=api_key,
-                    session_id=task_id,
-                    expertise=expertise,
-                    export_mode=export_mode,
-                    model=None,
-                    thinking_level="High",
-                    pdf_mode="hybrid",
-                    tier="free",
-                    is_book=False,
-                    structure_only=False,
-                    resume_only=False
-                )
-            task_status[task_id]["status"] = "completed"
-            print(f"Task {task_id}: 処理が正常に完了しました。")
+        # asyncio.to_thread で同期関数である run_pipeline をスレッドプールにオフロード
+        if is_book:
+            from core.book_manager import BookManager
+            manager = BookManager(input_path=input_path, api_key=effective_api_key)
+            await asyncio.to_thread(
+                manager.run,
+                glossary_path=glossary_path,
+                thinking_level="High",
+                pdf_mode=None,
+                tier="free",
+                max_chapters=max_chapters,
+                cleanup_sessions=False,
+            )
+        else:
+            await asyncio.to_thread(
+                run_pipeline,
+                input_path=input_path,
+                glossary_path=glossary_path,
+                title=title,
+                api_key=effective_api_key,
+                session_id=task_id,
+                expertise=expertise,
+                export_mode=export_mode,
+                model=None,
+                thinking_level="High",
+                pdf_mode="hybrid",
+                tier="free",
+                is_book=False,
+                structure_only=False,
+                resume_only=False,
+                cleanup_sessions=False,
+            )
+        task_status[task_id]["status"] = "completed"
+        print(f"Task {task_id}: 処理が正常に完了しました。")
     except Exception as e:
         import traceback
         error_msg = traceback.format_exc()
         print(f"Task {task_id}: エラーが発生しました - {error_msg}")
-        if task_id in _pipeline_queue:
-            _pipeline_queue.remove(task_id)
         task_status[task_id]["status"] = "failed"
         task_status[task_id]["error"] = _humanize_error(e)
+    finally:
+        if using_pool and acquired_key is not None:
+            await pool.release(acquired_key)
 
 @app.post("/api/process")
 async def process(
@@ -272,13 +313,8 @@ async def get_status(task_id: str):
     if task_id not in task_status:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    # キュー待機中はキュー位置を動的に更新
-    if task_status[task_id]["status"] == "queued":
-        pos = _pipeline_queue.index(task_id) if task_id in _pipeline_queue else 0
-        task_status[task_id]["progress"] = f"待機中... (キュー位置: {pos})"
-
     # プログレスの動的更新（status.json およびファイル存在チェック）
-    elif task_status[task_id]["status"] == "processing":
+    if task_status[task_id]["status"] == "processing":
         session_id = task_id
         session_dir = STATE_DIR / session_id
         

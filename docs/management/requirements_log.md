@@ -270,3 +270,62 @@ FREE: 5チャンク/6,000字 → **8チャンク/9,000字** に変更した。
   `core/engine/p4_translate/parallel_translator.py::ParallelTranslator`
   （`DEFAULT_MAX_BATCH_CHUNKS`/`DEFAULT_MAX_BATCH_CHARS`）。詳細な数値根拠・検証ログは
   `docs/model_optimization.md` §5.4 参照。
+
+## 2026-07-21: 複数APIキー運用（CLIローテーション ＋ Webアプリ並行プール）を導入
+
+`docs/model_optimization.md` §3/§4 の実測（無料枠で1日〜45〜68本処理可能）を踏まえ、ユーザーから
+「CLIは無料キー2本→有料の自動フォールバック、Webアプリは無料キー5本を同時実行スロットとして使い
+6人目以降は混雑中表示にしたい」との要望があった。上位モデル（Opus）に素案をレビューさせたところ、
+Web側で本当に5並行を許可する設計に変えることで露呈する、プロセスグローバル状態の競合バグを2件
+発見したため、それを踏まえた修正込みで実装した。
+
+- **前提**: Gemini APIの無料/有料はAPIキーが紐づくGCPプロジェクトの課金設定で決まり、無料枠の
+  RPM/RPD/TPMはキー単位ではなくプロジェクト単位（WebSearchで確認）。複数キーで実質的に枠を
+  増やすには、それぞれ別のGCPプロジェクトで発行する必要がある（同一アカウント内で複数プロジェクト
+  を作ればよく、別アカウントは不要）。
+- **CLI**: `core/config.py`に`GEMINI_API_KEY_FREE_1/2`を追加。`core/llm_client.py`に
+  `KeyRotator`（プロセスグローバル・forward-onlyのシングルトン）を新設し、`call_gemini`/
+  `call_gemini_async`のリトライループが429/503を検知した際、モデルのダウンシフトに加えて
+  キー自体も次に進める。`main.py`が起動時に`key_rotator.configure([FREE_1, FREE_2,
+  GEMINI_API_KEY])`を一度だけ呼ぶ。`server.py`は一切呼ばないため、Webアプリの挙動には
+  影響しない（`is_configured()`が常にFalseのまま）。
+- **Webアプリ**: `core/config.py`に`GEMINI_API_KEY_WEB_1..5`（`GEMINI_API_KEY_WEB_KEYS`として
+  export）を追加。`server.py`の`asyncio.Semaphore(1)`による全リクエスト完全直列化＋FIFOキュー
+  （`"queued"`状態・キュー位置表示）を撤去し、`WebKeyPool`（無料キー最大5本を同時実行スロット
+  として貸し出す、非ブロッキングacquire）に置き換えた。空きが無い場合は待たせず即座に
+  `task_status`を`"failed"`＋「混雑中」メッセージにする（既存のステータスポーリングの仕組みを
+  再利用、フロントエンド変更なし）。管理者パスコード・ユーザー自身のAPIキー入力の経路はプールを
+  介さず今まで通り無制限。
+- **必須の副作用修正1（Opusレビューで発覚）**: `core/llm_client.py`の`_CLIENTS`（クライアント
+  キャッシュ）・`_CACHED_LIMITERS`（レートリミッタキャッシュ）・`TierManager`の内部状態は
+  いずれもプロセスグローバルだった。Web側の各並行パイプラインは`asyncio.to_thread`でそれぞれ
+  別スレッド・別イベントループで動くため、`(tier, api_key)`キーイングだけでは、
+  `reset_pipeline_state()`（`run_pipeline()`開始時に無条件実行）があるユーザーの処理開始で
+  別の処理中ユーザーのキャッシュを消したり、一時的に誤ったモデル階層（バッチサイズ・レート
+  制限）に切り替えてしまったりする間欠的な競合が残る。3つとも`threading.local()`ベースに
+  変更した（外部API・属性アクセスは無変更）。`apply_tier_settings()`には`api_key`引数を追加し
+  `(tier, api_key)`でのキーイングも別軸で実施（CLIのキーローテーションが複数キーを跨ぐ際に
+  キーごとに正しい残余レートを持たせるため）。
+- **必須の副作用修正2（Opusレビューで発覚）**: 当初「Web起点は`SessionState.
+  cleanup_old_sessions()`（`state/`直下の全セッション横断のグローバル上限10）をスキップし
+  `server.py::_cleanup_task_status()`に一本化する」という案を検討したが、書籍モードの章
+  ディレクトリ（`state/<book>_<fp>_ch<N>`）は`task_id`と無関係の命名のため`_cleanup_task_status`
+  では一切掃除できず、無制限にディスクリークする新たな不具合を生むことが判明した。代わりに
+  章ディレクトリ自体を`state/book_sessions/<book>_<fp>/chapters_state/ch<N>/`に物理的に移設
+  した（`run_pipeline()`に`state_base_dir`パラメータを追加）。`book_sessions/`は元々グローバル
+  上限の対象外かつ書籍単位の独自上限（`MAX_BOOK_SESSIONS=5`）で管理されるため、章が個別
+  セッションとして誤カウントされることもない。この修正はCLI・Web双方に効き、書籍モードが
+  自分の章数だけでグローバル上限を回してしまう既知の悩み（[[book-mode-session-cache-global-cap]]）
+  の解消にもなる。`run_pipeline()`にはこれとは別に`cleanup_sessions: bool = True`も追加し、
+  Web起点の論文モード呼び出しには`cleanup_sessions=False`を渡して`_cleanup_task_status()`
+  （完了/失敗と判明しているものだけ削除）に一本化した。
+- **既知の限界（今回は対応せず）**: 同一書籍の同時重複アップロード時のキャッシュファイル
+  競合書き込み（`BookManager.session_dir`が内容フィンガープリント基準で`task_id`に基づかない
+  ため）。CLIのキーローテーションはプロセス内で永続・不可逆（1ファイル目で一時的な429に
+  遭遇しただけで残り全ファイルが有料キーに固定される）。ローテーションは429/503のみをトリガー
+  にし、無効・失効キーは対象外。
+- **変更箇所**: `core/config.py`、`core/llm_client.py`（`KeyRotator`、スレッドローカル化、
+  `apply_tier_settings`）、`core/pipeline.py`（`cleanup_sessions`/`state_base_dir`）、
+  `core/book_manager.py`（章ディレクトリ移設）、
+  `core/engine/p4_translate/parallel_translator.py`、`main.py`、`server.py`、`.env.example`。
+  設計の詳細は `docs/model_optimization.md` §6 参照。

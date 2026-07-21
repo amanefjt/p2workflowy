@@ -135,7 +135,7 @@ class BookManager:
         
         # ティア状態の初期化（get_default_model を呼ぶ前に必要）
         tier = pipeline_kwargs.get("tier", "paid")
-        apply_tier_settings(tier)
+        apply_tier_settings(tier, api_key=self.api_key)
         expertise = pipeline_kwargs.get("expertise", "文化人類学")
 
         can_use_full_scan = diagnose_pdf_quality(str(self.input_path))
@@ -237,7 +237,13 @@ class BookManager:
             ch_title = ch["title"]
             ch_role = ch.get("role", "chapter")
             ch_session_id = f"{self.book_title}_{self.fingerprint}_ch{i+1}"
-            ch_state = SessionState(session_id=ch_session_id)
+            # 章ディレクトリは book_sessions/<book>_<fp>/ 配下に入れ子にする（グローバル
+            # セッション上限 SessionState.MAX_STATE_SESSIONS の対象外である state/book_sessions/
+            # を利用し、章が個別セッションとして誤カウントされて他セッションに追い出される、
+            # あるいは書籍1冊の章数だけで自壊するのを防ぐ）。書籍が削除される時は章も一緒に
+            # 削除される（_cleanup_old_book_sessions()、意図通り）。
+            ch_state_dir = self.session_dir / "chapters_state" / f"ch{i+1}"
+            ch_state = SessionState(session_id=ch_session_id, base_dir=ch_state_dir)
 
             print_log(f"\n--- Processing [{ch_role}] {ch_title} ({i+1}/{len(target_chapters)}) ---")
 
@@ -263,6 +269,7 @@ class BookManager:
                     input_path=ch["path"],
                     api_key=self.api_key,
                     session_id=ch_session_id,
+                    state_base_dir=ch_state_dir,
                     is_book=True,
                     title=ch_title,
                     resume_content=self.global_resume or None,

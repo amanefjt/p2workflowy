@@ -17,6 +17,9 @@ import uvicorn
 from core.pipeline import run_pipeline
 from core.config import DATA_DIR, STATE_DIR, PROJECT_ROOT, APP_ADMIN_PASSCODE, GEMINI_API_KEY, GEMINI_API_KEY_WEB_KEYS
 from core.llm_client import get_default_model
+from core.engine.p1_ingest.docling_ingester import is_docling_viable
+from core.engine.p1_ingest.routing import decide_pdf_mode
+from core.engine.p1_ingest.spread_splitter import is_spread_pdf
 
 def _humanize_error(e: Exception) -> str:
     """例外をユーザー向けメッセージに変換。詳細情報はサーバーログ出力済み。"""
@@ -184,6 +187,15 @@ async def run_pipeline_in_background(task_id: str, input_path: str, glossary_pat
                 cleanup_sessions=False,
             )
         else:
+            # 書籍モード（BookManager）と同じ①〜④ルーティング規則を論文単位で適用。
+            # 以前は "hybrid" 固定だったため、Docling不可PDFでVLMフォールバックが
+            # 働かず生の物理テキスト抽出に静かに落ちていた。
+            if input_path.lower().endswith(".pdf"):
+                pdf_mode, _routing_reason = decide_pdf_mode(
+                    None, is_spread_pdf(input_path), is_docling_viable(input_path)
+                )
+            else:
+                pdf_mode = "hybrid"
             await asyncio.to_thread(
                 run_pipeline,
                 input_path=input_path,
@@ -195,7 +207,7 @@ async def run_pipeline_in_background(task_id: str, input_path: str, glossary_pat
                 export_mode=export_mode,
                 model=None,
                 thinking_level="High",
-                pdf_mode="hybrid",
+                pdf_mode=pdf_mode,
                 tier="free",
                 is_book=False,
                 structure_only=False,

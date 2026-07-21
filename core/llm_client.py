@@ -177,24 +177,48 @@ class KeyRotator:
 key_rotator = KeyRotator()
 
 
-# Gemini クライアントのキャッシュ（スレッドごとに独立した辞書）
+# Gemini クライアントのキャッシュ（スレッドごとに独立した辞書）。
+# 値は (client, 生成時のイベントループ) のペア。genai.Client の非同期トランスポートは
+# 生成時のループに紐付くため、ループが変わったら再生成が必要（下記 _get_client 参照）。
 _clients_local = threading.local()
 
-def _get_clients_dict() -> Dict[str, genai.Client]:
+def _get_clients_dict() -> Dict[str, tuple]:
     if not hasattr(_clients_local, "clients"):
         _clients_local.clients = {}
     return _clients_local.clients
 
 def _get_client(api_key: str | None = None) -> genai.Client:
-    """APIキーごとにクライアントをキャッシュして提供する（呼び出しスレッドごとに独立）。"""
+    """APIキーごとにクライアントをキャッシュして提供する（呼び出しスレッドごとに独立）。
+
+    reset_pipeline_state() はパイプライン開始時にこのキャッシュを丸ごとクリアするが、
+    それだけでは不十分だった: 1回の run_pipeline() 内でも Phase 1 (VLM ingestion) と
+    Phase 4 (translation) はそれぞれ独立して run_async()/asyncio.run() を呼ぶため、
+    別々のイベントループを持つ。Phase 1 で生成・キャッシュされたクライアントを Phase 4 の
+    新しいループでそのまま再利用すると、非同期トランスポートが前のループ（既に閉じている）
+    に紐付いたままのため初回呼び出しが "RuntimeError: Event loop is closed" になる
+    （2026-07-21、書籍モードで章ごとに毎回発生することを確認）。
+    そのため、カレントループが生成時のループと異なる場合はキャッシュを破棄して再生成する。
+    同期呼び出し（ループなしのコンテキスト）はループ不問で既存クライアントを再利用する。
+    """
     key = api_key or GEMINI_API_KEY
     if not key:
         raise ValueError("GEMINI_API_KEY (または GOOGLE_API_KEY) がセットされていません。.env ファイルを確認してください。")
 
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
     clients = _get_clients_dict()
-    if key not in clients:
-        clients[key] = genai.Client(api_key=key)
-    return clients[key]
+    cached = clients.get(key)
+    if cached is not None:
+        cached_client, cached_loop = cached
+        if current_loop is None or cached_loop is current_loop:
+            return cached_client
+
+    client = genai.Client(api_key=key)
+    clients[key] = (client, current_loop)
+    return client
 
 
 def run_async(coro):

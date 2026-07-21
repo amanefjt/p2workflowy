@@ -8,6 +8,8 @@ llm_client のユニットテスト
     パイプラインをまたいでキャッシュを使い回すと "Event loop is closed" になる)
 """
 
+import asyncio
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from core.llm_client import call_gemini, call_gemini_async, reset_pipeline_state, _get_client
@@ -129,3 +131,38 @@ def test_reset_pipeline_state_clears_client_cache():
     reset_pipeline_state()
 
     assert "dummy-test-key" not in llm_client._get_clients_dict()
+
+
+def test_get_client_reuses_instance_within_same_loop():
+    """同一イベントループ内での呼び出しはキャッシュされたクライアントをそのまま返す。"""
+    from core import llm_client
+
+    async def _run():
+        c1 = _get_client(api_key="loop-test-key")
+        c2 = _get_client(api_key="loop-test-key")
+        return c1, c2
+
+    try:
+        c1, c2 = asyncio.run(_run())
+        assert c1 is c2
+    finally:
+        llm_client._get_clients_dict().pop("loop-test-key", None)
+
+
+def test_get_client_recreates_when_event_loop_differs():
+    """2026-07-21: reset_pipeline_state() は run_pipeline() 呼び出しごとに1回しかキャッシュを
+    クリアしないが、1回の run_pipeline() 内でも Phase 1 と Phase 4 はそれぞれ別の
+    asyncio.run() ループを使う。前のループで生成されたクライアントを新しいループでそのまま
+    再利用すると初回呼び出しが "RuntimeError: Event loop is closed" になっていた
+    （書籍モードで章ごとに毎回再現）。カレントループが生成時と異なれば再生成すべき。"""
+    from core import llm_client
+
+    async def _get_in_new_loop():
+        return _get_client(api_key="loop-mismatch-key")
+
+    try:
+        client_a = asyncio.run(_get_in_new_loop())  # Phase 1 相当のループ
+        client_b = asyncio.run(_get_in_new_loop())  # Phase 4 相当の別ループ
+        assert client_a is not client_b
+    finally:
+        llm_client._get_clients_dict().pop("loop-mismatch-key", None)

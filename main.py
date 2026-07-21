@@ -12,6 +12,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.pipeline import run_pipeline
+from core.engine.p1_ingest.docling_ingester import is_docling_viable
+from core.engine.p1_ingest.routing import decide_pdf_mode
+from core.engine.p1_ingest.spread_splitter import is_spread_pdf
 
 
 def main():
@@ -229,10 +232,18 @@ def main():
                 continue
 
             is_pdf = p.suffix.lower() == ".pdf"
-            pdf_mode = args.pdf_mode if args.pdf_mode else "hybrid"
+            if is_pdf:
+                # 書籍モード（BookManager）と同じ①〜④ルーティング規則を論文単位で適用。
+                # 以前は未指定時に無条件で "hybrid" 固定していたため、Docling不可PDFで
+                # VLMフォールバックが働かず生の物理テキスト抽出に静かに落ちていた。
+                pdf_mode, routing_reason = decide_pdf_mode(
+                    args.pdf_mode, is_spread_pdf(str(p)), is_docling_viable(str(p))
+                )
+            else:
+                pdf_mode, routing_reason = "hybrid", "not_pdf"
             export_mode = "ronbunnihongo" if args.ronbunnihongo else "p2workflowy"
-            
-            print(f"\n[{i}/{len(input_files)}] --- 構成: Paper / エンジン: {pdf_mode} / [Target: {p.name}] ---")
+
+            print(f"\n[{i}/{len(input_files)}] --- 構成: Paper / エンジン: {pdf_mode}（{routing_reason}） / [Target: {p.name}] ---")
             
             try:
                 run_pipeline(

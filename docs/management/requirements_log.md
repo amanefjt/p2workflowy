@@ -345,3 +345,26 @@ Web側で本当に5並行を許可する設計に変えることで露呈する�
       値（1,500,000 / 1,000,000 / 500,000）に統一し、論文・書籍で閾値を分けていた
       `MAX_BOOK_CHARS`/`BOOK_HEAD_CHARS`/`BOOK_TAIL_CHARS` は削除（`_sample_text` から
       `is_book` によるサイズ分岐を除去、ログラベルの Book/Paper 表示のみ `is_book` を使用）。
+
+- [2026-07-21] 論文（非書籍）モードの入力ルーティングに書籍単位ルーティング規則（①〜④）を移植
+    - **経緯**: 同じ `Naven.pdf`（本来は書籍だが `--book` を付けずに論文モードで処理した回）で、
+      Docling 不可と判定されたにもかかわらず VLM フォールバックが実行されず、生の物理テキスト
+      抽出のまま図版ページ（Figure 4）が寸断された状態で出力される不具合が発覚した（詳細は
+      `troubleshooting_log.md` I-38）。原因は `main.py`/`server.py` の論文（非書籍）経路が
+      `pdf_mode` 未指定時に無条件で `"hybrid"` を固定しており、`core/book_manager.py`
+      （I-16, 2026-07-18）が書籍単位で実装済みの①明示指定②見開き=VLM③Docling可能=hybrid
+      ④それ以外=VLM というルーティング規則が論文モードには一度も移植されていなかったこと。
+    - **判断根拠**: 書籍モードと論文モードで「同じPDF入力特性に対して異なるモデルルートを
+      適用する」技術的合理性はない（Docling不可なPDFはどちらのモードでも同じ理由で不可）。
+      書籍モードで既に実運用・テスト済みの判定ロジックをそのまま論文単位に転用するのが最小
+      差分かつ最も安全な修正と判断した。
+    - **実装**: `core/book_manager.py::_decide_book_pdf_mode` の実体を
+      `core/engine/p1_ingest/routing.py::decide_pdf_mode` に切り出し、`book_manager.py` は
+      これを re-export するエイリアスに変更（既存テスト・呼び出し名は維持）。`main.py`
+      （論文モードループ）・`server.py`（非書籍分岐）はいずれも PDF入力かつ `pdf_mode`
+      未指定時に `is_spread_pdf()`/`is_docling_viable()` を実行し、`decide_pdf_mode()` で
+      解決した具体的な `pdf_mode` を `run_pipeline()` に渡すよう変更。`core/pipeline.py` の
+      I-37 プリフライトチェック（見開き検知・`diagnose_pdf_quality`）は役割が異なる独立した
+      安全網として維持（重複はするが害はない）。
+    - **既知の限界**: 書籍モード同様、論文モードにも見開きスキャンPDFを単一ページへ分割する
+      処理は存在しない（I-37 の既知の残課題を引き継ぐ）。

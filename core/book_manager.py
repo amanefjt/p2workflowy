@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 
 from .config import SessionState, print_log
 from .engine.p1_ingest.pdf_splitter import PDFSplitter
+from .engine.p1_ingest.routing import decide_pdf_mode as _decide_book_pdf_mode
 from .engine.p3_structure.state_integrator import StateIntegrator
 from .llm_client import call_gemini, get_default_model, load_coreprompts, GeminiTier, apply_tier_settings
 
@@ -19,26 +20,9 @@ from .llm_client import call_gemini, get_default_model, load_coreprompts, Gemini
 # 実測しきい値（734,997字=OK / 738,015字=FAIL）よりかなり低い値を設定。
 RESUME_MODEL_SAFE_CHAR_LIMIT = 600_000
 
-
-def _decide_book_pdf_mode(
-    explicit_pdf_mode: Optional[str], is_spread: bool, is_docling_ok: bool
-) -> tuple[str, str]:
-    """書籍単位のルーティング規則（①〜④）を判定する。
-
-    ① ユーザーが pdf_mode を明示指定 → それを尊重
-    ② 見開きスキャン → VLM ルート（Docling の読み順が未検証のため保守的に優先）
-    ③ Docling 可能（デジタルPDF）→ Docling ルート
-    ④ それ以外（スキャン等）→ VLM ルート
-
-    戻り値は (pdf_mode, reason)。reason は routing_decision.json とログに記録する。
-    """
-    if explicit_pdf_mode is not None:
-        return explicit_pdf_mode, "explicit_pdf_mode"
-    if is_spread:
-        return "full_vlm", "spread_pdf"
-    if is_docling_ok:
-        return "hybrid", "docling_viable"
-    return "full_vlm", "docling_not_viable"
+# ①〜④ルーティング規則の実体は core/engine/p1_ingest/routing.py に一元化
+# （論文モードの main.py / server.py とも共有するため）。_decide_book_pdf_mode
+# の名前はテスト（tests/unit/test_book_manager.py）との互換のために維持する。
 
 
 class BookManager:

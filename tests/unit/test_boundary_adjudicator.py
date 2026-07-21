@@ -125,6 +125,41 @@ class TestInterpolatedOffset:
         assert interpolated_offset(p, 0) is None
 
 
+class TestInterval:
+    """BoundaryAdjudicator._interval の探索窓計算（層3の窓幅キャップ、2026-07-21修理）。"""
+
+    def test_cluster_suspects_get_distinct_windows_when_gap_exceeds_max_pages(self):
+        """同一確定章ペアに挟まれた複数の要審査章は、区間が ADJUDICATION_MAX_PAGES を
+        超える場合、論理頁の位置に応じて異なる窓を割り当てられるべき。旧実装は index を
+        無視し全員が区間の先頭からの同じ窓を割り当てられていた（PSE の12連続fallbackで
+        後方の章の真の扉頁が窓外になり裁定不能になるバグ）。
+        """
+        from core.engine.p1_ingest.boundary_adjudicator import ADJUDICATION_MAX_PAGES
+        p = placements([
+            (10, 10, True),     # A 確定
+            (30, 10, False),    # B fallback（論理頁的に A 寄り）
+            (90, 10, False),    # C fallback（論理頁的に D 寄り）
+            (100, 110, True),   # D 確定
+        ])
+        adj = BoundaryAdjudicator(api_key="k", model="m", cache={}, save_cache=lambda: None)
+
+        lower_b, upper_b = adj._interval(p, 1, total_pages=200)
+        lower_c, upper_c = adj._interval(p, 2, total_pages=200)
+
+        assert (lower_b, upper_b) != (lower_c, upper_c), "同じ窓を割り当てられてはならない"
+        assert lower_c > upper_b, "Cの窓はBより後方であるべき"
+        assert upper_b - lower_b + 1 <= ADJUDICATION_MAX_PAGES
+        assert upper_c - lower_c + 1 <= ADJUDICATION_MAX_PAGES
+        # 確定章 A(10)・D(110) の区間からはみ出さない
+        assert lower_b >= 11 and upper_c <= 109
+
+    def test_interval_within_max_pages_is_returned_unchanged(self):
+        """区間そのものが窓幅以下なら、絞り込まず区間全体を返す（既存挙動を維持）。"""
+        p = placements([(10, 40, True), (20, 50, True), (30, 61, True), (40, 70, True)])
+        adj = BoundaryAdjudicator(api_key="k", model="m", cache={}, save_cache=lambda: None)
+        assert adj._interval(p, 2, total_pages=200) == (51, 69)
+
+
 def make_mock_doc(page_texts: list[str]) -> MagicMock:
     doc = MagicMock()
     pages = []

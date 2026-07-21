@@ -28,27 +28,6 @@ class ParallelTranslator:
         self.semaphore = asyncio.Semaphore(max_concurrent_sections)
         self.rate_limiter, self.settings = apply_tier_settings(tier, api_key=self.api_key)
 
-    def _create_batches(self, chunks: List[dict]) -> List[List[dict]]:
-        """チャンク数と文字数に基づいてバッチを生成する。"""
-        max_chunks = self.settings.get("max_batch_chunks", self.DEFAULT_MAX_BATCH_CHUNKS)
-        max_chars = self.settings.get("max_batch_chars", self.DEFAULT_MAX_BATCH_CHARS)
-        
-        batches = []
-        i = 0
-        while i < len(chunks):
-            batch = []
-            batch_chars = 0
-            while i < len(chunks) and len(batch) < max_chunks:
-                c = chunks[i]
-                c_len = len(c.get("text", ""))
-                if len(batch) > 0 and (batch_chars + c_len) > max_chars:
-                    break
-                batch.append(c)
-                batch_chars += c_len
-                i += 1
-            batches.append(batch)
-        return batches
-
     async def translate_section_chunks(
         self,
         section_name: str,

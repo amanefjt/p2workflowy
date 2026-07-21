@@ -389,3 +389,52 @@ Spec B 完了により書籍モードで「スキャン書籍を最後まで読�
   4. `pdf_ingester.py::_vlm_slice_job` の `if not vlm_res: raise ValueError(...)` を削除（空文字列はもはや失敗ではない）。
 - **検証**: `tests/unit/test_ocr_manager.py::TestNoTextMarker` を新設（マーカー→空文字列変換・キャッシュヒット時も同様・本物の例外は伝播）。単体テスト 391件全合格（既存388＋新規3）。
 - **教訓**: 「意図的な空応答」を設計に組み込む際は、それを処理するすべての層（LLM 呼び出しラッパーの空応答ガード、例外の握り潰し、呼び出し元のフォールバック判定）が同じ「空＝異常」前提で書かれていないか確認する必要がある。今回は3層すべてが独立に「空＝失敗」を仮定しており、そのどれか1つでも「空＝正当な結果」を許容していれば連鎖しなかった。
+
+## 2026-07-21: `docs/superpowers/plans/2026-07-10-book-vlm-routing.md` 以降83コミット分のサブエージェント並列コードレビューで発見・修正した不具合（I-31〜I-37）
+
+4系統（Phase1取り込み/VLM/章境界判定、書籍統合/Phase3構造化、Phase4翻訳、LLMクライアント/設定/Phase2）に分けて並列レビューし、発見した指摘のうち実コードを読んで再確認できたものを修正した。
+
+### I-31. 章境界LLM裁定（層3）の探索窓が、同一確定章ペアに挟まれた複数の要審査章に対して常に同一になる（対応済み）
+
+- **事象**: `BoundaryAdjudicator._interval()` が要審査章自身の index を見ず、前後の**確定**章のみから探索窓 `[lower, upper]` を決めていた。区間が `ADJUDICATION_MAX_PAGES`(32) を超える場合、常に区間の先頭から32頁を返すため、同じ確定章ペアに挟まれた複数の要審査章（fallback クラスタ）が全員まったく同じ窓を割り当てられていた。
+- **実害**: クラスタ後方の章は真の扉頁が窓外になり LLM が正しく裁定できず、区間外判定で棄却されて無補正のまま残る。まさにこの機能が解決対象とする「PSE の12連続fallback」型のケースで効果を失う設計上の穴だった。
+- **対策**: `core/engine/p1_ingest/boundary_adjudicator.py::_interval()` を、区間が窓幅を超える場合は対象章の論理頁が prev/nxt の論理頁の間でどの比率に位置するかから窓の中心を推定し、章ごとに異なる窓（幅は変わらず32頁のまま）を割り当てるよう変更。区間が窓幅以下ならこれまで通り区間全体をそのまま返す。
+- **検証**: `tests/unit/test_boundary_adjudicator.py::TestInterval` を新設（クラスタ内の2章が異なる窓・区間内に収まる窓を得ることを確認、既存の「区間が窓幅以下ならそのまま返す」ケースの回帰なしも確認）。
+
+### I-32. Phase2レジュメ生成のサンプリング閾値拡大が、resumeモデルの実効入力上限超過（I-20相当）を再導入しうる（対応済み）
+
+- **事象**: 論文モードの `MAX_INPUT_CHARS` を500,000字→1,500,000字に拡大した際（`requirements_log.md` 2026-07-21 参照）、根拠にした「入力上限1,048,576 tok」は公称値であり、`docs/model_optimization.md` 自身が記載する実効上限（I-20実測: 約735,000字前後、文書によって文字/トークン比が3.9〜4.5程度ブレる）とは別物だった。`core/book_manager.py` の書籍全体レジュメには `RESUME_MODEL_SAFE_CHAR_LIMIT` による同種のガードが既にあったが、`core/phase2_meta.py::generate_resume()`（論文・章単位のレジュメ）には対応するガードがなかった。
+- **対策**: `core/phase2_meta.py` に `RESUME_MODEL_SAFE_CHAR_LIMIT = 600_000`（book_manager.py と同じ値・同じ考え方）を追加。`model` 未指定かつ入力が閾値超なら resume モデルではなく既定モデル（Lite）にフォールバックする。`--model` 明示指定時はガードを適用しない（book_manager.py と同じ設計、ユーザー選択を尊重）。
+- **既知のトレードオフ**: この閾値は「文字数」であり実際の制約は「トークン数」（文書によって文字/トークン比が変動する）ため、600,000字〜735,000字程度の文書は実際には安全でもLite側にフォールバックする場合がある（精度よりクラッシュ回避を優先する保守的な設計。2026-07-21 に Naven.pdf, 745,144字/165,673tok で実際に成功した実測があり、このケースは今回のガードでは Lite にフォールバックされる）。
+- **検証**: `tests/unit/test_phase2_meta.py` に3件追加（閾値超でLiteへフォールバック／閾値内はresumeモデル維持／`--model`明示時はガード無効）。
+
+### I-33. 複数APIキー運用でキーローテーションが有料キーへ切り替わった後もTierManagerがFREEに張り付く（対応済み）
+
+- **事象**: `core/llm_client.py::_calc_retry_wait()` は429/503検知時に無条件で `tier_manager.downgrade()` を呼ぶ。直後にキーローテーションで有料キーへ切り替わって成功しても、TierManagerの状態を戻す処理がなく、以降のリクエストが不必要にLiteモデル・縮小バッチで処理され続けていた。
+- **対策**: `KeyRotator.configure()` にキーごとの種別（`"free"`/`"paid"`）を渡せるようにし（`main.py` から `["free","free","paid"]` を渡す）、ローテーション成功直後に新設の `_maybe_restore_tier_after_rotation()` を呼んで、切替先が有料キーの場合のみ TierManager を PAID に戻す。無料キー同士のローテーション（free1→free2）ではFREEのまま据え置く。
+- **検証**: `tests/unit/test_llm_client.py` に2件追加（有料キーへの切替でPAID復元／無料キー間の切替ではFREE維持）。
+
+### I-34. `core/book_manager.py` の resume モデル安全上限フォールバックが `--model` 明示指定時にバイパスされる（レビューの結果、対応不要と判断）
+
+- **確認内容**: レビューで「ユーザーが `--model` を明示指定すると `RESUME_MODEL_SAFE_CHAR_LIMIT` ガードが完全にバイパスされ、I-20 相当のクラッシュが再発しうる」と指摘された。しかし I-20 の対策記録自体に「`--model` 明示指定時はユーザーの選択を尊重しガードを適用しない」と明記されており、これは見落としではなく意図した設計だった。I-32 の phase2_meta.py 側の新規ガードも同じ方針に揃えている。
+- **結論**: コード変更なし。今後同種の指摘が出た場合はこのエントリと I-20 を参照。
+
+### I-35. Phase4 `_create_batches()` が未使用の死コードで、対応するテストもその死コードしか検証していない（対応済み）
+
+- **事象**: 実運用のバッチ分割ロジックは `ParallelTranslator.translate_section_chunks()` 内にインライン実装（ティアの動的変更に追従するため）されており、別メソッド `_create_batches()` は本番コードから一切呼ばれていなかった。`tests/unit/test_parallel_translator.py::test_parallel_translator_batching` はこの未使用メソッドのみを検証しており、実運用のバッチ境界ロジックにリグレッションが入っても検知できない状態だった。
+- **対策**: `_create_batches()` を削除。該当テストを `translate_section_chunks()` 経由で実際に渡されるバッチを検証する形に書き換え。
+- **検証**: 書き換え後のテストが同じ境界条件（600字チャンク×4、max_batch_chars=1500）で従来と同じ2バッチ分割を検証することを確認。
+
+### I-36. Phase4 `TreeReconstructor.rebuild()` の `section_resumes` 引数が到達不能な死コードになっている（対応済み）
+
+- **事象**: 章レジュメ生成の廃止（Phase2レジュメを両モードで翻訳コンテキストに配線する方式への変更）後、`rebuild()` の呼び出し元（`core/phase4_translate.py`）が `section_resumes` を渡さなくなり、常に空辞書がデフォルト値として使われ続けていた。`ja_node.metadata["summary"]` への書き込み分岐が事実上到達不能になっていた。
+- **対策**: `section_resumes` 引数と対応する分岐を削除。呼び出し元・テストとも参照箇所がないことを確認済み。
+
+### I-37. 論文（非書籍）PDFの入力ルーティングが見開きスキャン判定（優先順位②）を一度も行っていない（対応済み・部分対応）
+
+- **事象**: `core/book_manager.py` は書籍単位で `is_spread_pdf()` を判定し、見開きスキャンなら単一ページへ分割した上で VLM ルートへ強制していた。一方 `core/phase1_preprocessor.py::_run_phase1_pdf` は `pdf_mode` 明示指定と `is_docling_viable()` しか見ておらず、論文（非書籍）PDF では見開きスキャン判定（CLAUDE.md 記載の優先順位②）が一度も行われていなかった。
+- **対策**: `core/pipeline.py` の PDF プリフライトチェックに `is_spread_pdf()` を追加し、非書籍PDFで見開きスキャンを検出したら `pdf_mode="full_vlm"` を強制する（`diagnose_pdf_quality` と同じ場所・同じパターン）。書籍モードの章単位呼び出し（`is_book=True`）は BookManager が既に分割済みの入力を渡すため判定をスキップする。
+- **既知の残課題**: 書籍モードと異なり、論文モードには見開き画像を単一ページへ**分割する**処理自体が存在しない。今回の修正はモデルルーティング（VLM強制）のみで、見開きのままの1画像がVLMに渡る点は未解消。実際に論文が見開きスキャンされるケースは稀と見られ、優先度は低いと判断し今回は対応範囲外とした。
+- **検証**: `tests/unit/test_pipeline.py` に2件追加（見開きスキャン論文PDFでfull_vlm強制／書籍モード章では判定自体をスキップ）。
+
+`core/engine/p3_structure/state_integrator.py` の型注釈 `List[Tuple[str, Path]]` で `Tuple` が未importだった件（実行時エラーにはならないが静的解析では検出される）も同時に修正（`from typing import List, Optional, Dict, Tuple`）。

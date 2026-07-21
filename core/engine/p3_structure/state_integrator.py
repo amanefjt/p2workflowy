@@ -5,7 +5,7 @@ p2workflowy V2: State Integrator (Core)
 
 import re
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 
 from core.config import print_log
 from core.llm_client import get_default_model

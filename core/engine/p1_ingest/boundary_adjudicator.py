@@ -206,16 +206,41 @@ class BoundaryAdjudicator:
     ) -> tuple:
         """前後の確定章に挟まれた物理頁の区間（両端含む）を返す。
 
-        真の章扉は定義上この区間内にあるため、論理頁の正しさに依存しない。
+        真の章扉は定義上この区間全体のどこかにあるため、論理頁の正しさに依存しない。
         これにより、論理頁が誤っているために要審査になった章でも窓が正しく張れる。
+
+        ただし区間そのもの（＝確定章ペア間の物理頁差）が ADJUDICATION_MAX_PAGES を
+        超える場合は、LLM に渡すトークン量を抑えるため区間全体ではなく窓幅で絞り込む
+        必要がある。旧実装は index を無視して常に区間の先頭から窓幅ぶんを返していたため、
+        同じ確定章ペアに挟まれた複数の要審査章（fallback クラスタ）が全員まったく同じ窓を
+        割り当てられ、クラスタ後方の章は真の扉頁が窓外になり裁定できなかった（PSE の
+        12連続 fallback で顕在化。2026-07-21 レビュー指摘）。この場合は対象章の論理頁が
+        prev/nxt の論理頁の間でどの比率に位置するかを使って窓の中心を推定し、章ごとに
+        異なる窓を割り当てる。
         """
         prev = _confirmed_neighbour(placements, index, -1)
         nxt = _confirmed_neighbour(placements, index, +1)
 
-        lower = prev.start_page + 1 if prev is not None else 0
-        upper = nxt.start_page - 1 if nxt is not None else total_pages - 1
-        upper = min(upper, lower + ADJUDICATION_MAX_PAGES - 1, total_pages - 1)
-        return lower, upper
+        lower_bound = prev.start_page + 1 if prev is not None else 0
+        upper_bound = nxt.start_page - 1 if nxt is not None else total_pages - 1
+        upper_bound = min(upper_bound, total_pages - 1)
+
+        if upper_bound - lower_bound + 1 <= ADJUDICATION_MAX_PAGES:
+            return lower_bound, upper_bound
+
+        if prev is not None and nxt is not None and nxt.logical_page != prev.logical_page:
+            target = placements[index]
+            ratio = (target.logical_page - prev.logical_page) / (nxt.logical_page - prev.logical_page)
+            ratio = min(max(ratio, 0.0), 1.0)
+        else:
+            ratio = 0.0
+        center = lower_bound + round(ratio * (upper_bound - lower_bound))
+        half = ADJUDICATION_MAX_PAGES // 2
+
+        win_lower = max(lower_bound, center - half)
+        win_upper = min(upper_bound, win_lower + ADJUDICATION_MAX_PAGES - 1)
+        win_lower = max(lower_bound, win_upper - ADJUDICATION_MAX_PAGES + 1)
+        return win_lower, win_upper
 
     def _baseline(
         self, placements: List[ChapterPlacement], index: int, total_pages: int

@@ -7,7 +7,13 @@ from core.llm_client import GeminiTier
 
 @pytest.mark.asyncio
 async def test_parallel_translator_batching():
-    """バッチングの検証: max_batch_chars を超える場合にバッチが分割されること。"""
+    """バッチングの検証: max_batch_chars を超える場合にバッチが分割されること。
+
+    バッチ分割は translate_section_chunks 内にインラインで実装されている（ティアの動的変更に
+    追従するため）。以前は別メソッド _create_batches をテストしていたが、そちらは本番コードから
+    一切呼ばれない死コードで、実際のバッチ境界ロジックの変更を検知できなかった（2026-07-21
+    レビュー指摘）。_create_batches は削除し、実運用経路を直接検証する。
+    """
     translator = ParallelTranslator(tier=GeminiTier.FREE)
     # 現行 FREE tier デフォルト値を上書きして確定的なテストにする
     translator.settings["max_batch_chunks"] = 3
@@ -19,13 +25,31 @@ async def test_parallel_translator_batching():
         for i in range(4)
     ]
 
-    batches = translator._create_batches(chunks)
+    seen_batches = []
+
+    async def mock_translate_func(**kwargs):
+        batch = kwargs.get("chunks")
+        seen_batches.append(batch)
+        return [
+            TreeNode(id=c["id"], text=c["text"], translation=c["text"])
+            for c in batch
+        ]
+
+    def mock_prompt_builder(nodes):
+        return ""
+
+    await translator.translate_section_chunks(
+        section_name="Test",
+        chunks=chunks,
+        prompt_builder_func=mock_prompt_builder,
+        translate_func=mock_translate_func,
+    )
 
     # バッチ1: c0 (600) + c1 (600) = 1200 < 1500。c2 を足すと 1800 > 1500 → ここで切断
     # バッチ2: c2 (600) + c3 (600) = 1200 < 1500
-    assert len(batches) == 2
-    assert len(batches[0]) == 2
-    assert len(batches[1]) == 2
+    assert len(seen_batches) == 2
+    assert len(seen_batches[0]) == 2
+    assert len(seen_batches[1]) == 2
 
 @pytest.mark.asyncio
 async def test_parallel_translator_translate_section():

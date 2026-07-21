@@ -136,11 +136,16 @@ class KeyRotator:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._keys = []
+            cls._instance._tiers = []
             cls._instance._index = 0
         return cls._instance
 
-    def configure(self, keys: List[Optional[str]]) -> None:
-        self._keys = [k for k in keys if k]
+    def configure(self, keys: List[Optional[str]], tiers: Optional[List[str]] = None) -> None:
+        """keys と同じ並びの tiers（例: ["free","free","paid"]）を渡すと、ローテーション後に
+        現在のキーが有料かどうかを current_tier() で判定できる。省略時は全キー種別不明扱い。"""
+        pairs = [(k, t) for k, t in zip(keys, tiers or [None] * len(keys)) if k]
+        self._keys = [k for k, _ in pairs]
+        self._tiers = [t for _, t in pairs]
         self._index = 0
 
     def is_configured(self) -> bool:
@@ -148,6 +153,10 @@ class KeyRotator:
 
     def current(self) -> Optional[str]:
         return self._keys[self._index] if self._keys else None
+
+    def current_tier(self) -> Optional[str]:
+        """現在選択中のキーの種別（"free"/"paid"）。configure() に tiers を渡していなければ None。"""
+        return self._tiers[self._index] if self._tiers else None
 
     def has_next(self) -> bool:
         return bool(self._keys) and self._index < len(self._keys) - 1
@@ -282,6 +291,18 @@ def _log_metrics(metrics_metadata: dict, prompt_len: int, p_tokens: int, c_token
 ROTATION_RETRY_DELAY_BASE = 1.5
 
 
+def _maybe_restore_tier_after_rotation() -> None:
+    """キーローテーションで有料キーへ切り替わった直後に呼ぶ。
+
+    429/503 検知時の tier_manager.downgrade()（無条件・キー種別を問わない）は、無料キー内で
+    ローテーションしただけ（free1→free2）なら正しい状態だが、有料キーへ切り替わった後も
+    FREE のまま残ると、以降のリクエストが不必要に Lite モデル・縮小バッチで処理され続けて
+    しまう（2026-07-21 レビュー指摘）。有料キーに切り替わった場合のみ PAID へ戻す。
+    """
+    if key_rotator.current_tier() == "paid":
+        tier_manager.set_tier(GeminiTier.PAID)
+
+
 def _calc_retry_wait(msg: str, attempt: int, retry_delay: float) -> tuple[float, bool]:
     """429/503 ならダウンシフトしてバックオフ秒数を計算する。戻り値: (wait_seconds, is_resource_limit)"""
     is_resource_limit = any(code in msg for code in ["429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE"])
@@ -393,6 +414,7 @@ def call_gemini(
                     client = _get_client(api_key=new_key)
                     wait_time = ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
                     rotated = True
+                    _maybe_restore_tier_after_rotation()
                     print_log(f"  [LLM] キーローテーション: {key_rotator.index + 1}/{key_rotator.count} 番目のキーに切替")
                 if is_resource_limit and not rotated:
                     print_log(f"  [LLM] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
@@ -502,6 +524,7 @@ async def call_gemini_async(
                     client = _get_client(api_key=new_key)
                     wait_time = ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
                     rotated = True
+                    _maybe_restore_tier_after_rotation()
                     print_log(f"  [LLM async] キーローテーション: {key_rotator.index + 1}/{key_rotator.count} 番目のキーに切替")
                 if is_resource_limit and not rotated:
                     print_log(f"  [LLM async] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")

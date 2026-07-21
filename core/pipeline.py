@@ -73,13 +73,28 @@ def run_pipeline(
         if pdf_mode == "full_vlm":
             print_log("  [Pipeline] Route C (full_vlm) が明示的に指定されています。")
         else:
-            from .engine.p1_ingest.pdf_ingester import diagnose_pdf_quality
-            is_clean = diagnose_pdf_quality(input_path)
-            if not is_clean:
-                print_log("  [Warning] PDF破損検知。Route C (Full VLM) を適用。")
+            # 入力ルーティング優先順位②（見開きスキャン→VLM）: 書籍モードは BookManager が
+            # 単一ページへの分割込みでこれを処理済みだが、論文（非書籍）PDF はここまで
+            # is_spread_pdf を一度も見ておらず、見開きスキャン論文が Docling ルートへ流れうる
+            # 設計上の穴だった（2026-07-21 レビュー指摘）。ここでは分割は行わず VLM 強制のみ
+            # 行う（見開きのままの1画像として VLM に渡る点は書籍モードと異なり未解消）。
+            from .engine.p1_ingest.spread_splitter import is_spread_pdf
+            if is_book:
+                is_spread = False  # BookManager が既に単一ページへ分割済みの入力を渡す
+            else:
+                is_spread = is_spread_pdf(input_path)
+
+            if is_spread:
+                print_log("  [Pipeline] 見開きスキャンPDFを検出。Route C (Full VLM) を適用。")
                 pdf_mode = "full_vlm"
             else:
-                print_log(f"  [Pipeline] PDF品質良好。ハイブリッドモード続行。")
+                from .engine.p1_ingest.pdf_ingester import diagnose_pdf_quality
+                is_clean = diagnose_pdf_quality(input_path)
+                if not is_clean:
+                    print_log("  [Warning] PDF破損検知。Route C (Full VLM) を適用。")
+                    pdf_mode = "full_vlm"
+                else:
+                    print_log(f"  [Pipeline] PDF品質良好。ハイブリッドモード続行。")
 
     # --- Phase 1: Preprocessor ---
     if start_phase <= 1:

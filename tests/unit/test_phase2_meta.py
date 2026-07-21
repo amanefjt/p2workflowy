@@ -40,3 +40,43 @@ def test_generate_resume_paper_mode_metrics(monkeypatch):
     monkeypatch.setattr(p2, "call_gemini", fake_call_gemini)
     p2.generate_resume("PAPER_TEXT", is_book=False)
     assert captured["metrics"] == {"section": "paper_resume"}
+
+
+def test_generate_resume_falls_back_to_default_model_when_text_too_large(monkeypatch):
+    """RESUME_MODEL_SAFE_CHAR_LIMIT 超・model 未指定なら resume モデルではなく既定モデルへ
+    フォールバックする。gemini-3.5-flash の実効入力上限超過（I-20）を、論文・章単位の
+    レジュメ生成でも book_manager.py と同じ考え方で回避する（2026-07-21 レビュー指摘）。"""
+    import core.phase2_meta as p2
+    captured = {}
+    monkeypatch.setattr(p2, "call_gemini",
+                        lambda prompt, **kw: captured.update(model=kw.get("model")) or "r")
+    monkeypatch.setattr(p2, "get_default_model", lambda purpose="default": f"model-for-{purpose}")
+
+    big_text = "x" * (p2.RESUME_MODEL_SAFE_CHAR_LIMIT + 1)
+    p2.generate_resume(big_text, is_book=False)
+    assert captured["model"] == "model-for-default"
+
+
+def test_generate_resume_uses_resume_model_under_safe_limit(monkeypatch):
+    import core.phase2_meta as p2
+    captured = {}
+    monkeypatch.setattr(p2, "call_gemini",
+                        lambda prompt, **kw: captured.update(model=kw.get("model")) or "r")
+    monkeypatch.setattr(p2, "get_default_model", lambda purpose="default": f"model-for-{purpose}")
+
+    small_text = "x" * 100
+    p2.generate_resume(small_text, is_book=False)
+    assert captured["model"] == "model-for-resume"
+
+
+def test_generate_resume_respects_explicit_model_even_over_safe_limit(monkeypatch):
+    """--model 明示指定時はユーザーの選択を尊重しガードを適用しない
+    （core/book_manager.py の RESUME_MODEL_SAFE_CHAR_LIMIT と同じ設計判断、I-20 踏襲）。"""
+    import core.phase2_meta as p2
+    captured = {}
+    monkeypatch.setattr(p2, "call_gemini",
+                        lambda prompt, **kw: captured.update(model=kw.get("model")) or "r")
+
+    big_text = "x" * (p2.RESUME_MODEL_SAFE_CHAR_LIMIT + 1)
+    p2.generate_resume(big_text, is_book=False, model="user-chosen-model")
+    assert captured["model"] == "user-chosen-model"

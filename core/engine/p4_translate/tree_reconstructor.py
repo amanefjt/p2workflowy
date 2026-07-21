@@ -16,7 +16,6 @@ class TreeReconstructor:
         self,
         english_tree: List[TreeNode],
         translated_sections: Dict[str, List[TreeNode]],
-        section_resumes: Dict[str, str] = {}
     ) -> List[TreeNode]:
         """
         英語ツリーを「型紙」にして、翻訳プールからテキストを差し替えた日本語ツリーを再構成する。
@@ -27,20 +26,14 @@ class TreeReconstructor:
         global_id_map = {}
         for section_nodes in translated_sections.values():
             global_id_map.update(self._map_translated_nodes(section_nodes))
-        
+
         japanese_tree: List[TreeNode] = []
-        
+
         for en_node in english_tree:
-            section_key = f"{en_node.id}|{en_node.text}"
-            resume = section_resumes.get(section_key, "")
-            
             # 1:1 で再帰的にマッピング
             ja_node = self._recursive_map(en_node, global_id_map)
-            if resume:
-                ja_node.metadata["summary"] = resume
-            
             japanese_tree.append(ja_node)
-        
+
         return japanese_tree
 
     def _map_translated_nodes(self, pool: List[TreeNode]) -> Dict[str, TreeNode]:

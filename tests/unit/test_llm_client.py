@@ -78,6 +78,45 @@ async def test_call_gemini_async_raises_on_empty_text_response():
             await call_gemini_async("prompt", model="gemini-3.1-flash-lite", max_retries=1)
 
 
+def test_rotation_to_paid_key_restores_tier_to_paid():
+    """429/503 でダウンシフト後、ローテーション先が有料キーなら TierManager を PAID に戻す。
+    旧実装は無条件ダウンシフトのまま戻す処理がなく、有料キーへ切り替わった後も以降の
+    リクエストが不必要に Lite モデル・縮小バッチで処理され続けていた（2026-07-21 レビュー指摘）。
+    """
+    from core.llm_client import key_rotator, tier_manager, GeminiTier, _maybe_restore_tier_after_rotation
+
+    key_rotator.configure(["free-key", "paid-key"], tiers=["free", "paid"])
+    try:
+        key_rotator.advance()  # free-key -> paid-key
+        tier_manager.downgrade()  # 429検知でFREEに落ちた状態を再現
+        assert tier_manager.current_tier == GeminiTier.FREE
+
+        _maybe_restore_tier_after_rotation()
+
+        assert tier_manager.current_tier == GeminiTier.PAID
+    finally:
+        key_rotator.configure([])
+        tier_manager.set_tier(GeminiTier.UNKNOWN)
+
+
+def test_rotation_between_free_keys_keeps_tier_free():
+    """無料キー同士のローテーション（free1→free2）では FREE のまま据え置く（有料キーに
+    切り替わったときだけ復元するのが正しい）。"""
+    from core.llm_client import key_rotator, tier_manager, GeminiTier, _maybe_restore_tier_after_rotation
+
+    key_rotator.configure(["free-1", "free-2", "paid-key"], tiers=["free", "free", "paid"])
+    try:
+        key_rotator.advance()  # free-1 -> free-2 (still free)
+        tier_manager.downgrade()
+
+        _maybe_restore_tier_after_rotation()
+
+        assert tier_manager.current_tier == GeminiTier.FREE
+    finally:
+        key_rotator.configure([])
+        tier_manager.set_tier(GeminiTier.UNKNOWN)
+
+
 def test_reset_pipeline_state_clears_client_cache():
     """reset_pipeline_state() はクライアントキャッシュ（呼び出しスレッドごとに独立した辞書）
     もクリアし、次のパイプラインが新しい genai.Client（＝新しい非同期トランスポート）を

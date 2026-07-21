@@ -132,7 +132,7 @@ def main():
     from core.llm_client import key_rotator
 
     ordered_keys = [GEMINI_API_KEY_FREE_1, GEMINI_API_KEY_FREE_2, GEMINI_API_KEY]
-    key_rotator.configure(ordered_keys)
+    key_rotator.configure(ordered_keys, tiers=["free", "free", "paid"])
 
     if not key_rotator.is_configured():
         print("エラー: GEMINI_API_KEY_FREE_1/2 / GEMINI_API_KEY のいずれも未設定です。.env を確認してください。")

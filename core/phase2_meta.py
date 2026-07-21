@@ -21,6 +21,14 @@ MAX_INPUT_CHARS = 1_500_000  # これ以上の場合のみサンプリング（�
 HEAD_CHARS = 1_000_000       # 冒頭部分
 TAIL_CHARS = 500_000         # 末尾部分
 
+# resume モデル（DEFAULT_MODEL_RESUME、既定 gemini-3.5-flash）の単発リクエスト実効入力上限は
+# 公称値（1,048,576 tok）よりはるかに低く、troubleshooting_log.md I-20 の実測では概ね
+# 735,000 字前後（文書によって文字/トークン比が振れるため目安）で 400 INVALID_ARGUMENT に
+# なることがある。MAX_INPUT_CHARS（サンプリング閾値）はこれより大きいため、サンプリングだけでは
+# 防げない。core/book_manager.py の RESUME_MODEL_SAFE_CHAR_LIMIT と同じ考え方・同じ値で、
+# 論文・章単位のレジュメ生成にも安全マージンを設ける（2026-07-21 レビュー指摘）。
+RESUME_MODEL_SAFE_CHAR_LIMIT = 600_000
+
 
 def _build_full_text(chunks_path: str | Path) -> str:
     """Phase 1 の出力チャンクを連結してフルテキストを構築する。"""
@@ -85,6 +93,9 @@ def generate_resume(text: str, api_key: str | None = None, expertise: str = "文
     # レジュメ生成専用のモデルルーティング（DEFAULT_MODEL_RESUME）。
     # 明示的な model 指定があればそちらを優先する。
     resume_model = model or get_default_model("resume")
+    if not model and len(text) > RESUME_MODEL_SAFE_CHAR_LIMIT:
+        print_log(f"  [Phase 2] 入力が{RESUME_MODEL_SAFE_CHAR_LIMIT}字超のため resume モデルの実効入力上限(I-20)を回避し既定モデルへフォールバック")
+        resume_model = get_default_model("default")
     # max_output_tokens は thinking トークンも含む枠。gemini-3.5-flash など thinking モデルは
     # HIGH thinking で 8192 を食い尽くしレジュメ本文が MAX_TOKENS で途切れるため、十分な枠を確保する
     # （lite は thinking が軽く従来 8192 でも完結していたが、DEFAULT_MODEL=3.5-flash の本番/ハイブリッドで顕在化）。

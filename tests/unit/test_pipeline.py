@@ -63,3 +63,56 @@ def test_run_pipeline_forwards_is_book_false_for_paper_mode(tmp_path, monkeypatc
         )
 
     assert captured.get("is_book") is False
+
+
+def test_run_pipeline_forces_full_vlm_for_spread_scan_paper_pdf(tmp_path, monkeypatch):
+    """見開きスキャンPDF（is_spread_pdf=True）の論文（非書籍）PDF は pdf_mode 未指定でも
+    Route C (full_vlm) を強制する。入力ルーティング優先順位②（見開きスキャン→VLM）は
+    BookManager 経由の書籍モードにしか適用されておらず、論文モードでは is_spread_pdf を
+    一度も見ていなかった（2026-07-21 レビュー指摘）。"""
+    monkeypatch.setattr("core.config.STATE_DIR", tmp_path)
+    input_path = tmp_path / "paper.pdf"
+    input_path.write_bytes(b"%PDF-1.4 dummy")
+
+    captured = {}
+
+    def fake_run_phase1(*args, **kwargs):
+        captured["pdf_mode"] = kwargs.get("pdf_mode")
+        return []
+
+    with patch("core.engine.p1_ingest.spread_splitter.is_spread_pdf", return_value=True), \
+         patch("core.pipeline.run_phase1_unified", side_effect=fake_run_phase1), \
+         patch("core.pipeline.run_phase2", return_value={}), \
+         patch("core.pipeline.run_phase3", return_value=([], {})):
+        from core.pipeline import run_pipeline
+        run_pipeline(
+            input_path=str(input_path),
+            api_key="dummy",
+            structure_only=True,
+        )
+
+    assert captured.get("pdf_mode") == "full_vlm"
+
+
+def test_run_pipeline_skips_spread_check_for_book_chapters(tmp_path, monkeypatch):
+    """is_book=True（BookManager が呼ぶ章単位パイプライン）では is_spread_pdf を呼ばない。
+    BookManager が書籍全体を既に単一ページへ分割済みの PDF を渡すため、章ごとに再判定する
+    必要がない（無駄な呼び出しを避ける）。"""
+    monkeypatch.setattr("core.config.STATE_DIR", tmp_path)
+    input_path = tmp_path / "chapter.pdf"
+    input_path.write_bytes(b"%PDF-1.4 dummy")
+
+    with patch("core.engine.p1_ingest.spread_splitter.is_spread_pdf") as mock_is_spread, \
+         patch("core.engine.p1_ingest.pdf_ingester.diagnose_pdf_quality", return_value=True), \
+         patch("core.pipeline.run_phase1_unified", return_value=[]), \
+         patch("core.pipeline.run_phase2", return_value={}), \
+         patch("core.pipeline.run_phase3", return_value=([], {})):
+        from core.pipeline import run_pipeline
+        run_pipeline(
+            input_path=str(input_path),
+            api_key="dummy",
+            is_book=True,
+            structure_only=True,
+        )
+
+    assert not mock_is_spread.called

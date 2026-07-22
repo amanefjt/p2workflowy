@@ -11,9 +11,10 @@ def test_parallel_translator_accepts_concurrent_param():
 
 
 def test_parallel_translator_default_concurrent():
-    """デフォルト値が 4 のままであること（後で実験結果に応じて変わる可能性あり）。"""
+    """デフォルト値が 8 であること（2026-07-22、無料枠Liteプールのラウンドロビン実装後の
+    実測でconcurrent=8がconcurrent=4より速いことを確認し、デフォルトを4→8に変更した）。"""
     translator = ParallelTranslator()
-    assert translator.semaphore._value == 4
+    assert translator.semaphore._value == 8
 
 
 @patch("core.phase4_translate.ParallelTranslator")

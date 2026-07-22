@@ -3,7 +3,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 from core.engine.p4_translate.parallel_translator import ParallelTranslator
 from core.models import TreeNode
-from core.llm_client import GeminiTier
+from core.llm_client import GeminiTier, model_rotator
 
 @pytest.mark.asyncio
 async def test_parallel_translator_batching():
@@ -113,3 +113,81 @@ async def test_parallel_translator_batch_failure_isolation():
     assert len(results) == 2
     assert results[0].translation == "OK"
     assert "【翻訳失敗】" in results[1].text  # text に全角括弧のエラーマーカーが書き込まれる仕様
+
+
+def test_pick_batch_target_round_robins_free_pool():
+    """FREE tier・モデル未指定なら、無料枠Liteプールをバッチ単位でラウンドロビン割り当てし、
+    各バッチは pinned=True（ModelRotatorのresolve()/advance()による上書きを受けない）になる。"""
+    model_rotator.reset()
+    try:
+        translator = ParallelTranslator(tier=GeminiTier.FREE)
+        pool = model_rotator.pool_models()
+        assert len(pool) > 1, "テスト前提: DEFAULT_MODEL_FREE_POOL に2要素以上必要"
+
+        picks = [translator._pick_batch_target() for _ in range(len(pool) * 2)]
+        models = [m for m, _, _ in picks]
+        pinned_flags = [p for _, _, p in picks]
+
+        assert models == (pool * 2)  # 順番にラウンドロビン
+        assert all(pinned_flags)
+        # モデルごとに独立した AsyncLimiter インスタンスであること（同一モデルは同一インスタンス）
+        limiters_by_model = {m: l for m, l, _ in picks}
+        assert limiters_by_model[pool[0]] is not limiters_by_model[pool[1]]
+    finally:
+        model_rotator.reset()
+
+
+def test_pick_batch_target_respects_explicit_model():
+    """ユーザーが model を明示指定した場合は FREE tier でもラウンドロビンせず、
+    指定モデル・共有 rate_limiter・pinned=False のまま（既存の「ユーザー指定を尊重する」仕様）。"""
+    translator = ParallelTranslator(tier=GeminiTier.FREE, model="gemini-3.6-flash")
+
+    model, limiter, pinned = translator._pick_batch_target()
+
+    assert model == "gemini-3.6-flash"
+    assert limiter is translator.rate_limiter
+    assert pinned is False
+
+
+def test_pick_batch_target_no_round_robin_on_paid_tier():
+    """PAID tier ではモデル未指定でもラウンドロビンしない（既存の単一 self.model/self.rate_limiter のまま）。"""
+    translator = ParallelTranslator(tier=GeminiTier.PAID)
+
+    model, limiter, pinned = translator._pick_batch_target()
+
+    assert model is translator.model  # None のまま(呼び出し先の get_default_model() に委ねる)
+    assert limiter is translator.rate_limiter
+    assert pinned is False
+
+
+@pytest.mark.asyncio
+async def test_translate_section_chunks_uses_round_robin_models():
+    """統合: FREE tier・モデル未指定で複数バッチを翻訳すると、実際に translate_func へ渡される
+    model がプール内で交互に切り替わる。"""
+    model_rotator.reset()
+    try:
+        translator = ParallelTranslator(tier=GeminiTier.FREE)
+        pool = model_rotator.pool_models()
+        translator.settings["max_batch_chunks"] = 1  # 1チャンク=1バッチにして境界を確定的にする
+
+        chunks = [{"id": f"c{i}", "text": "x", "seq_index": float(i)} for i in range(4)]
+        seen_models = []
+        seen_pinned = []
+
+        async def mock_translate_func(**kwargs):
+            seen_models.append(kwargs.get("model"))
+            seen_pinned.append(kwargs.get("model_pinned"))
+            batch = kwargs["chunks"]
+            return [TreeNode(id=c["id"], text=c["text"], translation=c["text"]) for c in batch]
+
+        await translator.translate_section_chunks(
+            section_name="Test",
+            chunks=chunks,
+            prompt_builder_func=lambda nodes: "",
+            translate_func=mock_translate_func,
+        )
+
+        assert seen_models == [pool[0], pool[1], pool[0], pool[1]]
+        assert all(seen_pinned)
+    finally:
+        model_rotator.reset()

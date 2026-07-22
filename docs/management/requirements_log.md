@@ -368,3 +368,144 @@ Web側で本当に5並行を許可する設計に変えることで露呈する�
       安全網として維持（重複はするが害はない）。
     - **既知の限界**: 書籍モード同様、論文モードにも見開きスキャンPDFを単一ページへ分割する
       処理は存在しない（I-37 の既知の残課題を引き継ぐ）。
+
+- [2026-07-22] `DEFAULT_MODEL_RESUME` を `gemini-3.5-flash` から後継の `gemini-3.6-flash` に切替
+    - **経緯**: `docs/gemini_models.md` の 2026-07-22 更新で `gemini-3.6-flash`（`gemini-3.5-flash`
+      の公式後継）・`gemini-3.5-flash-lite`（`gemini-3.1-flash-lite` の公式後継）が GA として
+      確認された。これに合わせて `docs/model_optimization.md` の対象フェーズ（Phase 2 レジュメ生成）
+      のモデルルーティングを見直した。
+    - **判断根拠**: `gemini-3.6-flash` は `gemini-3.5-flash` と Rate Limit（無料枠・有料枠 Tier 2
+      とも）が完全一致し、価格は出力 -17%（入力は同額）と純粋な改善で、据え置くデメリットが
+      見当たらないため切替えた。一方 `DEFAULT_MODEL`/`DEFAULT_MODEL_FREE`/`DEFAULT_MODEL_VLM`
+      （`gemini-3.1-flash-lite`）は後継 `gemini-3.5-flash-lite` へ切替えなかった：Rate Limit は
+      一致するが価格が値上げ（入力+20%・出力+67%）で、コスト最優先というハイブリッド構成
+      （2026-07-11 Stage 2）の設計意図と衝突するため。GA 化して間もない現時点で
+      `gemini-3.1-flash-lite` の廃止予定もなく、現状維持のリスクは小さいと判断した。
+      なお「無料枠なら値上げは無関係では」という指摘があったが、Lite 系の値上げは無料キー
+      由来のトラフィックには影響しない一方、`DEFAULT_MODEL`（PAID tier 既定）・
+      `DEFAULT_MODEL_VLM`（tier 分岐なしで常時参照）、および有料キーのまま `TierManager` が
+      モデルだけダウンシフトした場合の `DEFAULT_MODEL_FREE` には課金が乗りうるため、現状維持の
+      判断は変えていない（詳細は `docs/model_optimization.md` §1 の該当ノート）。
+    - **実装**: `core/coreprompts.json::DEFAULT_MODEL_RESUME` を `gemini-3.6-flash` に変更。
+      `tests/unit/test_coreprompts_stage2.py` のアサーションを追随。`core/book_manager.py`・
+      `core/phase2_meta.py` の実効入力上限（I-20、`RESUME_MODEL_SAFE_CHAR_LIMIT=600_000`）に
+      関するコメントは `gemini-3.5-flash` 実測値のままであることを明記（`gemini-3.6-flash` での
+      再検証は未実施、保守的な値のためガード自体は変更なし）。
+
+- [2026-07-22] 無料枠内での複数Liteモデル併用ローテーション（`ModelRotator`）を実装
+    - **経緯**: AI Studio のレート制限ダッシュボードで、同一無料プロジェクト・同一キー内でも
+      `gemini-3.1-flash-lite` と `gemini-3.5-flash-lite`（Rate Limit は完全一致）が独立した
+      使用量カウンターを持つことを確認した。§6（2026-07-21、別GCPプロジェクトでキーを複数
+      発行する運用）とは別軸で、同一キーのまま複数Liteモデルを使い分けることでも実質的に
+      RPM/RPD を拡張できる。詳細な検討過程・未決論点の決定・Opus によるコードベース照合込み
+      レビュー結果は `docs/superpowers/specs/2026-07-22-free-tier-multi-model-lite-pool-design.md`
+      §6・§7 を参照。
+    - **判断根拠**: forward-only（`KeyRotator` と同じ設計思想。429/503 検知時のみ次のモデルへ
+      進む）を採用し、ラウンドロビンは不採用。対象は `DEFAULT_MODEL_FREE` のみ。文書処理途中
+      でのモデル切替（訳文トーンがわずかに変わりうる）と `DEFAULT_MODEL_VLM` への副作用的な
+      波及（現状 `DEFAULT_MODEL_VLM == DEFAULT_MODEL_FREE` のため）はいずれもユーザー確認済み
+      で許容: 現状は Lite 単体で RPD 枯渇＝そのまま失敗/停滞であり、切替は「本来失敗していた
+      ケースを完走させる」場合にのみ発生するため既存挙動に対する正味の劣化ではなく改善と判断。
+    - **実装**: `core/coreprompts.json` に `DEFAULT_MODEL_FREE_POOL`
+      (`["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]`) を追加。
+      `core/llm_client.py` に `ModelRotator`（`TierManager` と同じくスレッドローカルな
+      シングルトン、forward-only）を新設し、`call_gemini`/`call_gemini_async` の両リトライ
+      ループで毎試行 `current_model` を `model_rotator.resolve()` に通すよう変更（呼び出し元が
+      コンストラクタ時点で一度だけ `model` を固定文字列として解決するパターン
+      （`pdf_splitter.py`・`ocr_manager.py`・`state_integrator.py`・`book_manager.py` 等)
+      でも毎試行効くようにするための必須対応）。429/503 検知時はモデルローテーション
+      （同一キー内で完結、client 再生成不要）を §6 のキーローテーションより優先して試行し、
+      プールを使い切って初めて（`has_next()` が `False` になって初めて）キーローテーション・
+      従来の待機付きダウンシフトにフォールバックする。キーローテーション発生時は
+      `model_rotator.reset()` も呼び、新しいキー（＝別プロジェクトの独立枠）側でもプール
+      先頭から使い始める。`reset_pipeline_state()` にも `model_rotator.reset()` を追加。
+      レートリミッタ（`apply_tier_settings()`、`(tier, api_key)` キーイング）はクライアント側
+      RPM ペーシングに過ぎず変更不要と確認済み。
+    - **テスト**: `tests/unit/test_llm_client.py` に `ModelRotator` 単体テスト（`resolve()`・
+      forward-only `advance()`・`reset()`）と、429 検知後にプール内の次のモデルへ切り替わって
+      即リトライすることを確認する `call_gemini_async` 統合テストを追加。既存 409 件と合わせて
+      全 411 件パスを確認。
+    - **既知の限界**: 書籍モードは章ごとに `run_pipeline()`（＝`reset_pipeline_state()`）を
+      呼ぶため `model_rotator` も章ごとにプール先頭へリセットされる。forward-only の
+      `advance()` が各章内で 429 を機に即座に効くため容量拡張効果自体は損なわれないが、
+      先頭モデルが枯渇していた章では毎回1回分の 429 往復が無駄になる（拒否されたリクエスト
+      自体は RPD を消費しないため実害は小さい）。`ModelRotator` はスレッドローカルなため、
+      Web の並行パイプライン（複数スレッドが同一プロジェクトの枠を共有）はローテーション状態
+      を共有せず、各スレッドが独立してプール先頭から始める（`TierManager` と同じ既存の限界を
+      踏襲）。実運用（`--lite` モードでの実ファイル処理・golden-verification）での検証は
+      未実施。
+
+- [2026-07-22] Phase4翻訳の速度改善: 無料枠Liteプールのバッチ単位ラウンドロビン、
+  `--concurrent` デフォルトを 4 から 8 に変更
+    - **経緯**: 直上の`ModelRotator`（RPD拡張目的、forward-only・429検知時のみ切替）実装後、
+      「無料枠Liteプールの2モデルが独立したRPM枠を持つなら、429を待たずに最初からバッチを
+      2モデルへ振り分ければPhase4翻訳のスループット自体も上げられるのでは」という着想で
+      追加実装した。詳細と実測データは `docs/model_optimization.md` §7「Phase4の速度改善」
+      を参照。
+    - **判断根拠**: 対象は Phase4 翻訳のみ（Phase1〜3はRPMを食うほどのリクエスト数がない）。
+      既存の`ModelRotator`（リアクティブなRPD枯渇対応）とプロアクティブなラウンドロビンの
+      2つの仕組みが同じ共有状態を取り合うと、ラウンドロビンで意図的に選んだモデルが
+      `ModelRotator.resolve()`によって常に先頭モデルへ引き戻されてしまい機能しないことが
+      実装中に判明した（`resolve()`は「プールのメンバーならどれを渡しても現在のローテーション
+      先へ差し替える」実装のため）。このため`model_pinned`フラグで両者を明示的に分離し、
+      ラウンドロビン対象バッチはRPD枯渇時の自動延命フォールバックの対象外とする（同一モデルへの
+      ダウンシフト+待機で再試行し、失敗すれば既存の「翻訳失敗」フォールバックに委ねる）という
+      トレードオフを受け入れた。
+    - **実装**: `core/llm_client.py`に`get_free_pool_rate_limiters()`（モデルごとに独立した
+      `AsyncLimiter`）を追加。`call_gemini`/`call_gemini_async`/`translate_batch`に
+      `model_pinned: bool = False`を追加。`core/engine/p4_translate/parallel_translator.py`に
+      `_pick_batch_target()`を追加し、FREE tier・モデル未指定の場合のみバッチ単位でプール内
+      モデルへラウンドロビン割り当てする（ユーザーがモデル明示指定・PAID tierの場合は
+      挙動変更なし）。
+    - **`--concurrent`デフォルト変更**: AL論文・`--lite`での実測（単発計測）で
+      単一モデルconcurrent=4（92s）→ラウンドロビンconcurrent=4（75s、-18.5%）→
+      ラウンドロビンconcurrent=8（64s、対単一モデル比-30.4%）を確認し、`main.py`・
+      `core/pipeline.py`・`core/phase4_translate.py`・`ParallelTranslator`の全デフォルトを
+      `4`から`8`に変更した。2026-05-11時点の旧ベンチマーク（`docs/model_optimization.md`§2）は
+      「4と8の優劣は判断できない」との結論だったが、ラウンドロビン導入によりconcurrentを
+      上げる意味合いが変わったための再判断。ただし今回も単発計測であり複数trialでの統計的
+      検証はまだ行っていない。
+    - **速度が理論値（2倍）に届かなかった理由**: `max_concurrent_sections`（セマフォ）が
+      実際のボトルネックだった（concurrent=8でさらに短縮したことが裏付け）、レートリミッタは
+      「発行間隔の下限」に過ぎずボトルネックはAPI応答レイテンシ（TTFT 6〜20秒）だった、
+      小規模文書（10セクション・19バッチ）ではワークロードの立ち上がり・収束コストの影響が
+      相対的に大きい、の3点が主因と分析（詳細は`model_optimization.md`§7）。
+    - **テスト**: `tests/unit/test_parallel_translator.py`に`_pick_batch_target()`の単体テスト
+      3件・統合テスト1件、`tests/unit/test_llm_client.py`に`model_pinned`が429時のローテーション
+      をバイパスすることを確認するテスト1件を追加。`tests/unit/test_concurrent_flag.py`の
+      デフォルト値アサーションを4→8に更新。全414件パス。
+    - **未検証**: 大規模文書（書籍等、バッチ数が多い場合）での速度改善効果の実測、複数trialでの
+      統計的な安定性検証、`docs/model_optimization.md`§2の旧ベンチマークの再実施。
+
+- [2026-07-22] Phase1 VLM OCRにも無料枠Liteプールのページ単位ラウンドロビンを適用
+    - **経緯**: 直上のPhase4速度改善を踏まえたユーザーからの指摘（「VLMも同じ改善で速度向上が
+      期待できるのでは」）を受けて調査。詳細は`docs/model_optimization.md`§7「VLM OCR（Phase1）
+      への同様の適用」を参照。
+    - **判断根拠**: 調査の結果、VLM（`core/engine/p1_ingest/ocr_manager.py::OCRManager`）は
+      Phase4と構造的に異なり、`VLM_SEMAPHORE_LIMIT=10`という同時実行数の上限のみでクライアント
+      側レートリミッタが元々存在しないことが判明した（`apply_tier_settings()`を呼んでいない）。
+      実装前にALpdf.pdf（18ページ）でベースライン計測したところ、VLM OCR自体（Semaphore=10で
+      18ページを並列発行）はエラー無く完走したが、**直後のPhase2 DNA抽出リクエストが429
+      RESOURCE_EXHAUSTED（`gemini-3.1-flash-lite`のFree Tier RPM上限15）で弾かれる**ことを
+      実測で確認した（既存の`ModelRotator`が自動フォールバックしパイプライン自体は完走したが、
+      VLMの18リクエストだけで1分間のRPM枠をほぼ使い切っていたことの直接証拠になった）。この
+      具体的な証拠に基づき実装を判断した。
+    - **実装**: `OCRManager`に`_pick_page_target()`を追加（`ParallelTranslator._pick_batch_target()`
+      と同じ設計思想）。コンストラクタでの`self.model`即時解決をやめ（`None`のまま保持）、
+      ページ処理のたびに動的決定するよう変更。ラウンドロビンはFREE tierかつモデル未指定の場合
+      のみ適用（`DEFAULT_MODEL_VLM`はtier追従しないため、PAID tierでは無料枠専用ペースを適用
+      すると有料ユーザーが不必要に遅くなることを避けるための条件分岐）。Phase4で新設した
+      `get_free_pool_rate_limiters()`をそのまま再利用し、新規のリミッタ実装は不要だった。
+    - **速度・信頼性測定**（AL PDF、18ページ、`--lite --pdf-mode full_vlm`、単発計測）:
+      Phase1(VLM OCR)所要時間が単一モデル56s→ラウンドロビン46s（-18%）。加えて**パイプライン
+      全体を通じて429が単一モデル時の1回からゼロ回に減少**。VLMは`--concurrent`のような同時
+      実行数抑制もないまま全ページを一度にgatherする設計のため、Phase4よりレート制限との
+      衝突が起きやすい箇所だったことが429有無の違いとしてはっきり表れた。
+    - **テスト**: `tests/unit/test_ocr_manager.py`に`_pick_page_target()`の単体テスト3件
+      （ラウンドロビン・モデル明示指定時の非適用・PAID tier時の非適用）を追加。既存テストが
+      `OCRManager.__new__()`で`__init__`を経由せずインスタンスを作る手法だったため、新たに
+      必要になった`self.model`/`self._rr_index`属性が欠落してエラーになった7件のテストヘルパー
+      （`_make_ocr_manager()`）も合わせて修正。全417件パス。
+    - **未検証**: より大きな書籍・ページ数の多いPDFでの効果測定、`VLM_SEMAPHORE_LIMIT`
+      自体を引き上げる余地（ハードコードのクラス定数でCLIから調整不可、今回は未変更）、
+      golden-verificationでの出力品質検証（ユーザー判断によりスキップ）。

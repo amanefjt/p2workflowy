@@ -9,22 +9,27 @@ p2workflowy V3 における Gemini モデルの**ルーティング戦略と実�
 
 ## 1. フェーズ別モデルルーティング
 
-V3（Golden Rewrite）では用途別に**動的ルーティング**を採用。モデル名の実態値は `core/coreprompts.json` の以下 3 キーが正本：
+V3（Golden Rewrite）では用途別に**動的ルーティング**を採用。モデル名の実態値は `core/coreprompts.json` の以下のキーが正本：
 
 | キー | 現在値 |
 |---|---|
 | `DEFAULT_MODEL` | `gemini-3.1-flash-lite` |
 | `DEFAULT_MODEL_FREE` | `gemini-3.1-flash-lite` |
+| `DEFAULT_MODEL_FREE_POOL` | `["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]`（§7、`ModelRotator` が429/503時に使うローテーション先） |
 | `DEFAULT_MODEL_VLM` | `gemini-3.1-flash-lite` |
-| `DEFAULT_MODEL_RESUME` | `gemini-3.5-flash` |
+| `DEFAULT_MODEL_RESUME` | `gemini-3.6-flash` |
 
 ドキュメントとコードが乖離している場合はコード側を優先し、このドキュメントを修正すること。`@lru_cache` のため変更後はプロセス再起動が必須。
 
 > [!NOTE]
-> **ハイブリッド構成が既定（2026-07-11、Stage 2）**: レジュメ生成（論文全体・書籍全体・章単位）のみ `DEFAULT_MODEL_RESUME`（`gemini-3.5-flash`）を使い、翻訳を含むそれ以外の全フェーズは `DEFAULT_MODEL`（`gemini-3.1-flash-lite`）を使う。根拠は 2026-07-11 実施の Stage 1 モデル A/B（NST 論文）で Arm B（ハイブリッド）採用を決定したこと。GA 移行後の価格改定で Flash と Flash-Lite の価格差が約 6 倍に拡大したため、品質影響が大きいレジュメ生成のみ高モデルを残し、他は Lite に統一した。
-> `DEFAULT_MODEL_RESUME` は TierManager のティア追従の対象外（`core/llm_client.py::get_default_model("resume")`）。無料ティアへダウンシフトした場合でもレジュメ生成は `gemini-3.5-flash` のまま実行され、これは無料枠のレート制限内に収まる想定。詳細は `docs/management/requirements_log.md`（2026-07-11 の Stage 1 A/B 記録）を参照。
+> **ハイブリッド構成が既定（2026-07-11、Stage 2）**: レジュメ生成（論文全体・書籍全体・章単位）のみ `DEFAULT_MODEL_RESUME`（`gemini-3.6-flash`）を使い、翻訳を含むそれ以外の全フェーズは `DEFAULT_MODEL`（`gemini-3.1-flash-lite`）を使う。根拠は 2026-07-11 実施の Stage 1 モデル A/B（NST 論文）で Arm B（ハイブリッド）採用を決定したこと。GA 移行後の価格改定で Flash と Flash-Lite の価格差が約 6 倍に拡大したため、品質影響が大きいレジュメ生成のみ高モデルを残し、他は Lite に統一した。
+> `DEFAULT_MODEL_RESUME` は TierManager のティア追従の対象外（`core/llm_client.py::get_default_model("resume")`）。無料ティアへダウンシフトした場合でもレジュメ生成は `DEFAULT_MODEL_RESUME` のまま実行され、これは無料枠のレート制限内に収まる想定。詳細は `docs/management/requirements_log.md`（2026-07-11 の Stage 1 A/B 記録）を参照。
 >
-> **`gemini-3.5-flash` の単発リクエスト実効入力上限は `gemini_models.md` 記載の公称値（1,048,576 tok）よりかなり低い（2026-07-13 実測）**: 実測で約 186,000〜187,000 tok（文字数にして概ね 735,000 字前後）を超えると thinking の有無・`max_output_tokens` に関わらず一貫して `400 INVALID_ARGUMENT` になる（`gemini-3.1-flash-lite` は同じ入力で成功）。書籍モードの Phase 0 全文スキャン（`BookManager._generate_global_context`）はこの規模を容易に超えるため、`core/book_manager.py::RESUME_MODEL_SAFE_CHAR_LIMIT`（60万字）超で resume モデルを使わず `DEFAULT_MODEL` にフォールバックするガードを実装済み（章単位のレジュメは章テキスト規模が閾値未満のため対象外）。詳細は `troubleshooting_log.md` I-20。
+> **2026-07-22: `DEFAULT_MODEL_RESUME` を `gemini-3.5-flash` → `gemini-3.6-flash` に切替**。`gemini_models.md` §4/§5 の実測により、両モデルは Rate Limit（無料枠・有料枠 Tier 2 とも）が完全一致、価格は `gemini-3.6-flash` の方が出力 -17% と純粋な改善（入力は同額）。公式後継でもあり、据え置くデメリットが見当たらないため切替えた。一方 `DEFAULT_MODEL` / `DEFAULT_MODEL_FREE` / `DEFAULT_MODEL_VLM`（`gemini-3.1-flash-lite`）は後継 `gemini-3.5-flash-lite` へは**切替えていない**：Rate Limit は一致するが価格が値上げ（入力+20%・出力+67%）で、コスト最優先というハイブリッド構成の設計意図と衝突するため。GA 化して間もない現時点では `gemini-3.1-flash-lite` の廃止予定もなく、現状維持のリスクは小さい。
+>
+> **「無料枠だから値上げは関係ない」わけではない点に注意**: Google の無料ティアは従量課金がそもそも $0 なので、無料キーで叩く限り §5 の価格改定は影響しない（効くのは Rate Limit のみで、これは新旧完全一致）。ただし `DEFAULT_MODEL`（PAID tier 既定）と `DEFAULT_MODEL_VLM`（`get_default_model("vlm")` は tier 分岐なしで常時参照、`core/llm_client.py:35-58`）は、管理者の `APP_ADMIN_PASSCODE` 経由やユーザー自身の有料キー、CLI の `GEMINI_API_KEY` フォールバック（§6）など**課金対象の有料キーで呼ばれた場合はそのまま実 billing に乗る**。さらに `DEFAULT_MODEL_FREE` も無料キー専用ではなく、有料キーのまま `TierManager` が 429/503 でモデルだけダウンシフトした場合にも使われうる（キー自体は据え置き）。したがって Lite 系の値上げは「無料キー由来のトラフィックには影響しないが、有料キーが絡む経路には影響する」というのが正確な理解であり、これが上記の現状維持判断の根拠になっている。
+>
+> **`gemini-3.5-flash`（旧 resume モデル）の単発リクエスト実効入力上限は `gemini_models.md` 記載の公称値（1,048,576 tok）よりかなり低い（2026-07-13 実測）**: 実測で約 186,000〜187,000 tok（文字数にして概ね 735,000 字前後）を超えると thinking の有無・`max_output_tokens` に関わらず一貫して `400 INVALID_ARGUMENT` になる（`gemini-3.1-flash-lite` は同じ入力で成功）。書籍モードの Phase 0 全文スキャン（`BookManager._generate_global_context`）はこの規模を容易に超えるため、`core/book_manager.py::RESUME_MODEL_SAFE_CHAR_LIMIT`（60万字）超で resume モデルを使わず `DEFAULT_MODEL` にフォールバックするガードを実装済み（章単位のレジュメは章テキスト規模が閾値未満のため対象外）。詳細は `troubleshooting_log.md` I-20。**この上限は `gemini-3.5-flash` での実測であり、切替後の `gemini-3.6-flash` では未検証**（ガード自体は保守的な値のためそのまま流用）。
 
 ### フェーズ別ルーティング表
 
@@ -69,12 +74,15 @@ AL 論文（18p / 9セクション / 17バッチ）で `concurrent = 1, 2, 4, 8`
 - **concurrent=4 と 8 の優劣は各 2 回の計測では判断できない**。trial 間の振れ幅が 100s 以上ある。
 - **分散の原因は API サーバー側の混雑**。concurrent を上げると「速いときはより速く、詰まるときはより詰まる」特性（concurrent=2/4/8 全てで max TTFT が 200s 超のスパイク）。
 
-### 結論
+### 結論（2026-05-11時点）
 
 **デフォルト `concurrent=4` を維持**。変更を正当化する統計的データがない限り 4 を採用する。「並列化によりスループットが向上する」が正しい説明（旧来の「240秒ストールを並列で相殺する」は不正確）。
 
 > [!TIP]
-> 直列化（`max_concurrent_sections = 1`）は約 50% スループット低下。デフォルトの 4 を維持すること。
+> 直列化（`max_concurrent_sections = 1`）は約 50% スループット低下。
+
+> [!NOTE]
+> **2026-07-22改定: デフォルトを `concurrent=4` → `8` に変更**。§7 の無料枠Liteプール・ラウンドロビン実装後の実測（AL論文、`--lite`、単発計測）で `concurrent=8` が `concurrent=4` より明確に速いことを確認したため（Phase4所要時間 75s→64s、詳細は §7 参照）。ただし上表の2026-05-11時点のベンチマーク（ラウンドロビン導入前）では「trial間の振れ幅が100s以上あり4と8の優劣は判断できない」という結論だった点には注意 — 今回の変更は単発計測に基づく判断であり、複数trialでの統計的検証はまだ行っていない。
 
 ---
 
@@ -108,12 +116,12 @@ Phase 1 で画像1枚ごとに VLM API を呼び出すため、ページ数に�
 ### ユーザー種別による動作
 
 ```
-有料ユーザー（ハイブリッド構成、2026-07-11〜）:
-  レジュメ生成（Phase 2、論文/書籍全体・章単位） → DEFAULT_MODEL_RESUME（gemini-3.5-flash、ティア非追従）
+有料ユーザー（ハイブリッド構成、2026-07-11〜、resumeモデルは2026-07-22切替）:
+  レジュメ生成（Phase 2、論文/書籍全体・章単位） → DEFAULT_MODEL_RESUME（gemini-3.6-flash、ティア非追従）
   それ以外の全フェーズ（翻訳を含む） → DEFAULT_MODEL（gemini-3.1-flash-lite）
 
 無料ユーザー（TierManagerの自動制御）:
-  レジュメ生成 → 常に DEFAULT_MODEL_RESUME（gemini-3.5-flash）のまま（ティア追従の対象外）
+  レジュメ生成 → 常に DEFAULT_MODEL_RESUME（gemini-3.6-flash）のまま（ティア追従の対象外）
   それ以外のフェーズ → 初回から DEFAULT_MODEL（Lite）で処理
        ↓  429 RESOURCE_EXHAUSTED 発生時
   残り全体 → DEFAULT_MODEL_FREE (Lite、DEFAULT_MODEL と同一) へダウングレード（実質モデル変化なし）
@@ -128,18 +136,23 @@ Phase 1 で画像1枚ごとに VLM API を呼び出すため、ページ数に�
 | **無料ユーザー** | Lite 固定（レジュメのみ Flash、ティア非追従） | Lite の RPD | **〜45〜68本** | **〜1,350〜2,040本** |
 | **有料ユーザー** | Lite 固定（レジュメのみ Flash） | TPM / RPM | 実質無制限 | 実質無制限 |
 
-> 無料ユーザーも有料ユーザーも翻訳等の大半のフェーズは Lite で処理される（ハイブリッド構成、§1 参照）。無料ユーザーは Lite の RPD（〜1,000〜1,500）÷ 実測22リクエスト（AL/NST論文実測、§5.4 の FREE候補設定 8チャンク/9,000字時点。Phase1: 1 + Phase2 DNA・キーワード: 2 + Phase4: 19、レジュメ生成は `gemini-3.5-flash` の別枠のため除外）≈ 45〜68本/日が上限（2026-07-20 実測に基づき更新。旧記載「136本/日・11リクエスト」は未検証の概算だった）。レジュメ生成のみ TierManager のティア追従の対象外で常に Flash 品質。
+> 無料ユーザーも有料ユーザーも翻訳等の大半のフェーズは Lite で処理される（ハイブリッド構成、§1 参照）。無料ユーザーは Lite の RPD（〜1,000〜1,500）÷ 実測22リクエスト（AL/NST論文実測、§5.4 の FREE候補設定 8チャンク/9,000字時点。Phase1: 1 + Phase2 DNA・キーワード: 2 + Phase4: 19、レジュメ生成は `DEFAULT_MODEL_RESUME`（`gemini-3.6-flash`）の別枠のため除外）≈ 45〜68本/日が上限（2026-07-20 実測に基づき更新。旧記載「136本/日・11リクエスト」は未検証の概算だった）。レジュメ生成のみ TierManager のティア追従の対象外で常に Flash 品質。
+>
+> **§7（2026-07-22実装）の`ModelRotator`により、この上限は理論上最大2倍程度まで拡張されうる**：`gemini-3.1-flash-lite`のRPDを使い切った時点で`gemini-3.5-flash-lite`（独立カウンター）へforward-onlyで切り替わるため。ただしラウンドロビンではなく429検知時のみの切替であり、実際にRPD枯渇を起こしてのライブ検証はまだ行っていない（上記45〜68本/日という実測値は`ModelRotator`導入前の単一モデル基準のまま、更新は未実施）。
 
 ### 処理速度（Phase 4 翻訳）
 
-AL論文（9セクション / 17バッチ）、`concurrent=4`（2026-05-11 実測）：
+AL論文（10セクション / 19バッチ）、2026-05-11実測（`concurrent=4`、ラウンドロビン導入前）：
 
 | 条件 | Phase 4 完走時間 |
 |---|---|
-| 有料 + Lite、concurrent=4（ハイブリッド構成の現行既定） | 119s〜335s（平均 227s / 約4分。計測当時は Flash だが、モデル間の処理時間差は小さいため目安として有効） |
+| 有料 + Lite、concurrent=4（当時の既定） | 119s〜335s（平均 227s / 約4分。計測当時は Flash だが、モデル間の処理時間差は小さいため目安として有効） |
 | 無料 + Lite | 同等（モデル間の処理時間差は小さい） |
 
 Flash と Lite の処理時間差はほぼない。翻訳フェーズは有料・無料とも Lite で処理されるため、**品質差**は主にレジュメ生成の有無（ティア非追従の `DEFAULT_MODEL_RESUME`）による。
+
+> [!NOTE]
+> **2026-07-22実測（§7の無料枠ラウンドロビン導入後、`--lite`、AL論文、単発計測）**: concurrent=4・単一モデル（92s）→ concurrent=4・ラウンドロビン2モデル（75s、-18.5%）→ concurrent=8・ラウンドロビン2モデル（64s、対単一モデル比-30.4%）。詳細と「理論値2倍に届かない理由」の分析は §7 参照。
 
 ---
 
@@ -149,7 +162,7 @@ Flash と Lite の処理時間差はほぼない。翻訳フェーズは有料�
 |---|---|
 | 無料でも使えるか？ | 使える。TierManager が自動で Lite に切替え、完走を保証 |
 | 無料での品質は？ | Phase 2（構造解析）が Lite になる分、セクション境界検出の精度が若干下がる可能性あり |
-| 無料で何本処理できるか？ | AL/NST論文相当で 1日〜45〜68本、1ヶ月〜1,350〜2,040本（2026-07-20 実測） |
+| 無料で何本処理できるか？ | AL/NST論文相当で 1日〜45〜68本、1ヶ月〜1,350〜2,040本（2026-07-20 実測、単一Liteモデル基準）。§7の`ModelRotator`（2026-07-22実装）によりRPD枯渇時は理論上さらに拡張されうるが未実測 |
 | 公式制限値はどこで確認する？ | [AI Studio](https://aistudio.google.com/rate-limit) → プロジェクト → Rate Limit タブ |
 
 ---
@@ -391,3 +404,187 @@ APIキー入力の経路はこのプールを介さず今まで通り無制限�
   と同じ設計思想）。
 - ローテーションは429/503のみをトリガーにする。無効・失効した無料キーは`max_retries`回
   リトライして失敗し、有料キーへは切り替わらない。
+
+## 7. 無料枠内での複数Liteモデル併用ローテーション（2026-07-22、実装済み）
+
+§6が「別GCPプロジェクトでキーを複数発行してRPM/RPDを増やす」設計だったのに対し、こちらは
+**同一プロジェクト・同一キー内でも複数のLiteモデルを使い分ければ枠を実質拡張できる**という
+別軸の着想。AI Studioのレート制限ダッシュボードで、`gemini-3.1-flash-lite`と
+`gemini-3.5-flash-lite`はRate Limit（RPM/RPD/TPMとも）が完全一致するが、**使用量は独立した
+カウンター**であることを確認した（`gemini_models.md`§4の実測どおり上限が一致）。
+
+### 設計: `ModelRotator`（`core/llm_client.py`）
+
+`KeyRotator`と対になる、forward-onlyのモデルローテーション機構。`TierManager`と同じく
+スレッドローカル（Webの並行パイプラインにも対応するため）。対象は`core/coreprompts.json`の
+`DEFAULT_MODEL_FREE_POOL`（`["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]`）。
+
+- `call_gemini`/`call_gemini_async`のリトライループは、毎試行`current_model`を
+  `model_rotator.resolve()`に通す。渡された`model`が呼び出し元でコンストラクタ時点に
+  一度だけ解決された固定文字列（Phase1/2/3の主要呼び出し元の多数がこのパターン）でも、
+  「今の解決済みモデルがプールのメンバーかどうか」だけで判定するため正しく効く。
+- 429/503検知時、モデルローテーション（同一キー内で完結、client再生成不要）を
+  §6のキーローテーションより**優先**して試みる。プールを使い切って初めて（`has_next()`が
+  `False`になって初めて）キーローテーション・従来の待機付きダウンシフトにフォールバックする。
+- `reset_pipeline_state()`で毎パイプライン開始時にプール先頭へ楽観的にリセットする
+  （`tier_manager`のPAIDリセットと同じ思想）。書籍モードは章ごとに`run_pipeline()`を呼ぶため
+  章ごとにリセットされるが、forward-onlyの`advance()`が各章内で429を機に即座に効くため
+  容量拡張効果は損なわれない（無駄になるのは先頭モデルが枯渇していた場合の1回分の429往復のみ。
+  拒否されたリクエスト自体はRPDを消費しない）。
+- キーローテーション発生時（新しいキー＝別プロジェクトの独立枠）は`model_rotator.reset()`も
+  呼び、新しいキー側でもプール先頭から使い始める。
+
+### 許容したトレードオフ（ユーザー確認済み）
+
+- **文書内でのモデル切替を許容**: forward-onlyのため、大きな書籍等でLite単体のRPDが尽きた
+  場合、同一文書の処理途中で`gemini-3.1-flash-lite`→`gemini-3.5-flash-lite`に切り替わり、
+  訳文のトーンがわずかに変わりうる。現状はLite単体でRPD枯渇＝そのまま失敗/停滞であり、
+  切替は「本来失敗していたケースを完走させる」場合にのみ発生するため、既存挙動に対する
+  正味の劣化ではなく改善と判断した。
+- **`DEFAULT_MODEL_VLM`への波及も許容**: プール判定は`purpose`を意識しない純粋な文字列一致
+  （`model_rotator.is_pool_member()`）のため、現状`DEFAULT_MODEL_VLM == DEFAULT_MODEL_FREE`
+  （どちらも`gemini-3.1-flash-lite`）である間はPhase 1 VLM OCR呼び出しにも自然に波及する。
+  両モデルともマルチモーダル対応のため実害なしと判断（将来`DEFAULT_MODEL_VLM`がプール外の
+  値に変わればこの波及は自動的に消える）。
+- thinking_levelのモデル間デフォルト差は実害なし: `_build_gemini_config()`は`model`に
+  関わらず呼び出し側指定の`thinking_level`（省略時`HIGH`）を常に明示投入するため。
+
+設計の全文（未決論点の検討過程・Opusレビュー結果を含む）は
+`docs/superpowers/specs/2026-07-22-free-tier-multi-model-lite-pool-design.md`を参照。
+
+### 実装・検証（2026-07-22）
+
+`core/coreprompts.json::DEFAULT_MODEL_FREE_POOL` の追加、`core/llm_client.py::ModelRotator`
+の新設、`call_gemini`/`call_gemini_async`両リトライループへの組み込みを実装済み。設計は
+Opusによるコードベース照合込みレビューで**GO**判定（advisory 2件は反映済み：キーローテー
+ション時の`model_rotator.reset()`呼び出し、書籍モードper-chapterリセットの明文化）。
+
+- **ユニットテスト**: `tests/unit/test_llm_client.py`に`ModelRotator`単体テスト（`resolve()`・
+  forward-only`advance()`・`reset()`）と、429検知後にプール内の次モデルへ切り替わって即
+  リトライすることを確認する`call_gemini_async`統合テストを追加。全411件パス。
+- **実地検証（`--lite`モード、AL論文、paperモード）**: 429/503が一度も発生しない正常系での
+  完走を確認（Phase1〜5すべて成功、`golden-verification` skillで構造・非対称階層・注釈
+  ノード再配置・翻訳品質を確認し問題なし）。`current_model = model_rotator.resolve(current_model)`
+  をリトライループに追加した変更が通常系の挙動に影響しないことを実地で確認できた一方、
+  正常系のため**ローテーション自体（429検知→次モデルへの切替）はこの実地検証では発火して
+  いない**（トリガー自体はユニットテストで別途検証済み）。
+- **未検証**: 書籍モードでの実地回帰確認、および実際にRPD枯渇を起こしてのライブ切替確認
+  （無料枠を意図的に使い切る必要があり未実施）。
+
+### 既知の限界（今回は対応せず）
+
+- forward-onlyのため、大きな書籍等で処理途中にモデルが切り替わると同一文書内で訳文のトーンが
+  わずかに変わりうる（ユーザー確認済みで許容、詳細は上記トレードオフ節）。
+- `ModelRotator`は`TierManager`と同じくスレッドローカル。Webの並行パイプライン（複数スレッドが
+  同一プロジェクトの枠を共有）はローテーション状態を共有せず、各スレッドが独立してプール先頭
+  から始める（`TierManager`と同じ既存の限界を踏襲、意図的に対応せず）。
+- 書籍モードは章ごとに`reset_pipeline_state()`が呼ばれ`model_rotator`もプール先頭に戻るため、
+  先頭モデルが枯渇していた章では毎回1回分の429往復が無駄になる（拒否されたリクエスト自体は
+  RPDを消費しないため実害は小さいと判断、詳細は上記設計節）。
+
+### Phase4の速度改善: バッチ単位ラウンドロビン（2026-07-22、実装済み）
+
+§7のここまでは「429検知時のみ切り替わるforward-only」設計で、RPD拡張（容量）が目的であり
+速度には寄与しない。無料枠Liteプールの2モデルが**独立したRPM枠**を持つ性質を利用すれば、
+429を待たずに最初からリクエストをバッチ単位で2モデルへ振り分けることで、Phase4翻訳の
+スループット自体を上げられるのではという着想で追加実装した。
+
+**実装**（`core/llm_client.py`・`core/engine/p4_translate/parallel_translator.py`）:
+
+- `get_free_pool_rate_limiters(api_key)`: 無料枠Liteプールの各モデルに独立した
+  `AsyncLimiter`（1 req/4s ≒ 15RPM相当）を割り当てて返す。既存の`apply_tier_settings()`の
+  `(tier, api_key)`キーとは別に`(tier, api_key, model)`でキーイングするため、
+  ローテーション用の共有リミッタとは衝突しない。
+- `call_gemini`/`call_gemini_async`/`translate_batch`に`model_pinned: bool = False`を追加。
+  `True`のとき、呼び出し元が明示した`model`を`ModelRotator.resolve()`/`advance()`で
+  上書きしない。**これが無いと動作しない**: `resolve()`は「プールのメンバーならどれを渡しても
+  現在のローテーション先へ差し替える」実装のため、ラウンドロビンで意図的に`pool[1]`を渡しても
+  常に`pool[0]`（`current()`の初期値）へ引き戻されてしまい、ラウンドロビンが成立しなかった
+  （実装中に発見）。プロアクティブな負荷分散（ラウンドロビン）とリアクティブなRPD枯渇対応
+  （既存の`ModelRotator`）は役割が異なるため、`model_pinned`で明示的に分離した。
+- `ParallelTranslator._pick_batch_target()`: FREE tierかつユーザーがモデル未指定の場合のみ、
+  バッチ単位で`pool[rr_index % len(pool)]`とその専用リミッタを選ぶ（`model_pinned=True`）。
+  ユーザーがモデルを明示指定した場合・PAID tierの場合は従来どおり単一`self.model`/
+  `self.rate_limiter`のまま（挙動変更なし）。
+- **トレードオフ**: `model_pinned=True`のバッチが429でRPD枯渇に遭遇した場合、
+  `ModelRotator`のRPD拡張フォールバック（§7上部）は効かず、同一モデルへのダウンシフト+
+  待機で再試行し、最終的に失敗すれば当該バッチは通常どおり「翻訳失敗」としてフォールバック
+  する（`ParallelTranslator`の既存の失敗時ハンドリングに委ねる）。ラウンドロビン適用時は
+  RPD枯渇時の自動延命効果を失うという既知の限界。
+
+**速度測定**（AL論文、`--lite`、単発計測、Phase4のみの所要時間）:
+
+| 設定 | Phase4所要時間 | 対単一モデル比 |
+|---|---|---|
+| 単一モデル、concurrent=4（導入前） | 92s | — |
+| ラウンドロビン2モデル、concurrent=4 | 75s | -18.5% |
+| ラウンドロビン2モデル、concurrent=8 | 64s | -30.4% |
+
+**理論値（2倍）に届かない理由**:
+
+1. **`max_concurrent_sections`（セマフォ）が実際のボトルネックだった**: concurrent=4のままでは
+   同時に発行できるリクエスト数自体が4に制限されており、2つの独立したレートリミッタ
+   （合計30RPM相当）を持っていても、それを飽和させるだけの同時実行数がなかった。
+   concurrent=8に上げるとさらに短縮した（75s→64s）のはこれが裏付け。
+2. **レートリミッタは「発行間隔の下限」に過ぎず、実際のボトルネックはAPIの応答レイテンシ
+   （TTFT 6〜20秒程度）**: `AsyncLimiter(1, 4.0)`は「4秒に1回まで発行してよい」という制約
+   であり、個々のリクエストの応答自体がそれより長くかかる場合、レートリミッタを2つに
+   分割しても「応答待ちの間、他に投げられるリクエストがあるか」（＝同時実行数）に効果が
+   左右される。
+3. **ワークロードの端数・裾（tail）効果**: 10セクション・19バッチという小規模な処理では、
+   実行終盤に残りセクション数が減り、両モデルを同時に稼働させ続けられる期間が短くなる
+   （典型的な並列ジョブの立ち上がり・収束コスト）。より大規模な書籍等、バッチ数が多い処理
+   ほど理論値に近づく可能性がある。
+
+**`concurrent`のデフォルト変更**: 上記実測に基づき、`main.py --concurrent`・
+`core/pipeline.py`・`core/phase4_translate.py`・`ParallelTranslator`の全デフォルトを
+`4`→`8`に変更した（2026-05-11時点の旧ベンチマーク§2は「4と8の優劣は判断できない」との
+結論だったが、ラウンドロビン導入後の状況が変わったための再判断。ただし今回も単発計測であり、
+複数trialでの統計的検証はまだ行っていない点は同じ注意が必要）。
+
+**未検証**: 大規模文書（書籍等、バッチ数が多い場合）での速度改善効果の実測、複数trialでの
+統計的な安定性検証。
+
+### VLM OCR（Phase1）への同様の適用（2026-07-22、実装済み）
+
+Phase4の速度改善を踏まえ、「Phase1のVLM OCRも同じ手が使えるのでは」というユーザーからの
+指摘で追加調査・実装した。調査の結果、VLMはPhase4と**構造的に異なる**ことが判明した:
+`core/engine/p1_ingest/ocr_manager.py`の`OCRManager`は`VLM_SEMAPHORE_LIMIT=10`という
+同時実行数の上限のみを持ち、Phase4の`AsyncLimiter`のような**クライアント側レートリミッタが
+一切無い**（`apply_tier_settings()`を呼んでいない）。つまり「既存の1つのリミッタを2つに割る」
+というPhase4の手法がそのまま使えず、実装としては「元々存在しなかったレートリミッタ＋
+ラウンドロビンを新規追加する」形になった。
+
+**ベースライン計測で実際に429を確認**: 変更前のコードでALpdf.pdf（18ページ）を
+`--lite --pdf-mode full_vlm`で処理したところ、VLM OCR自体（Phase1、18ページを
+Semaphore=10で並列発行）はエラー無く完走したが、**その直後のPhase2 DNA抽出リクエストが
+429 RESOURCE_EXHAUSTED（`gemini-3.1-flash-lite`のFree Tier RPM上限15に抵触）で弾かれた**
+（既存の`ModelRotator`が検知して`gemini-3.5-flash-lite`へ自動フォールバックし、パイプライン
+自体は完走）。これはVLMの18リクエストだけで1分間のRPM枠をほぼ使い切っていたことの直接証拠。
+
+**実装**（`core/engine/p1_ingest/ocr_manager.py`）: `OCRManager._pick_page_target()`を追加し、
+Phase4の`_pick_batch_target()`と同じ設計思想でページ単位のラウンドロビンを行う。
+`self.model`はコンストラクタで即座に解決せず（`None`のまま保持）、ページ処理のたびに
+`_pick_page_target()`で動的決定する。`DEFAULT_MODEL_VLM`はtierに関わらず常に参照される値
+（`get_default_model("vlm")`はtier追従しない）だが、ラウンドロビン自体はFREE tierかつ
+モデル未指定の場合のみ適用する（PAID tierの有料キーは元々レート上限が十分高く、無料枠専用
+ペース（1 req/4s/モデル）を適用するとむしろ有料ユーザーを不必要に遅くしてしまうため）。
+Phase4で新設した`get_free_pool_rate_limiters()`をそのまま再利用している。
+
+**速度測定**（AL PDF、18ページ、`--lite --pdf-mode full_vlm`、単発計測）:
+
+| 設定 | Phase1(VLM OCR)所要時間 | 429/503 |
+|---|---|---|
+| 単一モデル（導入前） | 56s | Phase2で1回発生（自動復旧） |
+| ラウンドロビン2モデル | **46s**（-18%） | **ゼロ** |
+
+Phase4と同程度の速度改善（-18%、Phase4のconcurrent=4ラウンドロビンとほぼ同水準）に加え、
+**パイプライン全体を通じて429が一度も発生しなくなった**。VLMはPhase4以上に「短時間に
+バーストするリクエスト」の性質が強く（`--concurrent`のような同時実行数の抑制も無いまま
+全ページを一度にgatherする設計）、レート制限との衝突が起きやすい箇所だったことが、ラウンドロビン
+導入前後の429有無の違いとしてはっきり表れた。
+
+**未検証**: より大きな書籍・ページ数の多いPDFでの効果測定（今回の18ページでも明確な差が
+出たため、ページ数が多いほど効果はさらに大きくなる可能性が高いが未確認）、`VLM_SEMAPHORE_LIMIT`
+自体を引き上げる余地があるか（Phase4の`--concurrent`4→8のような追加改善の余地。ハードコードの
+クラス定数でCLIから調整不可、今回は変更していない）、golden-verificationでの出力品質検証。

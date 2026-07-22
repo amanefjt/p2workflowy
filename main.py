@@ -124,8 +124,8 @@ def main():
         help="【推奨】テスト用の低コストモデル（Flash-Lite）を強制的に使用",
     )
     parser.add_argument(
-        '--concurrent', type=int, default=4,
-        help='Phase 4 の並列セクション数（デフォルト: 4）'
+        '--concurrent', type=int, default=8,
+        help='Phase 4 の並列セクション数（デフォルト: 8）'
     )
 
     args = parser.parse_args()

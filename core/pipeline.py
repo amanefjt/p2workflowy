@@ -38,7 +38,7 @@ def run_pipeline(
     max_pages: Optional[int] = None,
     resume_content: Optional[str] = None,
     simple_mode: bool = False,
-    max_concurrent_sections: int = 4,
+    max_concurrent_sections: int = 8,
     cleanup_sessions: bool = True,
     state_base_dir: Optional[Path] = None,
 ) -> List[Path]:

@@ -14,4 +14,4 @@ def test_keyword_prompt_has_stage2_markers():
 def test_hybrid_defaults_are_baked_in():
     p = load_coreprompts()
     assert p["DEFAULT_MODEL"] == "gemini-3.1-flash-lite"        # 翻訳等は lite
-    assert p["DEFAULT_MODEL_RESUME"] == "gemini-3.5-flash"      # レジュメのみ強モデル
+    assert p["DEFAULT_MODEL_RESUME"] == "gemini-3.6-flash"      # レジュメのみ強モデル

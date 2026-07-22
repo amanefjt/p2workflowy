@@ -12,12 +12,15 @@ from .engine.p1_ingest.routing import decide_pdf_mode as _decide_book_pdf_mode
 from .engine.p3_structure.state_integrator import StateIntegrator
 from .llm_client import call_gemini, get_default_model, load_coreprompts, GeminiTier, apply_tier_settings
 
-# gemini-3.5-flash は公称入力上限（1,048,576 tok）とは別に、単発リクエストで
-# 実測 ~186,000〜187,000 tok（本文字数にして概ね 735,000 字前後）を超えると
+# gemini-3.5-flash（旧 DEFAULT_MODEL_RESUME）は公称入力上限（1,048,576 tok）とは別に、
+# 単発リクエストで実測 ~186,000〜187,000 tok（本文字数にして概ね 735,000 字前後）を超えると
 # 400 INVALID_ARGUMENT を返す（ドキュメント未記載の実挙動。troubleshooting_log I-20）。
 # 書籍全文スキャンはこの規模を容易に超えるため、超過時は resume モデルを使わず
 # 既定モデル（gemini-3.1-flash-lite）にフォールバックする。安全マージンとして
 # 実測しきい値（734,997字=OK / 738,015字=FAIL）よりかなり低い値を設定。
+# 2026-07-22: DEFAULT_MODEL_RESUME を gemini-3.6-flash に切替済みだが、この上限は
+# gemini-3.5-flash 実測値のまま未検証（3.6-flash で同じ制約が出るかは要再測定）。
+# 保守的な値のため当面はこのまま流用する。
 RESUME_MODEL_SAFE_CHAR_LIMIT = 600_000
 
 # ①〜④ルーティング規則の実体は core/engine/p1_ingest/routing.py に一元化

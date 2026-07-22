@@ -5,7 +5,7 @@ from aiolimiter import AsyncLimiter
 from collections import deque
 from core.models import TreeNode
 from core.config import print_log
-from core.llm_client import translate_batch, tier_manager, GeminiTier, apply_tier_settings
+from core.llm_client import translate_batch, tier_manager, GeminiTier, apply_tier_settings, model_rotator, get_free_pool_rate_limiters
 
 class ParallelTranslator:
     """
@@ -20,13 +20,35 @@ class ParallelTranslator:
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         tier: GeminiTier = GeminiTier.PAID,
-        max_concurrent_sections: int = 4
+        max_concurrent_sections: int = 8
     ):
         self.api_key = api_key
         self.model = model
         self.tier = tier
         self.semaphore = asyncio.Semaphore(max_concurrent_sections)
         self.rate_limiter, self.settings = apply_tier_settings(tier, api_key=self.api_key)
+        self._rr_index = 0  # 無料枠Liteプールのラウンドロビン用カウンタ（バッチ単位でインクリメント）
+
+    def _pick_batch_target(self):
+        """バッチ1件分の (model, rate_limiter, pinned) を決定する。
+
+        ユーザーがモデルを明示指定していない FREE tier かつプールが複数モデルを持つ場合のみ、
+        バッチ単位でプール内モデルへラウンドロビン割り当てする（各モデルは独立した
+        AsyncLimiter を持つため、単一リミッタ共有時よりスループットが上がる）。それ以外は
+        従来どおり self.model / self.rate_limiter をそのまま使う（pinned=False、429時は
+        ModelRotator の既存フォールバックに委ねる）。
+        ラウンドロビン対象バッチは pinned=True とし、call_gemini_async 側で
+        ModelRotator.resolve()/advance() による上書きを受けないようにする
+        （プロアクティブな負荷分散とリアクティブなRPD枯渇対応を混在させないため）。
+        """
+        if self.model is None and self.tier == GeminiTier.FREE:
+            pool = model_rotator.pool_models()
+            if len(pool) > 1:
+                limiters = get_free_pool_rate_limiters(self.api_key)
+                batch_model = pool[self._rr_index % len(pool)]
+                self._rr_index += 1
+                return batch_model, limiters[batch_model], True
+        return self.model, self.rate_limiter, False
 
     async def translate_section_chunks(
         self,
@@ -65,17 +87,19 @@ class ParallelTranslator:
                     batch.append(remaining_chunks.popleft())
                     batch_chars += c_len
 
-                # 3. 翻訳実行
+                # 3. 翻訳実行（無料枠Liteプールが複数モデルの場合はバッチ単位でラウンドロビン割り当て）
                 previous = prompt_builder_func(all_translated)
-                print_log(f"  [ParallelTranslator] {section_name}: Batch {batch_idx} ({len(batch)} chunks, {batch_chars} chars)")
-                
+                batch_model, batch_limiter, batch_pinned = self._pick_batch_target()
+                print_log(f"  [ParallelTranslator] {section_name}: Batch {batch_idx} ({len(batch)} chunks, {batch_chars} chars, model={batch_model or 'default'})")
+
                 try:
                     batch_nodes = await translate_func(
                         chunks=batch,
                         previous_translation=previous,
-                        rate_limiter=self.rate_limiter,
+                        rate_limiter=batch_limiter,
                         api_key=self.api_key,
-                        model=self.model, # ユーザー指定モデルを尊重する
+                        model=batch_model, # ユーザー指定モデル、またはラウンドロビン割り当て先を尊重する
+                        model_pinned=batch_pinned,
                         section_name=section_name,
                         **kwargs
                     )

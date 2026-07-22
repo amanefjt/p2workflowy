@@ -75,7 +75,7 @@ async def _run_phase4_async(
     is_book: bool = False,
     book_resume: str = "",
     pdf_mode: str = "default",
-    max_concurrent_sections: int = 4,
+    max_concurrent_sections: int = 8,
 ) -> List[TreeNode]:
     """Phase 4 メイン実行処理（オーケストレーター）。"""
     

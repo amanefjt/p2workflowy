@@ -177,6 +177,78 @@ class KeyRotator:
 key_rotator = KeyRotator()
 
 
+class ModelRotator:
+    """無料枠Liteモデルプール内でのフォワードオンリー・ローテーション（TierManagerと同じくスレッドローカル）。
+
+    KeyRotatorがAPIキー単位のローテーションであるのに対し、こちらは同一キー・同一プロジェクト内で
+    複数のLiteモデル（gemini-3.1-flash-lite / gemini-3.5-flash-lite 等）のRPD/RPMが別カウンターで
+    管理されている性質を利用し、片方が429/503でリソース枯渇したときにもう片方へ切り替える。
+    Web側の並行パイプライン実行にも対応できるよう TierManager と同じくスレッドローカルにする。
+    """
+    _local = threading.local()
+
+    def _ensure_local(self):
+        if not hasattr(self._local, "pool"):
+            prompts = _get_prompts()
+            pool = prompts.get("DEFAULT_MODEL_FREE_POOL") or [prompts.get("DEFAULT_MODEL_FREE", "gemini-3.1-flash-lite")]
+            self._local.pool = pool
+            self._local.index = 0
+
+    def reset(self):
+        self._ensure_local()
+        self._local.index = 0
+
+    def is_pool_member(self, model: str | None) -> bool:
+        self._ensure_local()
+        return model in self._local.pool
+
+    def current(self) -> str:
+        self._ensure_local()
+        return self._local.pool[self._local.index]
+
+    def has_next(self) -> bool:
+        self._ensure_local()
+        return self._local.index < len(self._local.pool) - 1
+
+    def advance(self) -> str:
+        self._ensure_local()
+        if self.has_next():
+            self._local.index += 1
+        return self.current()
+
+    def resolve(self, model: str | None) -> str | None:
+        """model がプールのメンバーなら現在のローテーション先へ差し替える。プール外はそのまま返す。"""
+        self._ensure_local()
+        if model in self._local.pool:
+            return self.current()
+        return model
+
+    def pool_models(self) -> List[str]:
+        """プール全体のモデル名リストを返す（Phase4のラウンドロビン割り当て用）。"""
+        self._ensure_local()
+        return list(self._local.pool)
+
+model_rotator = ModelRotator()
+
+
+def get_free_pool_rate_limiters(api_key: str | None = None) -> Dict[str, AsyncLimiter]:
+    """無料枠Liteプールの各モデルに独立した AsyncLimiter を割り当てて返す（Phase4ラウンドロビン用）。
+
+    apply_tier_settings() の FREE tier 既定と同じレート（1 req / 4s ≒ 15RPM相当）をモデルごとに
+    独立して持たせることで、単一リミッタ共有時よりも高いスループットを狙う。既存の
+    apply_tier_settings() の (tier, api_key) キーとは別に (tier, api_key, model) でキーイングする
+    ため、ローテーション（resolve()/advance()）用の共有リミッタとは衝突しない。
+    """
+    limiters = _get_limiters_dict()
+    result = {}
+    for m in model_rotator.pool_models():
+        cache_key = (GeminiTier.FREE, api_key, m)
+        if cache_key not in limiters:
+            limiters[cache_key] = AsyncLimiter(1, 4.0)
+        result[m] = limiters[cache_key]
+    return result
+
+
 # Gemini クライアントのキャッシュ（スレッドごとに独立した辞書）。
 # 値は (client, 生成時のイベントループ) のペア。genai.Client の非同期トランスポートは
 # 生成時のループに紐付くため、ループが変わったら再生成が必要（下記 _get_client 参照）。
@@ -314,6 +386,9 @@ def _log_metrics(metrics_metadata: dict, prompt_len: int, p_tokens: int, c_token
 # キーローテーション直後の待機秒数（新しいプロジェクトの枠なのでクールダウン不要、短いジッターのみ）
 ROTATION_RETRY_DELAY_BASE = 1.5
 
+# モデルローテーション直後の待機秒数（同一キー内での切替のためクールダウン不要、短いジッターのみ）
+MODEL_ROTATION_RETRY_DELAY_BASE = 1.0
+
 
 def _maybe_restore_tier_after_rotation() -> None:
     """キーローテーションで有料キーへ切り替わった直後に呼ぶ。
@@ -351,10 +426,15 @@ def call_gemini(
     max_retries: int = 5,
     retry_delay: float = 3.0,
     log_dir: Optional[Any] = None, # Pathオブジェクトを想定
+    model_pinned: bool = False,
     **kwargs,
 ) -> str:
     """
     Gemini API を同期ストリーミングで呼び出し、TTFT/TPS 等を計測する。
+
+    model_pinned: True の場合、呼び出し元が明示した model を ModelRotator の
+    resolve()/advance() で上書きしない（Phase4のラウンドロビン割り当てなど、呼び出し元が
+    プール内のどのモデルを使うか自分で管理したい場合に使う。通常の呼び出しは False のまま）。
     """
     use_default_model = (model is None)
     effective_key = key_rotator.current() if key_rotator.is_configured() else api_key
@@ -370,7 +450,11 @@ def call_gemini(
             current_model = model
             if use_default_model:
                 current_model = get_default_model()
-            
+            # 無料枠Liteプールのメンバーなら現在のローテーション先へ差し替える
+            # （model_pinned=True の場合は呼び出し元の指定を尊重してスキップ）
+            if not model_pinned:
+                current_model = model_rotator.resolve(current_model)
+
             config = _build_gemini_config(
                 current_model, thinking_level, 
                 max_output_tokens=max_output_tokens, 
@@ -433,12 +517,18 @@ def call_gemini(
             if attempt < max_retries:
                 wait_time, is_resource_limit = _calc_retry_wait(msg, attempt, retry_delay)
                 rotated = False
-                if is_resource_limit and key_rotator.is_configured() and key_rotator.has_next():
+                if is_resource_limit and not model_pinned and model_rotator.is_pool_member(current_model) and model_rotator.has_next():
+                    new_model = model_rotator.advance()
+                    wait_time = MODEL_ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
+                    rotated = True
+                    print_log(f"  [LLM] モデルローテーション: {new_model} に切替")
+                elif is_resource_limit and key_rotator.is_configured() and key_rotator.has_next():
                     new_key = key_rotator.advance()
                     client = _get_client(api_key=new_key)
                     wait_time = ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
                     rotated = True
                     _maybe_restore_tier_after_rotation()
+                    model_rotator.reset()  # 新しいキー = 別プロジェクトの独立枠なのでプール先頭から再開させる
                     print_log(f"  [LLM] キーローテーション: {key_rotator.index + 1}/{key_rotator.count} 番目のキーに切替")
                 if is_resource_limit and not rotated:
                     print_log(f"  [LLM] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
@@ -458,10 +548,15 @@ async def call_gemini_async(
     max_retries: int = 5,
     retry_delay: float = 3.0,
     log_dir: Optional[Any] = None, # Pathオブジェクトを想定
+    model_pinned: bool = False,
     **kwargs,
 ) -> str:
     """
     Gemini API を非同期ストリーミングで呼び出し、TTFT/TPS 等を計測する。
+
+    model_pinned: True の場合、呼び出し元が明示した model を ModelRotator の
+    resolve()/advance() で上書きしない（Phase4のラウンドロビン割り当てなど、呼び出し元が
+    プール内のどのモデルを使うか自分で管理したい場合に使う。通常の呼び出しは False のまま）。
     """
     use_default_model = (model is None)
     effective_key = key_rotator.current() if key_rotator.is_configured() else api_key
@@ -477,7 +572,11 @@ async def call_gemini_async(
             current_model = model
             if use_default_model:
                 current_model = get_default_model()
-            
+            # 無料枠Liteプールのメンバーなら現在のローテーション先へ差し替える
+            # （model_pinned=True の場合は呼び出し元の指定を尊重してスキップ）
+            if not model_pinned:
+                current_model = model_rotator.resolve(current_model)
+
             config = _build_gemini_config(
                 current_model, thinking_level, 
                 max_output_tokens=max_output_tokens, 
@@ -543,12 +642,18 @@ async def call_gemini_async(
             if attempt < max_retries:
                 wait_time, is_resource_limit = _calc_retry_wait(msg, attempt, retry_delay)
                 rotated = False
-                if is_resource_limit and key_rotator.is_configured() and key_rotator.has_next():
+                if is_resource_limit and not model_pinned and model_rotator.is_pool_member(current_model) and model_rotator.has_next():
+                    new_model = model_rotator.advance()
+                    wait_time = MODEL_ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
+                    rotated = True
+                    print_log(f"  [LLM async] モデルローテーション: {new_model} に切替")
+                elif is_resource_limit and key_rotator.is_configured() and key_rotator.has_next():
                     new_key = key_rotator.advance()
                     client = _get_client(api_key=new_key)
                     wait_time = ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
                     rotated = True
                     _maybe_restore_tier_after_rotation()
+                    model_rotator.reset()  # 新しいキー = 別プロジェクトの独立枠なのでプール先頭から再開させる
                     print_log(f"  [LLM async] キーローテーション: {key_rotator.index + 1}/{key_rotator.count} 番目のキーに切替")
                 if is_resource_limit and not rotated:
                     print_log(f"  [LLM async] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
@@ -574,6 +679,7 @@ async def translate_batch(
     rate_limiter: AsyncLimiter = None,
     log_dir: Optional[Any] = None,
     max_parse_retries: int = 2,
+    model_pinned: bool = False,
 ) -> List["TreeNode"]:
     """チャンク群を XML タグ形式で翻訳し、パース失敗時は再試行する。"""
     from .models import TreeNode
@@ -648,7 +754,7 @@ async def translate_batch(
             metrics_meta = {"section": section_name, "batch_id": batch_id}
             response = await call_gemini_async(
                 current_prompt, model=model, api_key=api_key, thinking_level=thinking_level,
-                metrics_metadata=metrics_meta, log_dir=log_dir
+                metrics_metadata=metrics_meta, log_dir=log_dir, model_pinned=model_pinned
             )
 
         # 3. 一括パース
@@ -701,6 +807,7 @@ def reset_pipeline_state() -> None:
     _get_limiters_dict().clear()
     _get_clients_dict().clear()
     tier_manager.set_tier(GeminiTier.PAID)
+    model_rotator.reset()
 
 
 def apply_tier_settings(tier: str | GeminiTier, api_key: str | None = None) -> Tuple[AsyncLimiter, dict]:

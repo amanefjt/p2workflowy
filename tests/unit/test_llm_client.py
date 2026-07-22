@@ -149,6 +149,120 @@ def test_get_client_reuses_instance_within_same_loop():
         llm_client._get_clients_dict().pop("loop-test-key", None)
 
 
+def test_model_rotator_resolve_advance_reset():
+    """ModelRotator: プール外モデルは素通し、プール内モデルはローテーション先へ差し替わり、
+    forward-only で最終要素より先には進まず、reset() で先頭に戻る。"""
+    from core.llm_client import model_rotator
+
+    try:
+        model_rotator.reset()
+        pool_first = model_rotator.current()
+
+        # プール外モデルはそのまま
+        assert model_rotator.resolve("gemini-3.6-flash") == "gemini-3.6-flash"
+        assert not model_rotator.is_pool_member("gemini-3.6-flash")
+
+        assert model_rotator.is_pool_member(pool_first)
+        assert model_rotator.resolve(pool_first) == pool_first
+
+        assert model_rotator.has_next()
+        second = model_rotator.advance()
+        assert second != pool_first
+        assert model_rotator.resolve(pool_first) == second  # プール内モデルはどれを渡しても現在地に揃う
+
+        # 最終要素で forward-only が止まる
+        while model_rotator.has_next():
+            model_rotator.advance()
+        last = model_rotator.current()
+        assert model_rotator.advance() == last  # これ以上進まない
+
+        model_rotator.reset()
+        assert model_rotator.current() == pool_first
+    finally:
+        model_rotator.reset()
+
+
+@pytest.mark.asyncio
+async def test_call_gemini_async_rotates_model_on_resource_limit():
+    """429/503 を検知したら、無料枠Liteプールの次のモデルへ切り替えて即リトライする
+    （キーローテーションと同じ forward-only 方式。同一キー内で完結するため client 再生成は不要）。"""
+    from core.llm_client import model_rotator
+
+    captured_models = []
+    call_count = {"n": 0}
+
+    async def _stream_side_effect(**kwargs):
+        captured_models.append(kwargs.get("model"))
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded, retry in 0.1s")
+
+        async def _gen():
+            yield _FakeChunk("translated", usage_metadata=_FakeUsage(10, 5))
+        return _gen()
+
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content_stream = AsyncMock(side_effect=_stream_side_effect)
+
+    model_rotator.reset()
+    pool_first = model_rotator.current()
+    assert model_rotator.has_next(), "テスト前提: DEFAULT_MODEL_FREE_POOL に2要素以上必要"
+    pool_second = model_rotator._local.pool[1]
+
+    try:
+        with patch("core.llm_client._get_client", return_value=fake_client), \
+             patch("core.llm_client.asyncio.sleep", new=AsyncMock()):
+            result = await call_gemini_async("prompt", model=pool_first, max_retries=3, retry_delay=0.01)
+
+        assert result == "translated"
+        assert captured_models == [pool_first, pool_second]
+    finally:
+        model_rotator.reset()
+
+
+@pytest.mark.asyncio
+async def test_call_gemini_async_model_pinned_bypasses_rotation():
+    """model_pinned=True の場合、429を検知しても ModelRotator の resolve()/advance() を
+    経由しない（Phase4のラウンドロビン割り当てが、共有のリアクティブなローテーション状態に
+    よって上書きされないようにするための分離）。同一モデルのままダウンシフト+待機で
+    リトライし、共有の model_rotator の index は変化しない。"""
+    from core.llm_client import model_rotator
+
+    captured_models = []
+    call_count = {"n": 0}
+
+    async def _stream_side_effect(**kwargs):
+        captured_models.append(kwargs.get("model"))
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded, retry in 0.1s")
+
+        async def _gen():
+            yield _FakeChunk("translated", usage_metadata=_FakeUsage(10, 5))
+        return _gen()
+
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content_stream = AsyncMock(side_effect=_stream_side_effect)
+
+    model_rotator.reset()
+    pool_second = model_rotator._local.pool[1]  # 先頭以外を明示的にピン留めして検証
+
+    try:
+        with patch("core.llm_client._get_client", return_value=fake_client), \
+             patch("core.llm_client.asyncio.sleep", new=AsyncMock()):
+            result = await call_gemini_async(
+                "prompt", model=pool_second, model_pinned=True, max_retries=3, retry_delay=0.01
+            )
+
+        assert result == "translated"
+        # ピン留めされたモデルのまま維持され、resolve()で先頭モデルへ引き戻されていない
+        assert captured_models == [pool_second, pool_second]
+        # 共有の ModelRotator 状態は変化していない（advance() が呼ばれていない）
+        assert model_rotator.current() == model_rotator.pool_models()[0]
+    finally:
+        model_rotator.reset()
+
+
 def test_get_client_recreates_when_event_loop_differs():
     """2026-07-21: reset_pipeline_state() は run_pipeline() 呼び出しごとに1回しかキャッシュを
     クリアしないが、1回の run_pipeline() 内でも Phase 1 と Phase 4 はそれぞれ別の

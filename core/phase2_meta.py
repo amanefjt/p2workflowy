@@ -13,7 +13,7 @@ from .llm_client import call_gemini, get_default_model
 from .engine.p2_meta.meta_analyzer import MetaAnalyzer
 
 
-# サンプリング閾値：レジュメ用モデル（gemini-3.5-flash / gemini-3.1-flash-lite）の
+# サンプリング閾値：レジュメ用モデル（gemini-3.6-flash / gemini-3.1-flash-lite）の
 # 入力上限 1,048,576 tok（docs/model_optimization.md §5.1）に対する安全マージンとして設定。
 # 論文・書籍とも同一モデルの同一コンテキスト窓を使うため、モードで閾値を分ける技術的根拠はない。
 # 書籍モードで実運用実績のある値をそのまま両モード共通の閾値として使う。
@@ -21,12 +21,14 @@ MAX_INPUT_CHARS = 1_500_000  # これ以上の場合のみサンプリング（�
 HEAD_CHARS = 1_000_000       # 冒頭部分
 TAIL_CHARS = 500_000         # 末尾部分
 
-# resume モデル（DEFAULT_MODEL_RESUME、既定 gemini-3.5-flash）の単発リクエスト実効入力上限は
-# 公称値（1,048,576 tok）よりはるかに低く、troubleshooting_log.md I-20 の実測では概ね
-# 735,000 字前後（文書によって文字/トークン比が振れるため目安）で 400 INVALID_ARGUMENT に
-# なることがある。MAX_INPUT_CHARS（サンプリング閾値）はこれより大きいため、サンプリングだけでは
-# 防げない。core/book_manager.py の RESUME_MODEL_SAFE_CHAR_LIMIT と同じ考え方・同じ値で、
-# 論文・章単位のレジュメ生成にも安全マージンを設ける（2026-07-21 レビュー指摘）。
+# resume モデル（DEFAULT_MODEL_RESUME、既定 gemini-3.6-flash）の単発リクエスト実効入力上限は
+# 公称値（1,048,576 tok）よりはるかに低く、troubleshooting_log.md I-20 の実測（gemini-3.5-flash
+# 時代）では概ね735,000 字前後（文書によって文字/トークン比が振れるため目安）で
+# 400 INVALID_ARGUMENT になることがある。gemini-3.6-flash（2026-07-22切替）でこの上限が
+# 同じかは未検証だが、保守的な値のためそのまま流用する。MAX_INPUT_CHARS（サンプリング閾値）は
+# これより大きいため、サンプリングだけでは防げない。core/book_manager.py の
+# RESUME_MODEL_SAFE_CHAR_LIMIT と同じ考え方・同じ値で、論文・章単位のレジュメ生成にも
+# 安全マージンを設ける（2026-07-21 レビュー指摘）。
 RESUME_MODEL_SAFE_CHAR_LIMIT = 600_000
 
 

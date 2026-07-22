@@ -126,10 +126,12 @@ Google は公式ドキュメントで具体値を**一切公開していない**
 |---|---|---|---|
 | `gemini-3.5-flash` | 〜10 | 〜250 | 〜250,000 |
 | `gemini-3-flash-preview` | 〜15 | 〜250〜500 | 〜250,000 |
-| `gemini-3.1-flash-lite` | 〜30 | 〜1,000〜1,500 | 〜250,000〜1,000,000 |
+| `gemini-3.1-flash-lite` | 15 | 500 | 250,000 |
 | `gemini-3.1-pro-preview` | 〜5 | 〜100 | 〜250,000 |
 
-> 2025-12 の無料枠改定で Flash 系の RPD が大幅削減された。Lite は相対的に余裕がある。
+> `gemini-3.1-flash-lite` の行は 2026-07-21 に OCR プロジェクトの AI Studio ダッシュボード（[aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit)）で実測した値（RPM=15, TPM=250K, RPD=500）に更新。旧の「〜30 RPM / 〜1,000〜1,500 RPD」は非公式の推測値だったが、実測とかなり乖離していたため置き換えた。他モデルの行は依然として非公式の参考値であり、プロジェクトごとに異なりうる点に注意。
+>
+> 2025-12 の無料枠改定で Flash 系の RPD が大幅削減された。
 
 ### 有料枠（Tier 1 以上）
 

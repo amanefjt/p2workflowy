@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 応答言語
+
+ユーザーへの応答は常に日本語で行う（コード・コミットメッセージ等は既存の慣習に従う）。
+
 ## プロジェクト概要
 
 英語学術論文・専門書籍の PDF/テキストを Gemini AI で解析し、Workflowy 向けの階層 Markdown に変換するツール。CLI (`main.py`) と Web API (`server.py`) の両モードを持つ。PDF（VLM OCR / Docling）とプレーンテキスト（Acrobat 抽出等）の両入力に対応。

@@ -148,7 +148,7 @@ def run_phase3(
                     print_log(f"  [Phase 3] TOCキャッシュ保存失敗: {e}")
 
         # 取得（キャッシュ経由またはLLM直後）
-        body_start_page = int(toc_data.get("body_start_page", 1))
+        body_start_page = int(toc_data.get("body_start_page") or 1)
         toc = toc_data.get("toc", [])
         page_offset = body_start_page - 1  # PDF物理ページ - 書籍ページ = offset
 

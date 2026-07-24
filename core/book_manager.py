@@ -6,7 +6,7 @@ import hashlib
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from .config import SessionState, print_log
+from .config import STATE_DIR, SessionState, print_log
 from .engine.p1_ingest.pdf_splitter import PDFSplitter
 from .engine.p1_ingest.routing import decide_pdf_mode as _decide_book_pdf_mode
 from .engine.p3_structure.state_integrator import StateIntegrator
@@ -39,7 +39,7 @@ class BookManager:
         
         # 物理データ主権: PDFの中身に応じた一意なハッシュを生成
         self.fingerprint = self._get_pdf_fingerprint(self.input_path)
-        self.session_dir = Path("state/book_sessions") / f"{self.book_title}_{self.fingerprint}"
+        self.session_dir = STATE_DIR / "book_sessions" / f"{self.book_title}_{self.fingerprint}"
         
         # グローバルコンテキスト保持用
         self.global_resume = ""

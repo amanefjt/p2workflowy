@@ -233,7 +233,17 @@ class BoundaryAdjudicator:
             ratio = (target.logical_page - prev.logical_page) / (nxt.logical_page - prev.logical_page)
             ratio = min(max(ratio, 0.0), 1.0)
         else:
-            ratio = 0.0
+            # 論理頁で区別できない場合（前付け・後付けで片側に確定章がない、
+            # または確定章ペアの論理頁が一致する）は、クラスタ内の並び順を
+            # 代わりに使う。ratio を常に 0.0 に固定すると、同じクラスタ内の
+            # 全章が同一の窓（lower_bound 起点）を割り当てられ、位置関係を
+            # 区別できなくなる（前付けが ADJUDICATION_MAX_PAGES を超える書籍で
+            # 再発した I-31 系の片側ケース）。
+            prev_idx = prev.index if prev is not None else -1
+            nxt_idx = nxt.index if nxt is not None else len(placements)
+            cluster_size = nxt_idx - prev_idx - 1
+            rank = index - prev_idx - 1
+            ratio = rank / (cluster_size - 1) if cluster_size > 1 else 0.5
         center = lower_bound + round(ratio * (upper_bound - lower_bound))
         half = ADJUDICATION_MAX_PAGES // 2
 

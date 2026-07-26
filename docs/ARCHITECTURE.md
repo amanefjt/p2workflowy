@@ -86,7 +86,16 @@ server.py (Web API) ┴──> core/pipeline.py :: run_pipeline()
 
 ### 2.5 LLM クライアント (`core/llm_client.py`)
 
-全ての Gemini API 呼び出しがここを通ります。特徴的なのは `TierManager`（シングルトン）で、429/503 エラーを検知すると自動的に有料ティアから無料ティア（Lite モデル）へダウンシフトする自己修復機構を持っています。モデル名やプロンプトのハードコードを避けるため、プロンプトは `core/coreprompts.json` に一元管理され、`@lru_cache` でキャッシュされます（変更後はプロセス再起動が必要な点に注意）。
+全ての Gemini API 呼び出しがここを通ります。単一の機構ではなく、直交する複数の自己修復・負荷分散の仕組みが組み合わさっています。
+
+- **`TierManager`**（シングルトン）: 429/503 を検知すると自動的に有料ティアから無料ティア（Lite モデル）へダウンシフトする。
+- **`KeyRotator`**: 複数の無料枠 API キー（別 GCP プロジェクト）と有料キーを束ね、429/503 起点でキーを切り替える。forward-only な `advance()` に加え、クールダウンが明けたキーへ**戻れる** `best_available()` を持つ。
+- **`ModelRotator`**: 同一キー内で、RPM/RPD が独立集計されている無料枠 Lite モデル複数種をローテーションする。`KeyRotator` と対になる設計で、`advance()`／`best_available()` の両方を持つ。
+- **`LaneCooldownRegistry`**（`lane_cooldown`）: `(api_key, model)` 単位でクールダウン中かどうかを記録する。`KeyRotator`/`ModelRotator`/`TierManager` が `threading.local()` ベースでスレッドごとに独立しているのに対し、こちらは「このレーンは枯渇している」という事実がスレッドを跨いで正しいという理由から**意図的にプロセスグローバル**にしている。
+
+書籍モードの章並列化（§2.1）は、`KeyRotator`/`ModelRotator`/`TierManager` がスレッドローカルであることを前提に、章スレッドごとに `KeyRotator.restrict_to()` でキーを1本排他割り当てすることで、複数スレッドが同一レートリミッタを共有して429を多発させないよう安全性を担保しています。設計判断の経緯・実測値は `docs/model_optimization.md` §6〜§10 を参照してください。
+
+モデル名やプロンプトのハードコードを避けるため、プロンプトは `core/coreprompts.json` に一元管理され、`@lru_cache` でキャッシュされます（変更後はプロセス再起動が必要な点に注意）。
 
 ---
 

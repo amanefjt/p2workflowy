@@ -321,6 +321,28 @@ class ModelRotator:
             self._local.index += 1
         return self.current()
 
+    def best_available(self, is_available: Callable[[str], bool]) -> str:
+        """429起点のフォールバック用。KeyRotator.best_available()（§9）と同じ設計で、
+        forward-only な advance() と異なりクールダウン中のモデルを避けて選ぶ。現在の
+        モデルがまだ available ならそれを優先して返す（無駄な切替をしない）。他に
+        available なモデルがあればプール順で最初に見つかったものへ切り替える。全モデルが
+        使用不可（＝全レーンがクールダウン中）の場合は、既存の forward-only な advance()
+        にフォールバックする（新しい情報が無い以上、従来どおりの挙動に委ねるのが安全）。
+
+        既存の advance() 自体はシグネチャ・forward-only の挙動とも一切変更していない
+        （既存テストが依存しているため）。こちらは新規に追加した代替 API。
+        """
+        self._ensure_local()
+        current = self.current()
+        if is_available(current):
+            return current
+        for m in self._local.pool:
+            if m != current and is_available(m):
+                self._local.index = self._local.pool.index(m)
+                return self.current()
+        # 全モデル使用不可 → 新しい判断材料が無いので従来の forward-only にフォールバック
+        return self.advance()
+
     def resolve(self, model: str | None) -> str | None:
         """model がプールのメンバーなら現在のローテーション先へ差し替える。プール外はそのまま返す。"""
         self._ensure_local()
@@ -861,11 +883,14 @@ def call_gemini(
                     # モデルローテーションをスキップしてキー切替へ直行する（保守的デフォルト）。
                     tpm_blocks_model_rotation = quota_kind == "tpm" and not _is_model_scoped_quota(e)
                 if (is_resource_limit and not model_pinned and not tpm_blocks_model_rotation
-                        and model_rotator.is_pool_member(current_model) and model_rotator.has_next()):
-                    new_model = model_rotator.advance()
-                    wait_time = MODEL_ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
-                    rotated = True
-                    print_log(f"  [LLM] モデルローテーション: {new_model} に切替")
+                        and model_rotator.is_pool_member(current_model)):
+                    new_model = model_rotator.best_available(
+                        lambda m: not lane_cooldown.is_cooling(effective_key, m)
+                    )
+                    if new_model != current_model:
+                        wait_time = MODEL_ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
+                        rotated = True
+                        print_log(f"  [LLM] モデルローテーション: {new_model} に切替")
                 elif is_resource_limit and not key_pinned and key_rotator.is_configured():
                     old_key = effective_key
                     new_key = key_rotator.best_available(
@@ -1006,11 +1031,14 @@ async def call_gemini_async(
                     # モデルローテーションをスキップしてキー切替へ直行する（保守的デフォルト）。
                     tpm_blocks_model_rotation = quota_kind == "tpm" and not _is_model_scoped_quota(e)
                 if (is_resource_limit and not model_pinned and not tpm_blocks_model_rotation
-                        and model_rotator.is_pool_member(current_model) and model_rotator.has_next()):
-                    new_model = model_rotator.advance()
-                    wait_time = MODEL_ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
-                    rotated = True
-                    print_log(f"  [LLM async] モデルローテーション: {new_model} に切替")
+                        and model_rotator.is_pool_member(current_model)):
+                    new_model = model_rotator.best_available(
+                        lambda m: not lane_cooldown.is_cooling(effective_key, m)
+                    )
+                    if new_model != current_model:
+                        wait_time = MODEL_ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
+                        rotated = True
+                        print_log(f"  [LLM async] モデルローテーション: {new_model} に切替")
                 elif is_resource_limit and not key_pinned and key_rotator.is_configured():
                     old_key = effective_key
                     new_key = key_rotator.best_available(

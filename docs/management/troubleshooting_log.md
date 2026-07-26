@@ -471,3 +471,35 @@ Spec B 完了により書籍モードで「スキャン書籍を最後まで読�
 - **対策**: `core/llm_client.py`に`_is_model_scoped_quota()`を新設し、quotaId等に`"PerModel"`という文字列が確認できる場合のみ、TPM起因の429でもモデルローテーションを試すよう分岐条件を修正（`tpm_blocks_model_rotation = quota_kind == "tpm" and not _is_model_scoped_quota(e)`）。`"PerModel"`が確認できない場合（quotaIdの形式が不明、503でdetailsが乏しい等）は、根拠のない前提で判断を変えず、保守的に従来どおりモデルローテーションをスキップしてキー切替へ直行する。TPM以外（RPM/RPD/unknown）の分岐は変更していない。
 - **章並列化との関連**: この訂正は章並列化（§8/§10）の設計とも整合する。章スレッドごとにキーを1本ずつ排他割り当てする設計は無料キーという有限資源の消費を最小化する狙いも含んでおり、TPM起因の429で無条件にキー切替していた旧実装より、まず同一キー内のモデル切替で回復を試みる訂正後の実装のほうが、章並列化時のキープール消費を抑えられる。
 - **検証**: `tests/unit/test_llm_client.py`に、実際に踏んだ429のレスポンスJSONをそのまま使ったテスト（`REAL_TPM_429_DETAILS`）を追加。`_classify_quota_violation()`が`"tpm"`、`_extract_retry_delay_seconds()`が`25.0`、新設した`_is_model_scoped_quota()`が`True`を返すことを確認。既存のTPMテスト（quotaIdに`PerModel`を含む実データ相当の文字列を使っていた）は新しい仕様に合わせて「モデルローテーションが発火する」テストに書き換え、加えて`PerModel`の手がかりが無い合成quotaIdでは従来どおりキー切替に直行することを確認する新規テストを追加。全472件（既存466件＋6件）パス。実際にモデルローテーションで429から回復するケースの実地確認（訂正後の実装でこの429を再現しての動作確認）は未実施（書籍実走行では踏んだ429が1件のみで、訂正前の実装のままキー切替で回復したケースだった）。
+
+### I-42. 書籍の前付け・後付けクラスタで層3裁定の探索窓が全章同一に潰れる（対応済み）
+
+- **事象**: 2026-07-26、過去1ヶ月分のコード変更に対する多角的レビュー（サブエージェント3系統並行）で発見。`BoundaryAdjudicator._interval()`（`core/engine/p1_ingest/boundary_adjudicator.py`）が、要審査クラスタの前または後に確定章が存在しない場合（本の先頭の前付け＝Acknowledgments/Preface/Introduction等、または末尾の後付け）に、区間が `ADJUDICATION_MAX_PAGES`（32頁）を超えると、クラスタ内の全ての章が同一の探索窓（区間先頭起点）を割り当てられていた。
+- **根本原因**: I-31（同一確定章ペアに挟まれたクラスタが同じ窓を割り当てられる問題）の修正は、`prev`・`nxt` の**両方**が確定章として存在するケースの論理頁ベース比率補間のみを実装しており、片側（`prev is None` または `nxt is None`）で `ratio` が常に `0.0` に固定される旧コードパスがそのまま残っていた。前付け・後付けはまさに片側に確定章が無いケースであり、I-31が「解消した」はずの症状が形を変えて再発していた。
+- **対策**: `_interval()` の `else` 分岐（論理頁で比率を出せない場合）を、クラスタ内での並び順（`index` の相対位置）に基づく比率計算に変更。`prev`/`nxt` の `.index`（配列位置、常に構築時の `enumerate` と一致）からクラスタの範囲と対象のクラスタ内順位を求め、`rank / (cluster_size - 1)` を比率として使う。両側に確定章があり論理頁が異なる既存の主経路（I-31修正）は変更していない。
+- **検証**: `tests/unit/test_boundary_adjudicator.py` に前付けクラスタ（`prev is None`）・後付けクラスタ（`nxt is None`）それぞれで複数章が異なる窓を割り当てられることを確認する回帰テストを追加。単体テスト474件（既存472件＋2件）パス。実際の前付けの多い書籍PDFでの実地確認は未実施。
+
+### I-43. 裸の数字だけの章タイトル（'1' 等）が本文中の孤立数字行に誤マッチしうる（対応済み）
+
+- **事象**: 2026-07-26、同上のレビューで発見。`PDFSplitter._classify_match()`（`core/engine/p1_ingest/pdf_splitter.py`）は、TOCタイトルが `'Chapter 1'` のように説明語を伴う場合は `_normalize_title()` が章番号プレフィックスごと剥がして `norm_title` が空文字列になり、`title_lower` による前方一致フォールバック（行頭一致＋非英数字境界チェック）が働く。しかしTOCタイトルが説明語なしの裸の数字そのもの（`'1'` 等）だと `_normalize_title('1')` は `'1'` のまま非空になり、通常の行単位一致経路に入る。この経路には「一致した行が本当に章扉か」を区別する仕組みが無く、本文中に孤立した `'1'` の行（脚注番号・リスト項目等）があると隣接行に章マーカーも頁番号も無い場合でも無条件に `"title"` を返していた。
+- **根本原因**: I-22のフォールバック設計は「説明語つきタイトルが空文字列に正規化される」ケースのみを想定しており、「タイトル自体が裸の数字で、かつ空文字列に正規化されない」ケースが未対応のまま残っていた。
+- **対策**: `PDFSplitter.BARE_NUMERAL_RE`（数字・ローマ数字のみに一致）を新設し、`_classify_match()` で一致に使った文字列（`norm_title` または `title_lower`）が裸数字かどうかを判定。裸数字一致の場合、隣接行に章マーカーも頁番号も見つからなければ `"title"` と断定せず次の候補行を探す（`continue`）よう変更。同じ理由で、裸数字タイトルは Pass 2（複数行結合による前方一致）もスキップする（`'chapter 1'` と同様、過剰一致の危険があるため）。
+- **検証**: `tests/unit/test_pdf_splitter.py` に3件追加（本文中の孤立数字行を章扉と誤判定しないこと／章マーカー隣接なら章扉と判定すること／頁番号隣接ならヘッダーと判定すること）。単体テスト99件（既存96件＋3件）パス。
+
+### I-44. ModelRotator.advance() が429クールダウン中のモデルへ切り替えうる（対応済み）
+
+- **事象**: 2026-07-26、同上のレビューで発見。`KeyRotator.best_available()`（I-41以前から存在、§9）はキー切替候補から `lane_cooldown.is_cooling()` でクールダウン中のレーンを除外するが、`ModelRotator.advance()`（`call_gemini`/`call_gemini_async` のリトライループ、`core/llm_client.py`）には対応するチェックが無く、forward-only に次のモデルへ機械的に進むだけだった。無料枠Liteプールは通常2モデルのみのため、「一度両方のモデルを使い切った後、片方が既に回復していても forward-only では戻れず、無駄なダウンシフト待機になる」という非対称なギャップがあった（1論文のPhase4は同一スレッド内の非同期タスクとして複数セクションを並行実行するため、`ModelRotator` はスレッドローカルでもタスク間で共有される）。
+- **対策**: `ModelRotator` に `KeyRotator.best_available()` と同じ設計の `best_available(is_available)` を追加（現在のモデルが available ならそのまま、無ければプール内の他の available なモデルへ、全滅なら従来の forward-only `advance()` にフォールバック）。`call_gemini`/`call_gemini_async` の両方のリトライループで `model_rotator.advance()` の直接呼び出しを `model_rotator.best_available(lambda m: not lane_cooldown.is_cooling(effective_key, m))` に置き換えた。既存の `advance()` 自体はシグネチャ・forward-only 挙動とも変更していない（他の呼び出し元・既存テストに影響しない）。
+- **検証**: `tests/unit/test_llm_client.py` に `ModelRotator.best_available()` の単体テスト4件（現在のモデルが available ならそのまま／片方が使用不可なら他方へ／進んだ先もクールダウン中で以前のモデルが回復していれば戻る／全滅時は forward-only にフォールバック）を追加。単体テスト53件（既存49件＋4件）パス。実際の429連鎖での回復確認（実地）は未実施。
+
+### 検討したが対応不要と判断したもの
+
+- **`BookManager.run_one_chapter()` の `ch["title"]` アクセスがtryの外にある件**: 2026-07-26のレビューで「docstringは『例外は内部で吸収』と謳うが `ch_title = ch["title"]` がtryの外にあり契約と矛盾する」という指摘があったが、調査の結果、同じ無防備なアクセス（`core/book_manager.py:235`、`pending` 構築ループ内）がそもそも `run_one_chapter()` に到達する**前**に存在し、そこでガード無く実行されている。つまり `title` キーが欠けた章辞書があれば `run_one_chapter()` に到達する前に `run()` 全体がクラッシュするため、`run_one_chapter()` 側だけを直しても実際には到達不能で無意味。`ch` は本ファイル内で `PDFSplitter.split()` の出力から組み立てられる内部契約（外部入力ではない）であり、"title" キー欠落は起こり得ないシナリオへの防御にあたるため、対応しないことにした。
+
+### 対応を見送った軽微な指摘（実害なし、次回レビュー時に再検討不要）
+
+2026-07-26のレビューで見つかったが、実害が無い／小さいため意図的に未対応のまま残したもの。将来また同じ箇所を指摘されても、以下を読めば再調査は不要。
+
+- **`core/engine/p4_translate/prompt_builder.py:49-60` `TranslationPromptBuilder.build_section_prompt()` が未使用スタブ**: 本体が `pass` のみで、呼び出し元が無い（`grep` で確認済み）。将来の拡張用プレースホルダーとコメントで明記されており、実行時の影響は無い。
+- **glossary（用語集CSV）とのマージが `core/phase2_meta.py`（`merge_with_glossary` 相当）と `core/phase4_translate.py:99`（`build_term_layer`）の2箇所で行われている**: 両方とも「CSV優先」で結果は一致するため誤動作はしないが、処理としては冗長。整理するなら一方に統一する形になるが、優先度は低い。
+- **`--book-concurrency` が無料キー本数を超える場合の頭打ち**: `docs/model_optimization.md` §6（未検証・既知の限界）に移設して記載。クラッシュ・デッドロックはしない。

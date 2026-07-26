@@ -486,6 +486,12 @@ class PDFSplitter:
         if not nonempty:
             return None
 
+        # TOC タイトルが裸の数字・ローマ数字だけ（'1' 等、説明語を伴わない
+        # 章番号のみの表記）の場合、一致行そのものが脚注番号やリスト項目の
+        # 孤立行と区別できない。隣接行に確証（章マーカー／頁番号）が無ければ
+        # 章扉と断定してはならない。
+        is_bare_numeral = bool(self.BARE_NUMERAL_RE.match(norm_title or title_lower))
+
         # Pass 1: 行単位
         for pos, line in enumerate(nonempty[:self.HEADING_SCAN_LINES]):
             if norm_title:
@@ -526,11 +532,14 @@ class PDFSplitter:
                 return "title"
             if any(self._parse_page_number(n) is not None for n in neighbors):
                 return "header"
+            if is_bare_numeral:
+                # 根拠薄弱な裸数字一致は、他に確証が無ければ次の候補行を探す
+                continue
             return "title"
 
-        if not norm_title:
-            # 裸の章番号は複数行結合一致（Pass 2）を行わない。'chapter 1' の
-            # ような文字列は本文中のあらゆる箇所に過剰一致してしまうため。
+        if not norm_title or is_bare_numeral:
+            # 裸の章番号は複数行結合一致（Pass 2）を行わない。'chapter 1' や
+            # '1' のような文字列は本文中のあらゆる箇所に過剰一致してしまうため。
             return None
 
         # Pass 2: 冒頭数行の結合（複数行に割れたタイトル）
@@ -662,6 +671,10 @@ class PDFSplitter:
         t = re.sub(r'^[\dIVXivx]+[.:]?\s+', '', t)
         t = re.sub(r'[^\w\s]', ' ', t)
         return ' '.join(t.lower().split())
+
+    # 裸の数字・ローマ数字だけの一致（本文中の脚注番号・リスト項目と
+    # 区別できないため、隣接行の確証が無い限り章扉と断定しない）
+    BARE_NUMERAL_RE = re.compile(r'^[\divxlc]+$')
 
     TOC_HEADING_RE = re.compile(
         r'^\s*(TABLE\s+OF\s+CONTENTS|CONTENTS|目\s*次)\s*$',

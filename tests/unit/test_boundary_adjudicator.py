@@ -159,6 +159,41 @@ class TestInterval:
         adj = BoundaryAdjudicator(api_key="k", model="m", cache={}, save_cache=lambda: None)
         assert adj._interval(p, 2, total_pages=200) == (51, 69)
 
+    def test_prefatory_cluster_gets_distinct_windows_when_no_confirmed_predecessor(self):
+        """本の先頭（前に確定章が無い）に複数の fallback 章が並ぶ前付けクラスタで、
+        区間が ADJUDICATION_MAX_PAGES を超える場合、片側にしか確定章が無いために
+        論理頁ベースの比率が使えなくても、クラスタ内の並び順に応じて異なる窓を
+        割り当てるべき。旧実装は prev が None だと ratio を常に 0.0 に固定し、
+        クラスタ全員が区間先頭の同じ窓（lower_bound 起点）に潰れていた。
+        """
+        p = placements([
+            (1, 1, False),      # Acknowledgments fallback
+            (5, 1, False),      # Preface fallback
+            (10, 1, False),     # Introduction fallback
+            (20, 60, True),     # Chapter 1 確定
+        ])
+        adj = BoundaryAdjudicator(api_key="k", model="m", cache={}, save_cache=lambda: None)
+
+        windows = [adj._interval(p, i, total_pages=200) for i in range(3)]
+
+        assert len(set(windows)) == 3, "前付けクラスタの全章が同じ窓に潰れてはならない"
+        assert windows[0][0] < windows[1][0] < windows[2][0]
+
+    def test_postfatory_cluster_gets_distinct_windows_when_no_confirmed_successor(self):
+        """本の末尾（後に確定章が無い）の fallback クラスタでも同様に窓を分けるべき。"""
+        p = placements([
+            (100, 150, True),   # 最終確定章
+            (110, 150, False),  # Afterword fallback
+            (120, 150, False),  # Index fallback
+        ])
+        adj = BoundaryAdjudicator(api_key="k", model="m", cache={}, save_cache=lambda: None)
+
+        window1 = adj._interval(p, 1, total_pages=200)
+        window2 = adj._interval(p, 2, total_pages=200)
+
+        assert window1 != window2, "後付けクラスタの全章が同じ窓に潰れてはならない"
+        assert window1[0] < window2[0]
+
 
 def make_mock_doc(page_texts: list[str]) -> MagicMock:
     doc = MagicMock()

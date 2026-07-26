@@ -627,6 +627,36 @@ class TestClassifyMatch:
         text = "Chapter 10\nPuzzles of Scale\nBody begins here..."
         assert s._classify_match(text, "", None, "chapter 1") is None
 
+    # --- 裸の数字だけの TOC タイトル（'1' 等、説明語を伴わない章番号のみ）---
+    # norm_title は '1' のまま非空になり（Chapter 等の説明語が無いため
+    # _normalize_title が末尾空白を要求する2番目の正規表現にマッチしない）、
+    # title_lower フォールバックとは別の経路を通る。
+
+    def test_bare_numeral_norm_title_stray_digit_in_prose_is_not_title(self):
+        """本文中に孤立した '1' の行（脚注番号・リスト項目等）があっても、
+        隣接行に章マーカーも頁番号も無ければ章扉と断定してはならない。
+        """
+        s = make_splitter()
+        text = (
+            "Some ordinary preceding line of prose here.\n"
+            "1\n"
+            "And the discussion continues normally without any chapter marker nearby."
+        )
+        assert s._classify_match(text, "1", None, "1") is None
+
+    def test_bare_numeral_norm_title_with_chapter_marker_neighbor_is_title(self):
+        """隣接行が明示的な章マーカー（'CHAPTER'）なら、裸数字一致でも
+        章扉と判定してよい（確証があるケース）。"""
+        s = make_splitter()
+        text = "CHAPTER\n1\nBody text begins here..."
+        assert s._classify_match(text, "1", None, "1") == "title"
+
+    def test_bare_numeral_norm_title_with_page_number_neighbor_is_header(self):
+        """隣接行が裸の頁番号ならランニングヘッダーと判定する。"""
+        s = make_splitter()
+        text = "1\n88\nbody text continues here"
+        assert s._classify_match(text, "1", None, "1") == "header"
+
 
 # ============================================================
 # 候補スコアリング (I-22)

@@ -182,6 +182,68 @@ def test_model_rotator_resolve_advance_reset():
         model_rotator.reset()
 
 
+def test_model_rotator_best_available_returns_current_model_if_available():
+    """KeyRotator.best_available() と同じ設計（§9）。現在のモデルが available なら
+    無駄な切替をせずそのまま返す。"""
+    from core.llm_client import model_rotator
+
+    try:
+        model_rotator.reset()
+        pool_first = model_rotator.current()
+        assert model_rotator.best_available(lambda m: True) == pool_first
+    finally:
+        model_rotator.reset()
+
+
+def test_model_rotator_best_available_picks_next_available_when_current_is_not():
+    from core.llm_client import model_rotator
+
+    try:
+        model_rotator.reset()
+        pool_first = model_rotator.current()
+        pool_second = model_rotator.pool_models()[1]
+        avail = {pool_first: False, pool_second: True}
+        assert model_rotator.best_available(lambda m: avail.get(m, False)) == pool_second
+    finally:
+        model_rotator.reset()
+
+
+def test_model_rotator_best_available_returns_to_recovered_model():
+    """旧 advance() の forward-only と異なり、一度進んだ先のモデルもクールダウン中に
+    なり、かつ以前のモデルが回復していれば戻れる（I-31系と同じ片側フォールバックの
+    再発防止と対をなす、モデル軸のクールダウン考慮漏れの修正）。"""
+    from core.llm_client import model_rotator
+
+    try:
+        model_rotator.reset()
+        pool_first = model_rotator.current()
+        pool_second = model_rotator.pool_models()[1]
+
+        avail = {pool_first: False, pool_second: True}
+        assert model_rotator.best_available(lambda m: avail.get(m, False)) == pool_second
+
+        # pool_second もクールダウンに入り、pool_first は既に回復済み
+        avail = {pool_first: True, pool_second: False}
+        assert model_rotator.best_available(lambda m: avail.get(m, False)) == pool_first
+    finally:
+        model_rotator.reset()
+
+
+def test_model_rotator_best_available_all_unavailable_falls_back_to_forward_only_advance():
+    """全モデルが使用不可（＝全レーンがクールダウン中）なら、新しい判断材料が無いので
+    従来の forward-only な advance() にフォールバックする。"""
+    from core.llm_client import model_rotator
+
+    try:
+        model_rotator.reset()
+        pool_first = model_rotator.current()
+        result = model_rotator.best_available(lambda m: False)
+        assert result != pool_first
+        assert result == model_rotator.pool_models()[1]
+    finally:
+        model_rotator.reset()
+
+
 @pytest.mark.asyncio
 async def test_call_gemini_async_rotates_model_on_resource_limit():
     """429/503 を検知したら、無料枠Liteプールの次のモデルへ切り替えて即リトライする

@@ -293,6 +293,7 @@ Rate Limit の具体的な数値・料金は `gemini_models.md` §4・§5 を参
 - **クールダウンは half-open ではなく単純な即時フル復帰**（§3.7 で不採用の理由を記載）。クールダウン秒数（RPM/TPM=60秒、unknown=30秒）は今回新規に設計した値で実運用でのチューニング余地がある。
 - **同一書籍の同時重複アップロード**: `BookManager.session_dir` は内容フィンガープリント基準で `task_id` に基づかないため、異なる2ユーザーがほぼ同時に同一書籍をアップロードすると競合書き込みの可能性が残る（Web版、対応保留）。
 - **キーローテーションは429/503のみをトリガーにする**。無効・失効した無料キーは `max_retries` 回リトライして失敗し、有料キーへは切り替わらない。
+- **`--book-concurrency` が無料キー本数を超えると無警告で頭打ちになる**（2026-07-26 コードレビュー指摘）。`book_manager.py` は指定値をそのまま `ThreadPoolExecutor(max_workers=...)` に渡すが、`key_queue` には `len(free_keys)` 本しか積まれないため、超過分のスレッドは `key_queue.get()` でブロックしたまま実質的な並列度が `len(free_keys)` に頭打ちになる。クラッシュ・デッドロックはしない（他章のキー返却で必ず再開する）が、`--help` の文言にもこの上限は明記されておらず、ユーザーが意図した並列度より遅くなっていることに気づきにくい。対応は見送り（実害が「遅いだけ」で小さいため）。直すなら `effective_concurrency = min(effective_concurrency, len(free_keys))` のクランプと、超過時の `print_log` 警告を追加する形になる。
 
 ---
 
@@ -311,3 +312,4 @@ Rate Limit の具体的な数値・料金は `gemini_models.md` §4・§5 を参
 - **2026-07-26（午前）**: 無料キー4本×Liteモデル2種の2軸ラウンドロビン（8レーン、`key_pinned`導入）を実装。`VLM_SEMAPHORE_LIMIT` を10→20に引き上げ。
 - **2026-07-26（同日）**: レーン単位のクールダウン（circuit breaker、`LaneCooldownRegistry`）を実装し `KeyRotator`/`ModelRotator` の forward-only 不可逆性を緩和。書籍実走行検証で「TPMは2モデルで共有」という§7当初の前提が誤りだったと判明（`quotaId` が `PerModel` であることを実データで確認）し、`_is_model_scoped_quota()` で訂正（`troubleshooting_log.md` I-41）。
 - **2026-07-26（同日）**: 書籍モードの章並列化（`ThreadPoolExecutor` + `KeyRotator.restrict_to()`）を実装し3章限定で実走行検証。Phase4 のセクション内バッチは直列のまま維持することを決定（§3.1）。Gemma併用を不採用と結論（§3.2）。
+- **2026-07-26（コードレビュー）**: `ModelRotator` にも `KeyRotator.best_available()` と同じクールダウン考慮のフォールバックAPIを追加（`best_available()`）。`call_gemini`/`call_gemini_async` のリトライループを forward-only な `advance()` 直呼びから切替え、無料枠Liteプールを一巡した後に以前のモデルが回復していれば戻れるようにした（`troubleshooting_log.md` I-44）。

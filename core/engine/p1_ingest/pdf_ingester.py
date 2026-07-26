@@ -46,12 +46,17 @@ async def run_pdf_ingestion_async(
     is_book: bool = False,
     heavy_ocr: bool = False,
     max_pages: Optional[int] = None, # 追加
+    vlm_concurrency: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """PDF から詳細な要素（スパンまたは VLM ブロック）を抽出する。"""
+    """PDF から詳細な要素（スパンまたは VLM ブロック）を抽出する。
+
+    vlm_concurrency: OCRManager の同時実行数を上書きする（省略時はクラス既定値
+    VLM_SEMAPHORE_LIMIT。書籍モードの章並列化で、1章あたりのVLM同時実行数を絞るために使う）。
+    """
     if state: state.update_status(1, "PDF解析中 (Pass 1)...", 5)
-    
+
     from .spread_splitter import SpreadSplitter
-    ocr = OCRManager(api_key=api_key, model=model)
+    ocr = OCRManager(api_key=api_key, model=model, vlm_concurrency=vlm_concurrency)
     ingester = PhysicalIngester()
     doc = fitz.open(pdf_path)
     total_pages = len(doc)

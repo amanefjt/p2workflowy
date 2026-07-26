@@ -1,144 +1,60 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## 応答言語
-
-ユーザーへの応答は常に日本語で行う（コード・コミットメッセージ等は既存の慣習に従う）。
-
 ## プロジェクト概要
 
-英語学術論文・専門書籍の PDF/テキストを Gemini AI で解析し、Workflowy 向けの階層 Markdown に変換するツール。CLI (`main.py`) と Web API (`server.py`) の両モードを持つ。PDF（VLM OCR / Docling）とプレーンテキスト（Acrobat 抽出等）の両入力に対応。
+英語学術論文・専門書籍の PDF/テキストを Gemini AI で解析し、Workflowy 向けの階層 Markdown に変換するツール。CLI (`main.py`) と Web API (`server.py`) の 2 モード。
 
-全体の設計思想・「なぜこうなっているか」を含む説明は `docs/ARCHITECTURE.md` を参照(本ファイルは Claude Code 向けの運用リファレンス、ARCHITECTURE.md は人間・AI 双方向けの設計解説という役割分担)。
+設計の全体像と「なぜこうなっているか」は `docs/ARCHITECTURE.md`（人間・AI 双方向けの設計解説）。本ファイルは Claude Code 向けの運用リファレンスで、**コードや `ls` から分かることは書かず、ハマりどころだけを書く**。
 
-## 環境セットアップ
+## セットアップ / コマンド
 
-```bash
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env  # GEMINI_API_KEY または GOOGLE_API_KEY を設定
-```
+必須環境変数は `GEMINI_API_KEY`（または `GOOGLE_API_KEY`）。`.env.example` をコピーして設定する。`APP_ADMIN_PASSCODE` は Web 版で管理者がサーバー側キーを使う場合のみ。
 
-必須環境変数: `GEMINI_API_KEY`（または `GOOGLE_API_KEY`）。`APP_ADMIN_PASSCODE` は Web 版で管理者がサーバー側キーを使う際に必要。
-
-## よく使うコマンド
+自明でないフラグ:
 
 ```bash
-# Web サーバー起動
-python3 server.py
-
-# CLI: 論文モード（テキスト or PDF）
-python3 main.py data/paper.txt
-python3 main.py data/paper.pdf
-
-# CLI: 書籍モード
-python3 main.py data/book.pdf --book
-
-# CLI: テスト用低コストモード（gemini-3.1-flash-lite）
-python3 main.py data/paper.txt --lite
-
-# CLI: 中断再開（フェーズ番号 1-5 を指定）
-python3 main.py data/paper.pdf --session <session_id> --resume 4
-
-# テスト実行（全体）
-python3 -m pytest tests/unit/ -v
-
-# テスト実行（単一ファイル）
-python3 -m pytest tests/unit/test_json_pipeline.py -v
+python3 main.py data/book.pdf --book                       # 書籍モード
+python3 main.py data/paper.txt --lite                      # 低コスト検証（Lite モデル固定）
+python3 main.py data/paper.pdf --session <id> --resume 4   # フェーズ 4 から再開
 ```
 
-## アーキテクチャ
+テストは `python3 -m pytest tests/unit/ -v`。
 
-### パイプライン（5 フェーズ）
+## パイプラインのハマりどころ
 
-`main.py` / `server.py` → `core/pipeline.py::run_pipeline()` → 各フェーズ
+5 フェーズ構成（Phase 1 前処理 → 2 DNA 抽出 → 3 構造化 → 4 翻訳 → 5 出力）とモジュール対応は `docs/ARCHITECTURE.md` §2 を参照。中間状態は `state/<session_id>/phaseN_*.json` に永続化され、`--resume <N>` で任意フェーズから再開できる。**この永続化互換性を壊さないこと**（`from_dict()` が未知キーを無視するのはそのため）。
 
-| フェーズ | モジュール | 役割 | 状態ファイル |
-|---|---|---|---|
-| Phase 1 | `core/phase1_preprocessor.py` | PDF OCR またはテキスト解析 | `phase1_preprocessor.json` |
-| Phase 2 | `core/phase2_meta.py` | DNA 抽出・要約・キーワード | `phase2_meta.json` |
-| Phase 3 | `core/phase3_structure.py` | 論理構造ツリー構築 | `phase3_structure.json`, `phase3_sections.json` |
-| Phase 4 | `core/phase4_translate.py` | スライディングウィンドウ翻訳 | `phase4_translate.json` |
-| Phase 5 | `core/phase5_export.py` | Markdown / Workflowy 出力 | `_p2.md`, `_p2.txt` |
-
-中間状態は `state/<session_id>/` に JSON として保存される。`--resume <N>` で任意フェーズから再開可能。
-
-### エンジン層（`core/engine/`）
-
-各フェーズの内部ロジックは `core/engine/` 配下のサブパッケージに閉じ込められている。フェーズのファサード（`core/phaseN_*.py`）はオーケストレーションのみ担当し、アルゴリズムはエンジン層に置く。
-
-サブパッケージは `p1_ingest/`（PDF/テキスト取り込み）, `p2_meta/`（DNA 抽出ロジック）, `p3_structure/`（構造ツリー・章境界構築）, `p4_translate/`（並列翻訳）, `p5_export/`（Markdown/Workflowy出力）の5つ。個別モジュールの最新一覧・役割は **`docs/ARCHITECTURE.md` §2.3** を参照(このファイルには詳細を重複して書かない — 移設のたびに陳腐化するため)。
-
-### Phase 1 の入力ルーティング
-
-`run_phase1_unified()` が `.pdf` か否かで自動判定する。
-
-- **PDF ルート** (`_run_phase1_pdf`):
-  - まず `is_docling_viable()` で Docling 適用可否を判定し、デジタル PDF なら Docling（`docling_ingester.py`）を優先使用。
-  - Docling が不適なスキャン PDF 等は `run_pdf_ingestion()` → VLM または物理抽出にフォールバック。
-- **テキストルート** (`_run_phase1_text`): 段落分割 → `TextStructureExtractor` (LLM) で見出し抽出 → role 付き RawChunk
-
-**テキスト分割の自動判定**: `\n\n` 分割後チャンク数が `\n` 分割後の 1/10 未満なら、Acrobat 形式（1行=1段落）と判定して `\n` 分割を使う。
-
-### Phase 2 の DNA と intro_pre_heading
-
-Phase 2 が抽出する DNA には `intro_pre_heading`（最初の節タイトル前の見出しなし序論のチャンク ID 範囲）が含まれる。Phase 3 はこれを使って見出しなし Introduction を独立した `[Unlabeled Section]` として正しく分離する。
-
-### Phase 3 の [Unlabeled Section] の扱い
-
-学術論文では Abstract 後に見出しのない Introduction 本文が続くパターンが一般的（NST 論文等）。このケースは `[Unlabeled Section]` として正しい動作であり、バグではない。問題となるのは本来ある節タイトルが検出されずに前のセクションに吸収される場合のみ。
-
-### 書籍モード
-
-`core/book_manager.py` が入口。章ごとに `run_pipeline()` を呼び出し、章処理後の統合は `core/engine/p3_structure/state_integrator.py` で行う。`BookManager` は `run_pipeline()` の戻り値（出力ファイルパス）を `chapter_sessions[].output_paths` に記録して `StateIntegrator` に渡す（パス推定なし）。
-
-章の境界抽出は `core/engine/p3_structure/chapter_parser.py::ChapterParser` が担当し、`List[ChapterBoundary]` を返す。
-
-### LLM クライアント（`core/llm_client.py`）
-
-- **TierManager（シングルトン）**: 429/503 エラーで自動的に FREE ティア（Lite モデル）へダウンシフトする自己修復機構。
-- **モデル情報の参照順序**: 
-  - **Gemini API 共通知識**（モデル一覧・thinking_level・無料枠・廃止情報）は `docs/gemini_models.md` を参照。これは `~/Code/shared/gemini_models.md` から同期された共通ドキュメント（直接編集禁止）。
-  - **p2workflowy 固有の運用**（フェーズ別ルーティング・ベンチマーク）は `docs/model_optimization.md` を参照。
-  - **runtime の設定値** `core/coreprompts.json` の `DEFAULT_MODEL` / `DEFAULT_MODEL_FREE` / `DEFAULT_MODEL_VLM` は `model_optimization.md` に合わせて更新する。実装とドキュメントが不一致の場合はドキュメント側に揃える。
-- **Phase 4 並列数**: デフォルト `max_concurrent_sections=8`（2026-07-22、無料枠Liteプールのラウンドロビン実装後の実測で8が4より速いことを確認し4→8に変更）。直列化（=1）は実測で約 50% 遅く（338s vs 227s）避けるべき。詳細は `docs/model_optimization.md` §2・§7 参照。
-
-### プロンプト管理（`core/coreprompts.json`）
-
-全プロンプトを一元管理。`@lru_cache` でキャッシュされるため**変更後はプロセス再起動が必要**。`TEXT_STRUCTURE_EXTRACTION_PROMPT`（テキスト入力の見出し抽出用）を含む。
-
-### データモデル（`core/models.py`）
-
-- `RawChunk`: Phase 1 出力。`role`（h1/h2/p）・物理情報（font_size/is_bold/bbox）付き。
-- `TreeNode`: Phase 3-5 で使用する構造化ツリーノード。
-- `ChapterBoundary`: Book モード Phase 3 の章境界。`title`, `role`, `start_page`, `paragraphs` を持つ。
-
-### テスト資産（`data/input/`）
-
-| ディレクトリ | 内容 |
-|---|---|
-| `paperplain/AL/` | Arbitrary Locations 論文（テキスト）+ 理想出力 |
-| `paperplain/NST/` | NST 論文（テキスト）+ 理想出力 |
-| `paperpdf/AL/` | 同論文 PDF + 理想出力 |
-| `paperpdf/NST/` | 同論文 PDF + 理想出力（最高品質参照用） |
-| `Booksample/` | 書籍 PDF 3冊（理想出力なし） |
+- **責務境界**: フェーズのファサード（`core/phaseN_*.py`）はオーケストレーション専任。アルゴリズムは `core/engine/<pN_*>/` に閉じ込める。`main.py` はエントリーポイント専任。
+- **Phase 1 の実ルート**: `run_phase1_unified()` が PDF/テキストを自動判定し、PDF は Docling / VLM / 物理抽出のいずれかを選ぶ。実際に使われたルートは `phase1_route.json` に記録される。**Phase 3 は `pdf_mode` の指定値ではなくこの実ルートを見て構造化方式を切り替える**ので、構造化の挙動を調べるときはまず `phase1_route.json` を見る。
+- **テキスト分割の自動判定**: `\n\n` 分割後のチャンク数が `\n` 分割後の 1/10 未満なら Acrobat 形式（1 行 = 1 段落）と判定して `\n` 分割に切り替える。
+- **`intro_pre_heading`**: Phase 2 の DNA に含まれる「最初の節タイトル前の見出しなし序論」の範囲。Phase 3 が見出しなし Introduction を分離するために使う。
+- **`[Unlabeled Section]` は仕様であってバグではない**: Abstract 直後に見出しのない Introduction が続くパターン（NST 論文等）の正しい出力。問題なのは、本来存在する節タイトルが検出されず前セクションに吸収される場合だけ。
+- **書籍モード**: `core/book_manager.py` が入口。章ごとに `run_pipeline()` を呼び、統合は `core/engine/p3_structure/state_integrator.py`。`BookManager` は `run_pipeline()` の戻り値（出力パス）を `chapter_sessions[].output_paths` で渡す — **パスを推定して組み立てない**。
+- **書籍モードの章並列化**: CLI (`main.py --book`) は**無料キーが2本以上 `configure()` されている場合のみ**章を `ThreadPoolExecutor` で並列処理する（それ以外は常に完全直列）。並列時は章スレッドごとに `KeyRotator.restrict_to()` でキーを1本ずつ排他割り当てし（キープールは `queue.Queue`、キー本数が並列度の自然な上限）、統合順序は完了順ではなく `[None]*N` をインデックスで埋めて本の並び順を維持する。**Web版 (`server.py`) は `key_rotator.configure()` を一切呼ばないため常に直列のまま**（挙動不変）。並列度は `--book-concurrency`（既定値: 無料キー本数と処理対象章数の小さい方、`1` で強制直列）。詳細・設計判断は `docs/model_optimization.md` §10。
+- **プロンプトのキャッシュ**: `core/coreprompts.json` は `@lru_cache` されるため、**変更後はプロセス再起動が必要**。
+- **モデル設定**: `core/coreprompts.json` の `DEFAULT_MODEL*` が runtime の正本。Gemini API 共通知識（モデル一覧・無料枠・廃止情報）は `docs/gemini_models.md`（`~/Code/shared/` からの同期物、**直接編集禁止**）、本プロジェクト固有のルーティング・ベンチマークは `docs/model_optimization.md`。実装とドキュメントが食い違う場合はドキュメント側を直す。
+- **TierManager（シングルトン）**: 429/503 で自動的に FREE ティアへダウンシフトする自己修復機構。触る場合は paper/book 両モードで回帰確認する。
+- **Phase 4 並列数**: デフォルト `max_concurrent_sections=8`。直列化（=1）は実測で大幅に遅く、避けること。**これは「バッチ」ではなく「セクション」の同時実行数**なので、セクション数の少ない論文では 8 を超えて上げても効かない（AL 論文=9セクションで 16/24 は改善なし）。根拠と実測値は `docs/model_optimization.md` §2・§7・§8。
+- **無料枠キーのラウンドロビン**: CLI は `GEMINI_API_KEY_FREE_1`〜`_4`（**それぞれ別 GCP プロジェクト必須**）を、FREE tier かつユーザーがモデル未指定のときだけ「キー × Lite モデル」の2軸で能動的に分散する（`KeyRotator.pool_keys()` ＋ `_pick_batch_target()`/`_pick_page_target()`、`docs/model_optimization.md` §8）。**プロアクティブな分散（`key_pinned`/`model_pinned` で固定）とリアクティブな 429 フォールバック（`KeyRotator.advance()`/`ModelRotator.advance()`）を混ぜないこと**が設計の要。PAID tier・モデル明示指定時は従来どおり単一キー/単一リミッタで、挙動は一切変わらない。
 
 ## 設計原則
 
-- **入力ルーティングと判断優先順位**: 書籍は書籍単位で1回だけ判定する（①ユーザーが `pdf_mode` を明示指定→それを尊重、②見開きスキャン→VLM、③デジタルPDF（`is_docling_viable()`=True）→Docling、④それ以外→VLM）。論文（非書籍）PDF は Phase 1（`phase1_preprocessor.py`）が同じ優先順位で1文書ごとに判定する。Phase 1 が実際に使ったルート（`docling`/`vlm`/`native_fallback`）は `phase1_route.json` に記録され、Phase 3 は `pdf_mode` 指定値ではなくこの実ルートを見て構造化方式（VLM Markdown 正規表現 / Docling role 構造化 / ChapterParser・TOC フォールバック）を切り替える。VLM 経路内の判断優先順位は `VLM の論理役割判断 > 物理証拠（フォント・座標） > 幾何的ヒント` で、OCR 補正は「VLM が特定した位置の Native テキストで肉付けする」方針を守る。（Spec B 実装済み: `docs/superpowers/specs/2026-07-10-book-mode-vlm-routing-design.md`）
-- **責務境界**: `main.py` はエントリーポイント専任。`run_pipeline` はオーケストレーション専任。個別アルゴリズムは各フェーズモジュールに閉じ込める。
-- **出力形式**: `_p2.md` / `_p2.txt` が標準。Workflowy では英語ブロックを親子ネスト、日本語ブロックを並列展開する非対称階層を維持する。
-- **エクスポート不変条件**: `References` 系セクションは出力から除外し、`Appendix` は保持する。注釈ノードは言語ブロック末尾へ再配置する。
-- **設計の正本**: 実装変更の判断根拠は常に `core/` 配下の現行コードを優先する。本ファイルや `docs/ARCHITECTURE.md` はあくまで補助情報であり、コードと矛盾する場合はコードを信じてドキュメント側を直す。
-- **機密ファイルの扱い**: `.env` など機密情報を含みうるファイルは不用意に読み書きしない。
+- **入力ルーティングの判断優先順位**: 書籍は書籍単位で 1 回だけ判定する（①ユーザーの `pdf_mode` 明示指定 → ②見開きスキャン = VLM → ③デジタル PDF (`is_docling_viable()`) = Docling → ④それ以外 = VLM）。論文 PDF は Phase 1 が同じ優先順位で 1 文書ごとに判定する。VLM 経路内では `VLM の論理役割判断 > 物理証拠（フォント・座標） > 幾何的ヒント`。OCR 補正は「VLM が特定した位置の Native テキストで肉付けする」方針を守る。
+- **出力形式の不変条件**: `_p2.md` / `_p2.txt` が標準。Workflowy では英語ブロックを親子ネスト、日本語ブロックを並列展開する非対称階層を維持する。`References` 系セクションは除外し、`Appendix` は保持する。注釈ノードは言語ブロック末尾へ再配置する。
+- **設計の正本はコード**: 判断根拠は常に `core/` の現行実装を優先する。本ファイルや `docs/ARCHITECTURE.md` と矛盾する場合はコードを信じ、ドキュメント側を直す。
+- **機密ファイル**: `.env` など機密情報を含みうるファイルは不用意に読み書きしない。
+
+## テスト資産（`data/input/`）
+
+理想出力（`*_p2.txt` 等）が同梱されており、構造変更の回帰確認に使う。`paperplain/{AL,NST}/` がテキスト入力版、`paperpdf/{AL,NST}/` が PDF 版（**`paperpdf/NST/` が最高品質の参照基準**）、`Booksample/` は書籍 PDF 3 冊（理想出力なし）。
 
 ## 変更管理
 
-仕様変更や判断根拠は `docs/management/requirements_log.md` に追記する。不具合の原因・再現手順・対策は `docs/management/troubleshooting_log.md` に追記する（`core/` 変更を含むコミットでこの追記が漏れていないかは `.claude/hooks/check_management_logs.sh` が `git commit` 時に注意喚起する）。モデルティアの切替ロジックを変更した場合は、対象フェーズと理由もここに残す。
+仕様変更や判断根拠は `docs/management/requirements_log.md`、不具合の原因・再現手順・対策は `docs/management/troubleshooting_log.md` に追記する（`core/` を含むコミットで追記漏れがあれば `.claude/hooks/check_management_logs.sh` が注意喚起する）。
 
-完了宣言前の構造検証チェックリストは `golden-verification` skill、構造・翻訳まわりのデバッグ手順は `p2workflowy-debug` skill を参照（`.claude/skills/` 配下、Claude Code が状況に応じて自動候補に挙げる）。
+- 完了宣言前の構造検証: `golden-verification` skill
+- 構造・翻訳まわりのデバッグ手順: `p2workflowy-debug` skill
 
 ## デプロイ
 
-Hugging Face Spaces（Docker）向け: ポート `7860` で `uvicorn` を起動。`Dockerfile` 参照。
+Hugging Face Spaces（Docker）向け。ポート `7860` で `uvicorn` を起動（`Dockerfile` 参照）。

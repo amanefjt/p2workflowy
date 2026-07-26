@@ -39,6 +39,14 @@ def main():
         help="書籍モード: 処理する最大章数（コスト削減・デバッグ用）",
     )
     parser.add_argument(
+        "--book-concurrency",
+        type=int,
+        default=None,
+        dest="book_concurrency",
+        help="書籍モード: 章の並列処理数（既定値: 無料キー本数と章数の小さい方。"
+             "無料キーが2本未満の場合は常に直列。1を指定すると完全直列になる）",
+    )
+    parser.add_argument(
         "--paper",
         action="store_true",
         help="論文モード（デフォルト）",
@@ -130,20 +138,30 @@ def main():
 
     args = parser.parse_args()
 
-    # --- APIキー選択: 無料キー2本→有料キーの順に自動フォールバック（開発時も通常利用時も常に無料から） ---
-    from core.config import GEMINI_API_KEY, GEMINI_API_KEY_FREE_1, GEMINI_API_KEY_FREE_2
+    # --- APIキー選択: 無料キー最大4本→有料キーの順に自動フォールバック（開発時も通常利用時も常に無料から）。
+    #     さらに FREE tier ではキー×モデルの2軸ラウンドロビンで能動的に分散する（§8）。
+    #     未設定のキーは configure() が自動で除外するため、2本しか設定していない環境でも動く。 ---
+    from core.config import (
+        GEMINI_API_KEY, GEMINI_API_KEY_FREE_1, GEMINI_API_KEY_FREE_2,
+        GEMINI_API_KEY_FREE_3, GEMINI_API_KEY_FREE_4,
+    )
     from core.llm_client import key_rotator
 
-    ordered_keys = [GEMINI_API_KEY_FREE_1, GEMINI_API_KEY_FREE_2, GEMINI_API_KEY]
-    key_rotator.configure(ordered_keys, tiers=["free", "free", "paid"])
+    free_keys = [
+        GEMINI_API_KEY_FREE_1, GEMINI_API_KEY_FREE_2,
+        GEMINI_API_KEY_FREE_3, GEMINI_API_KEY_FREE_4,
+    ]
+    ordered_keys = free_keys + [GEMINI_API_KEY]
+    key_rotator.configure(ordered_keys, tiers=["free"] * len(free_keys) + ["paid"])
 
     if not key_rotator.is_configured():
-        print("エラー: GEMINI_API_KEY_FREE_1/2 / GEMINI_API_KEY のいずれも未設定です。.env を確認してください。")
+        print("エラー: GEMINI_API_KEY_FREE_1〜4 / GEMINI_API_KEY のいずれも未設定です。.env を確認してください。")
         return
 
     selected_api_key = key_rotator.current()
-    free_count = sum(1 for k in (GEMINI_API_KEY_FREE_1, GEMINI_API_KEY_FREE_2) if k)
-    print(f"使用APIキー: 無料キー{free_count}本設定済み（1本目から使用）"
+    free_count = len(key_rotator.pool_keys())
+    rr_note = "、キー×モデルの2軸ラウンドロビンで分散" if free_count > 1 else ""
+    print(f"使用APIキー: 無料キー{free_count}本設定済み（1本目から使用{rr_note}）"
           f"{' + 有料キーあり（429/503が続いた場合の最終フォールバック）' if GEMINI_API_KEY else ''}")
 
     # 引数がない場合は対話モード
@@ -204,6 +222,7 @@ def main():
                 heavy_ocr=args.heavy_ocr,
                 max_pages=args.max_pages,
                 max_chapters=args.max_chapters,
+                book_concurrency=args.book_concurrency,
                 resume_only=args.resume_only,
                 structure_only=args.structure_only,
                 resume_from=args.resume

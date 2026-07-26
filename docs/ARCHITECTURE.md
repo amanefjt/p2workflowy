@@ -48,7 +48,7 @@ server.py (Web API) ┴──> core/pipeline.py :: run_pipeline()
 
 `main.py` / `server.py` はエントリーポイント専任、`run_pipeline` はフェーズのオーケストレーション専任です。個別のアルゴリズムはここには置かず、各フェーズのファサード（`core/phaseN_*.py`）経由で `core/engine/` 配下のエンジン層に閉じ込めます。この責務境界は `core/` のコード設計に組み込まれた必須要件で、リファクタリング時も崩さないことが求められています。
 
-書籍モードは `core/book_manager.py::BookManager` が入口で、章ごとに（通常モードと同じ）`run_pipeline()` を呼び出し、処理後の統合を `core/engine/p3_structure/state_integrator.py::StateIntegrator` が担当します。
+書籍モードは `core/book_manager.py::BookManager` が入口で、章ごとに（通常モードと同じ）`run_pipeline()` を呼び出し、処理後の統合を `core/engine/p3_structure/state_integrator.py::StateIntegrator` が担当します。CLI (`main.py --book`) は無料キーが2本以上 `configure()` されている場合、章を `ThreadPoolExecutor` で並列に処理します（章スレッドごとにキーを1本排他割り当て。統合順序は完了順ではなく本の並び順を維持）。Web版 (`server.py`) は `key_rotator.configure()` を呼ばないため常に章を直列処理します。詳細は `docs/model_optimization.md` §10。
 
 ### 2.2 5 フェーズパイプライン
 
@@ -64,15 +64,15 @@ server.py (Web API) ┴──> core/pipeline.py :: run_pipeline()
 
 ### 2.3 エンジン層 (`core/engine/`)
 
-フェーズファサードは薄いオーケストレーション層で、実際のアルゴリズムはここに住んでいます。
+フェーズファサードは薄いオーケストレーション層で、実際のアルゴリズムはここに住んでいます。以下は各サブパッケージの担当領域と代表的なモジュールで、網羅的なファイル一覧ではありません（正確な一覧は `ls core/engine/` を見てください）。
 
-| サブパッケージ | 主なモジュール | 役割 |
+| サブパッケージ | 担当領域 | 入口になるモジュール |
 |---|---|---|
-| `p1_ingest/` | `docling_ingester.py`, `pdf_ingester.py`, `pdf_splitter.py`, `physical_ingester.py`, `ocr_manager.py`, `text_structure_extractor.py`, `spread_splitter.py`, `formatter.py` | PDF/テキストの取り込みと正規化 |
-| `p2_meta/` | `meta_analyzer.py` | Phase 2 の DNA 抽出ロジック |
-| `p3_structure/` | `tree_builder.py`, `heading_matcher.py`, `chapter_parser.py`, `chapter_extractor.py`, `toc_extractor.py`, `state_integrator.py` | 論理構造ツリー・章境界の構築 |
-| `p4_translate/` | `parallel_translator.py`, `prompt_builder.py`, `tree_reconstructor.py` | 並列翻訳とツリーへの再統合 |
-| `p5_export/` | `workflowy_engine.py`, `markdown_engine.py`, `text_book_integrator.py`, `formatter_utils.py` | 最終出力形式への変換 |
+| `p1_ingest/` | PDF/テキストの取り込みと正規化、ルーティング判定 | `routing.py`, `docling_ingester.py`, `pdf_ingester.py`, `text_structure_extractor.py` |
+| `p2_meta/` | DNA（要約・キーワード・論文の輪郭）抽出 | `meta_analyzer.py` |
+| `p3_structure/` | 論理構造ツリー・章境界の構築、書籍の章統合 | `tree_builder.py`, `chapter_parser.py`, `state_integrator.py` |
+| `p4_translate/` | 並列翻訳・用語一貫性・ツリーへの再統合 | `parallel_translator.py`, `term_layer.py`, `tree_reconstructor.py` |
+| `p5_export/` | 最終出力形式（Markdown / Workflowy）への変換 | `workflowy_engine.py`, `markdown_engine.py`, `text_book_integrator.py` |
 
 ### 2.4 データモデル (`core/models.py`)
 

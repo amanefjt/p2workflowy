@@ -3,10 +3,13 @@ import shutil
 import fitz
 import re
 import hashlib
+import queue
+import threading
+import concurrent.futures
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
-from .config import STATE_DIR, SessionState, print_log
+from .config import STATE_DIR, SessionState, print_log, set_log_prefix
 from .engine.p1_ingest.pdf_splitter import PDFSplitter
 from .engine.p1_ingest.routing import decide_pdf_mode as _decide_book_pdf_mode
 from .engine.p3_structure.state_integrator import StateIntegrator
@@ -113,7 +116,9 @@ class BookManager:
         context_file.write_text(json.dumps(save_data, ensure_ascii=False, indent=2), encoding="utf-8")
         print_log(f"  [BookManager] Global Context を保存しました: {context_file.absolute()}")
 
-    def run(self, resume_only: bool = False, structure_only: bool = False, max_chapters: Optional[int] = None, **pipeline_kwargs) -> List[str]:
+    def run(self, resume_only: bool = False, structure_only: bool = False, max_chapters: Optional[int] = None,
+            book_concurrency: Optional[int] = None, vlm_concurrency: Optional[int] = None,
+            **pipeline_kwargs) -> List[str]:
         """全工程を一括実行する。"""
         print_log(f"\n=== Book Mode Orchestration: {self.book_title} ===")
         
@@ -201,8 +206,10 @@ class BookManager:
 
         # 2. 各章の処理
         from .pipeline import run_pipeline
-        chapter_sessions = []
+        from .llm_client import key_rotator
         target_chapters = chapters[:max_chapters] if max_chapters else chapters
+        n_chapters = len(target_chapters)
+        chapter_sessions: List[Optional[Dict[str, Any]]] = [None] * n_chapters
 
         # BookManager が制御する引数は pipeline_kwargs から抽出して重複エラーを防ぐ
         max_pages = pipeline_kwargs.get("max_pages")
@@ -218,11 +225,14 @@ class BookManager:
         for key in explicit_keys:
             pipeline_kwargs.pop(key, None)
 
-        failed_chapters = []
+        failed_chapters: List[str] = []
+        failed_lock = threading.Lock()
 
+        # --- 章単位 resume（完了済み章のスキップ判定）は LLM を呼ばない安価な処理なので、
+        # 並列投入の前に直列で済ませる。スキップされた章はスレッドを一切消費しない。---
+        pending: List[Tuple[int, Dict[str, Any], str, Path]] = []
         for i, ch in enumerate(target_chapters):
             ch_title = ch["title"]
-            ch_role = ch.get("role", "chapter")
             ch_session_id = f"{self.book_title}_{self.fingerprint}_ch{i+1}"
             # 章ディレクトリは book_sessions/<book>_<fp>/ 配下に入れ子にする（グローバル
             # セッション上限 SessionState.MAX_STATE_SESSIONS の対象外である state/book_sessions/
@@ -232,8 +242,6 @@ class BookManager:
             ch_state_dir = self.session_dir / "chapters_state" / f"ch{i+1}"
             ch_state = SessionState(session_id=ch_session_id, base_dir=ch_state_dir)
 
-            print_log(f"\n--- Processing [{ch_role}] {ch_title} ({i+1}/{len(target_chapters)}) ---")
-
             # 章単位 resume: 完了済みの章はスキップして既存出力を再利用する。
             # 出力パスは成功時に output_paths.json として保存し、次回起動時に参照する。
             output_paths_cache = ch_state.session_dir / "output_paths.json"
@@ -242,10 +250,20 @@ class BookManager:
                     saved = json.loads(output_paths_cache.read_text(encoding="utf-8"))
                     if saved and all(Path(p).exists() for p in saved):
                         print_log(f"  [BookManager] スキップ（完了済み）: {ch_title}")
-                        chapter_sessions.append({"title": ch_title, "output_paths": saved})
+                        chapter_sessions[i] = {"title": ch_title, "output_paths": saved}
                         continue
                 except Exception:
                     pass  # キャッシュ破損時は再処理
+
+            pending.append((i, ch, ch_session_id, ch_state_dir))
+
+        def run_one_chapter(idx: int, ch: Dict[str, Any], ch_session_id: str, ch_state_dir: Path,
+                             chapter_vlm_concurrency: Optional[int] = None) -> None:
+            """1章を run_pipeline() で処理し、結果を chapter_sessions[idx] に書き込む。
+            例外は内部で吸収し、失敗章として記録したうえで他章の処理を止めない。"""
+            ch_title = ch["title"]
+            ch_role = ch.get("role", "chapter")
+            print_log(f"\n--- Processing [{ch_role}] {ch_title} ({idx+1}/{n_chapters}) ---")
 
             try:
                 # シンプルモード判定（前書きや後書き用）
@@ -271,25 +289,106 @@ class BookManager:
                     thinking_level=thinking_level,
                     tier=tier,
                     resume_from=resume_from,
+                    vlm_concurrency=chapter_vlm_concurrency,
                     **pipeline_kwargs
                 )
 
                 str_paths = [str(p) for p in processed_paths]
                 # 次回実行時のスキップ用にパスを保存
+                output_paths_cache = ch_state_dir / "output_paths.json"
                 output_paths_cache.write_text(
                     json.dumps(str_paths, ensure_ascii=False), encoding="utf-8"
                 )
-                chapter_sessions.append({"title": ch_title, "output_paths": str_paths})
+                chapter_sessions[idx] = {"title": ch_title, "output_paths": str_paths}
 
             except Exception as e:
                 import traceback
                 print_log(f"  [Error] Chapter '{ch_title}' failed: {e}")
                 print_log(traceback.format_exc())
-                failed_chapters.append(ch_title)
-                chapter_sessions.append({
+                with failed_lock:
+                    failed_chapters.append(ch_title)
+                chapter_sessions[idx] = {
                     "title": ch_title,
                     "output_paths": [],
-                })
+                }
+
+        # --- 章並列化の有効化条件（安全装置）---
+        # レートリミッタ・TierManager・ModelRotator は threading.local() ベース（§6〜§8）
+        # なので、複数の章スレッドが同じ (キー, モデル) レーンを共有すると各スレッドが
+        # 「自分は15RPM使える」と思い込んで同じ枠を多重に叩き、429が多発する。これを避ける
+        # ため、無料キーが2本以上 configure() されている場合のみ章並列を有効にする。
+        # server.py は key_rotator.configure() を一切呼ばないため is_configured() が常に
+        # False になり、Web経路では自動的に完全直列にフォールバックする（Web版の挙動は不変）。
+        free_keys = key_rotator.pool_keys() if key_rotator.is_configured() else []
+        can_parallelize = len(free_keys) >= 2 and len(pending) > 1
+
+        if book_concurrency is not None:
+            effective_concurrency = max(1, book_concurrency) if can_parallelize else 1
+        elif can_parallelize:
+            # 既定値: 無料キー本数と（スキップ済みを除いた）処理対象章数の小さい方
+            effective_concurrency = min(len(free_keys), len(pending))
+        else:
+            effective_concurrency = 1
+
+        if effective_concurrency <= 1 or len(pending) <= 1:
+            print_log(f"  [BookManager] 章を直列処理します（対象{len(pending)}章）。")
+            for idx, ch, ch_session_id, ch_state_dir in pending:
+                run_one_chapter(idx, ch, ch_session_id, ch_state_dir)
+        else:
+            # 1章あたりのVLM同時実行数: 複数章が同時にVLMを叩くとメモリ（同時に載る画像枚数）
+            # とAPIレート負荷が積み上がるため、章並列数に応じて絞る。OCRManager.
+            # VLM_SEMAPHORE_LIMIT=20 は単一章前提の値なので、これを章並列数で割った値を
+            # 目安にする。下限4は1章あたりの並列性を極端に潰さないための保守的な床
+            # （判断根拠は docs/model_optimization.md §10 を参照）。
+            chapter_vlm_concurrency = (
+                vlm_concurrency if vlm_concurrency is not None
+                else max(4, 20 // effective_concurrency)
+            )
+            print_log(
+                f"  [BookManager] 章並列処理を有効化: {effective_concurrency}並列"
+                f"（無料キー{len(free_keys)}本 / 処理対象{len(pending)}章、"
+                f"章あたりVLM同時実行数={chapter_vlm_concurrency}）"
+            )
+
+            # 章スレッドごとにキーを1本ずつ排他割り当てするためのプール。
+            # 章タスクが1本取り出し、終わったら返すことで「同時に同じキーを使う章は
+            # 高々1つ」を構造的に保証する（有料キーはpool_keys()が含まないため対象外）。
+            key_queue: "queue.Queue[str]" = queue.Queue()
+            for k in free_keys:
+                key_queue.put(k)
+
+            def worker(idx: int, ch: Dict[str, Any], ch_session_id: str, ch_state_dir: Path) -> None:
+                assigned_key = key_queue.get()
+                # ログには生のキー値ではなく free_keys 内の位置（1始まり）だけを出す。
+                # 実測検証（docs/model_optimization.md §10）で「各章スレッドが実際に別々の
+                # キーを使っているか」を目視確認できるようにするための識別ラベル。
+                key_label = (
+                    f"free{free_keys.index(assigned_key)+1}"
+                    if assigned_key in free_keys else "unknown"
+                )
+                try:
+                    key_rotator.restrict_to([assigned_key], ["free"])
+                    set_log_prefix(f"[ch{idx+1}] ")
+                    print_log(f"  [BookManager] 使用キー割り当て: {key_label}")
+                    try:
+                        run_one_chapter(idx, ch, ch_session_id, ch_state_dir, chapter_vlm_concurrency)
+                    finally:
+                        set_log_prefix(None)
+                        key_rotator.clear_restriction()
+                finally:
+                    key_queue.put(assigned_key)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=effective_concurrency) as executor:
+                futures = [
+                    executor.submit(worker, idx, ch, ch_session_id, ch_state_dir)
+                    for idx, ch, ch_session_id, ch_state_dir in pending
+                ]
+                for f in concurrent.futures.as_completed(futures):
+                    # run_one_chapter は例外を内部で吸収するため、ここに到達する例外は
+                    # worker() 自体の想定外のバグのみ。ログに残しつつ他章の完了は妨げない。
+                    exc = f.exception()
+                    if exc is not None:
+                        print_log(f"  [BookManager] ⚠️ 章ワーカーで想定外の例外: {exc}")
 
         # 失敗章のサマリー
         if failed_chapters:
@@ -299,10 +398,16 @@ class BookManager:
             print_log("  再実行すると完了済みの章はスキップされ、失敗した章のみ再処理されます。")
 
         # 3. 統合
-        if chapter_sessions:
+        # chapter_sessions は StateIntegrator.integrate_to_book() へ渡す順序がそのまま本の
+        # 並び順になるため、完了順ではなく [None]*N をインデックスで埋める方式で並び順を維持する。
+        if any(s is not None for s in chapter_sessions):
             print_log("\n--- Consolidating Chapters ---")
             integrator = StateIntegrator(book_title=self.book_title, session_dir=str(self.session_dir))
-            output_paths = integrator.integrate_to_book(chapter_sessions, global_resume=self.global_resume)
+            resolved_sessions = [
+                s if s is not None else {"title": "unknown", "output_paths": []}
+                for s in chapter_sessions
+            ]
+            output_paths = integrator.integrate_to_book(resolved_sessions, global_resume=self.global_resume)
             self._cleanup_old_book_sessions()
             return output_paths
         return []

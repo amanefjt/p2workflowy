@@ -5,7 +5,10 @@ from aiolimiter import AsyncLimiter
 from collections import deque
 from core.models import TreeNode
 from core.config import print_log
-from core.llm_client import translate_batch, tier_manager, GeminiTier, apply_tier_settings, model_rotator, get_free_pool_rate_limiters
+from core.llm_client import (
+    translate_batch, tier_manager, GeminiTier, apply_tier_settings,
+    model_rotator, key_rotator, get_free_pool_rate_limiters, pick_lane,
+)
 
 class ParallelTranslator:
     """
@@ -30,25 +33,55 @@ class ParallelTranslator:
         self._rr_index = 0  # 無料枠Liteプールのラウンドロビン用カウンタ（バッチ単位でインクリメント）
 
     def _pick_batch_target(self):
-        """バッチ1件分の (model, rate_limiter, pinned) を決定する。
+        """バッチ1件分の (api_key, model, rate_limiter, model_pinned, key_pinned) を決定する。
 
-        ユーザーがモデルを明示指定していない FREE tier かつプールが複数モデルを持つ場合のみ、
-        バッチ単位でプール内モデルへラウンドロビン割り当てする（各モデルは独立した
-        AsyncLimiter を持つため、単一リミッタ共有時よりスループットが上がる）。それ以外は
-        従来どおり self.model / self.rate_limiter をそのまま使う（pinned=False、429時は
-        ModelRotator の既存フォールバックに委ねる）。
-        ラウンドロビン対象バッチは pinned=True とし、call_gemini_async 側で
-        ModelRotator.resolve()/advance() による上書きを受けないようにする
-        （プロアクティブな負荷分散とリアクティブなRPD枯渇対応を混在させないため）。
+        ユーザーがモデルを明示指定していない FREE tier のときのみ、バッチ単位で
+        「キー × モデル」の2軸ラウンドロビン割り当てを行う（docs/model_optimization.md §8）。
+        無料キーは別GCPプロジェクト、プール内の各Liteモデルは独立したカウンターなので、
+        (キー, モデル) の組み合わせ＝レーンがそれぞれ独立した RPM 枠を持つ。K本 × M モデルで
+        K*M レーンになり、理論上のスループット上限がその分だけ広がる。
+
+        割り当て式は i を通し番号として key = keys[i % K], model = models[(i // K) % M]。
+        こうすると連続するリクエストが必ず別キーへ散り（同一キーの枠を連打しない）、K*M 回で
+        全レーンをちょうど一巡する。
+
+        キー軸が使えない環境（無料キーが1本以下、tiers 未設定、PAID tier）ではキー軸だけが
+        自然に無効化され、§7 のモデル軸ラウンドロビンにそのままフォールバックする。
+        ラウンドロビン対象は model_pinned/key_pinned=True とし、call_gemini_async 側で
+        ModelRotator / KeyRotator による上書きを受けないようにする
+        （プロアクティブな負荷分散とリアクティブな429フォールバックを混在させないため）。
+
+        §9: 429/503 を検知したレーンはクールダウンレジストリに記録され（`core.llm_client.
+        lane_cooldown`）、`pick_lane()` がクールダウン中でないレーンを優先的に選ぶ。全レーンが
+        クールダウン中の場合のみ、クールダウンを無視した従来どおりの割り当てにフォールバック
+        する（例外を投げない・処理を止めない）。
         """
         if self.model is None and self.tier == GeminiTier.FREE:
             pool = model_rotator.pool_models()
-            if len(pool) > 1:
-                limiters = get_free_pool_rate_limiters(self.api_key)
-                batch_model = pool[self._rr_index % len(pool)]
+            keys = key_rotator.pool_keys() if key_rotator.is_configured() else []
+            key_axis = keys if len(keys) > 1 else []
+            if len(pool) > 1 or key_axis:
+                i = self._rr_index
                 self._rr_index += 1
-                return batch_model, limiters[batch_model], True
-        return self.model, self.rate_limiter, False
+                lane = pick_lane(pool, key_axis, i)
+                if lane is not None:
+                    batch_key, batch_model = lane
+                    key_pinned = bool(key_axis)
+                    if not key_pinned:
+                        batch_key = self.api_key
+                elif key_axis:
+                    # 全レーンがクールダウン中 → クールダウンを無視した §8 従来どおりの割当て
+                    batch_key = key_axis[i % len(key_axis)]
+                    batch_model = pool[(i // len(key_axis)) % len(pool)] if pool else None
+                    key_pinned = True
+                else:
+                    batch_key = self.api_key
+                    batch_model = pool[i % len(pool)]
+                    key_pinned = False
+                if batch_model is not None:
+                    limiters = get_free_pool_rate_limiters(batch_key)
+                    return batch_key, batch_model, limiters[batch_model], True, key_pinned
+        return self.api_key, self.model, self.rate_limiter, False, False
 
     async def translate_section_chunks(
         self,
@@ -87,19 +120,23 @@ class ParallelTranslator:
                     batch.append(remaining_chunks.popleft())
                     batch_chars += c_len
 
-                # 3. 翻訳実行（無料枠Liteプールが複数モデルの場合はバッチ単位でラウンドロビン割り当て）
+                # 3. 翻訳実行（FREE tier ではバッチ単位でキー×モデルの2軸ラウンドロビン割り当て）
                 previous = prompt_builder_func(all_translated)
-                batch_model, batch_limiter, batch_pinned = self._pick_batch_target()
-                print_log(f"  [ParallelTranslator] {section_name}: Batch {batch_idx} ({len(batch)} chunks, {batch_chars} chars, model={batch_model or 'default'})")
+                batch_key, batch_model, batch_limiter, batch_model_pinned, batch_key_pinned = self._pick_batch_target()
+                lane = f"model={batch_model or 'default'}"
+                if batch_key_pinned:
+                    lane += f", key#{key_rotator.pool_keys().index(batch_key) + 1}"
+                print_log(f"  [ParallelTranslator] {section_name}: Batch {batch_idx} ({len(batch)} chunks, {batch_chars} chars, {lane})")
 
                 try:
                     batch_nodes = await translate_func(
                         chunks=batch,
                         previous_translation=previous,
                         rate_limiter=batch_limiter,
-                        api_key=self.api_key,
+                        api_key=batch_key, # ラウンドロビン割り当て先のキー（非適用時は self.api_key）
                         model=batch_model, # ユーザー指定モデル、またはラウンドロビン割り当て先を尊重する
-                        model_pinned=batch_pinned,
+                        model_pinned=batch_model_pinned,
+                        key_pinned=batch_key_pinned,
                         section_name=section_name,
                         **kwargs
                     )

@@ -94,10 +94,14 @@ def run_phase1_unified(
     is_book: bool = False,
     heavy_ocr: bool = False,
     max_pages: Optional[int] = None,
+    vlm_concurrency: Optional[int] = None,
 ) -> List[RawChunk]:
     """
     Phase 1 統合エントリーポイント: .pdf なら PDF ルート、それ以外はテキストルートに振り分ける。
     両ルートとも role 付き RawChunk[] を出力するという契約を守る。
+
+    vlm_concurrency: PDF ルートで VLM を使う場合の同時実行数上書き（省略時は
+    OCRManager.VLM_SEMAPHORE_LIMIT。書籍モードの章並列化用）。テキストルートには無関係。
     """
     is_text = not str(input_path).lower().endswith(".pdf")
 
@@ -112,6 +116,7 @@ def run_phase1_unified(
             api_key=api_key, state=state, save_state=save_state,
             pdf_mode=pdf_mode, model=model,
             is_book=is_book, heavy_ocr=heavy_ocr, max_pages=max_pages,
+            vlm_concurrency=vlm_concurrency,
         )
 
 
@@ -130,6 +135,7 @@ def _run_phase1_pdf(
     is_book: bool = False,
     heavy_ocr: bool = False,
     max_pages: Optional[int] = None,
+    vlm_concurrency: Optional[int] = None,
 ) -> List[RawChunk]:
     """PDF から RawChunk を生成する。
     デジタルPDF → Docling ルート（低コスト）
@@ -161,7 +167,7 @@ def _run_phase1_pdf(
         pdf_path, api_key=api_key, state=state,
         pdf_mode=pdf_mode, model=model,
         is_book=is_book, heavy_ocr=heavy_ocr,
-        max_pages=max_pages,
+        max_pages=max_pages, vlm_concurrency=vlm_concurrency,
     )
 
     if elements and elements[0].get("role") == "vlm_page_source":

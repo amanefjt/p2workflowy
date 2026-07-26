@@ -4,6 +4,7 @@ import csv
 import logging as _logging
 import functools
 import sys
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -24,11 +25,24 @@ MAX_SESSION_HISTORY = 10
 # LLM 設定 (環境変数から取得)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 
-# CLI (main.py) 用の無料枠キー2本。429/503時に free1→free2→GEMINI_API_KEY(有料) の順で
-# 自動フォールバックする（core/llm_client.py::KeyRotator）。各キーは別GCPプロジェクトである
-# 必要がある（無料枠のRPM/RPD/TPMはキー単位ではなくプロジェクト単位、docs/gemini_models.md §4）。
+# CLI (main.py) 用の無料枠キー（最大4本）。429/503時に free1→…→free4→GEMINI_API_KEY(有料)
+# の順で自動フォールバックするほか、FREE tier では「キー × モデル」の2軸ラウンドロビンで
+# 能動的に負荷分散する（docs/model_optimization.md §8、core/llm_client.py::KeyRotator）。
+# 各キーは別GCPプロジェクトである必要がある（無料枠のRPM/RPD/TPMはキー単位ではなく
+# プロジェクト単位、docs/gemini_models.md §4）。未設定のキーは KeyRotator.configure() が
+# 自動的に除外するため、2本しか設定していない環境でもそのまま動く。
 GEMINI_API_KEY_FREE_1 = os.environ.get("GEMINI_API_KEY_FREE_1")
 GEMINI_API_KEY_FREE_2 = os.environ.get("GEMINI_API_KEY_FREE_2")
+GEMINI_API_KEY_FREE_3 = os.environ.get("GEMINI_API_KEY_FREE_3")
+GEMINI_API_KEY_FREE_4 = os.environ.get("GEMINI_API_KEY_FREE_4")
+
+# 設定済みの CLI 用無料キーだけを並び順どおりに集めたリスト（main.py が参照）。
+GEMINI_API_KEY_FREE_KEYS: List[str] = [
+    k for k in (
+        GEMINI_API_KEY_FREE_1, GEMINI_API_KEY_FREE_2,
+        GEMINI_API_KEY_FREE_3, GEMINI_API_KEY_FREE_4,
+    ) if k
+]
 
 # Webアプリ (server.py) 用の無料枠キー（最大5本）。429/503フォールバック用途ではなく、
 # 同時実行数の上限として使う「並行スロット」（core/llm_client.py::WebKeyPool は server.py 側）。
@@ -79,8 +93,30 @@ def _get_pipeline_logger() -> _logging.Logger:
     _pipeline_logger = logger
     return logger
 
+# 書籍モードの章並列化（core/book_manager.py）用: スレッドごとのログ行プレフィックス
+# （例 "[ch3] "）。並列実行時に複数章のログが標準出力・ログファイルで交錯するため、
+# どの章の出力かを行単位で追えるようにする。設定していないスレッド（通常の論文モード・
+# 直列書籍モード）は従来どおりプレフィックスなし。
+_log_prefix_local = threading.local()
+
+
+def set_log_prefix(prefix: Optional[str]) -> None:
+    """呼び出したスレッドの print_log 出力に付与するプレフィックスを設定する。None で解除。"""
+    _log_prefix_local.prefix = prefix
+
+
 def print_log(msg: str):
-    """標準出力とログファイルにメッセージを記録する（スレッドセーフ）。"""
+    """標準出力とログファイルにメッセージを記録する（スレッドセーフ）。
+
+    Python の logging モジュールは Handler.acquire()/release() で内部ロックを持つため
+    （StreamHandler・FileHandler とも）、複数スレッドから同時に呼んでも1行が分断・混在
+    することはない（本文は正しく直列化される）。ただし行ごとの出力順序はスレッド間で
+    交錯しうるため、書籍モードの章並列化では set_log_prefix() で章番号を行頭に付与し、
+    どの章の出力かを読み取れるようにしている。
+    """
+    prefix = getattr(_log_prefix_local, "prefix", None)
+    if prefix:
+        msg = f"{prefix}{msg}"
     _get_pipeline_logger().info(msg)
 
 class SessionState:

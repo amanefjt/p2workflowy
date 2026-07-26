@@ -11,8 +11,9 @@ import enum
 import re
 import csv
 import random
-from typing import Any, List, Tuple, Dict, Optional
-from datetime import datetime
+from typing import Any, Callable, List, Tuple, Dict, Optional
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import threading
 from pathlib import Path
 
@@ -124,13 +125,25 @@ tier_manager = TierManager()
 class KeyRotator:
     """CLI (main.py) 用の複数APIキーローテーション管理シングルトン。
 
-    プロセスグローバルな状態のまま（スレッドローカル化しない）— CLIはスレッドを使わず単一
+    既定ではプロセスグローバルな状態（スレッドローカル化しない）— CLIはスレッドを使わず単一
     プロセス内で完結するため（Phase4の並行も単一イベントループ内の asyncio.Semaphore のみ）。
     forward-only（一度進んだキーインデックスは戻らない、TierManager.downgrade() と同じ設計
     思想）。main.py が起動時に configure() を一度だけ呼ぶ。server.py は一切呼ばないため、
     Webアプリの挙動には影響しない（is_configured() が常に False のまま）。
+
+    2つの使われ方がある:
+      1. リアクティブなフォールバック: 429/503 検知時に advance() で次のキーへ前進する
+         （forward-only。call_gemini/call_gemini_async のリトライループが呼ぶ）。
+      2. プロアクティブな負荷分散: pool_keys() が返す無料キー群へ、呼び出し元（Phase4 の
+         ParallelTranslator / Phase1 の OCRManager）がバッチ・ページ単位でラウンドロビン
+         割り当てする（docs/model_optimization.md §8）。
+
+    さらに restrict_to() で「呼び出したスレッドだけが使えるキーの部分集合」を設定できる
+    （書籍モードの章並列化で、章スレッドごとにキーを1本ずつ排他割り当てするためのフック）。
+    制限を設定していないスレッドの挙動はプロセスグローバル状態そのままで一切変わらない。
     """
     _instance = None
+    _local = threading.local()
 
     def __new__(cls):
         if cls._instance is None:
@@ -139,6 +152,51 @@ class KeyRotator:
             cls._instance._tiers = []
             cls._instance._index = 0
         return cls._instance
+
+    # --- スレッドローカルな使用キー制限 ---
+
+    def restrict_to(self, keys: List[Optional[str]], tiers: Optional[List[str]] = None) -> None:
+        """呼び出したスレッドに限り、使用キーを keys の部分集合に制限する。
+
+        制限中は current()/current_tier()/pool_keys()/has_next()/advance()/index/count が
+        すべてこの部分集合に対して動作し、プロセスグローバルな _keys/_index には一切触れない
+        （＝他スレッドから完全に不可視）。書籍モードの章並列化で、章スレッドごとに別キーを
+        排他割り当てし、同じ (キー, モデル) レーンを複数スレッドが多重に叩かないようにする
+        ための下ごしらえ（レートリミッタは threading.local() ベースなので、スレッド間で
+        レーンを共有すると枠を二重に消費して429が多発する）。
+        """
+        pairs = [(k, t) for k, t in zip(keys, tiers or [None] * len(keys)) if k]
+        self._local.keys = [k for k, _ in pairs]
+        self._local.tiers = [t for _, t in pairs]
+        self._local.index = 0
+
+    def clear_restriction(self) -> None:
+        """このスレッドの使用キー制限を解除し、プロセスグローバルな状態に戻す。"""
+        self._local.keys = None
+        self._local.tiers = None
+        self._local.index = 0
+
+    def is_restricted(self) -> bool:
+        return bool(getattr(self._local, "keys", None))
+
+    def _view(self) -> tuple:
+        """(keys, tiers) の現在有効なビューを返す（制限中はスレッドローカル、それ以外はグローバル）。"""
+        if self.is_restricted():
+            return self._local.keys, self._local.tiers
+        return self._keys, self._tiers
+
+    def _get_index(self) -> int:
+        if self.is_restricted():
+            return getattr(self._local, "index", 0)
+        return self._index
+
+    def _set_index(self, value: int) -> None:
+        if self.is_restricted():
+            self._local.index = value
+        else:
+            self._index = value
+
+    # --- 通常 API ---
 
     def configure(self, keys: List[Optional[str]], tiers: Optional[List[str]] = None) -> None:
         """keys と同じ並びの tiers（例: ["free","free","paid"]）を渡すと、ローテーション後に
@@ -149,30 +207,77 @@ class KeyRotator:
         self._index = 0
 
     def is_configured(self) -> bool:
-        return bool(self._keys)
+        return bool(self._view()[0])
 
     def current(self) -> Optional[str]:
-        return self._keys[self._index] if self._keys else None
+        keys, _ = self._view()
+        return keys[self._get_index()] if keys else None
 
     def current_tier(self) -> Optional[str]:
         """現在選択中のキーの種別（"free"/"paid"）。configure() に tiers を渡していなければ None。"""
-        return self._tiers[self._index] if self._tiers else None
+        _, tiers = self._view()
+        return tiers[self._get_index()] if tiers else None
+
+    def pool_keys(self) -> List[str]:
+        """tier が "free" のキーだけを並び順どおりに返す（キー軸ラウンドロビン割り当て用）。
+
+        有料キーを含めないのは、無料枠専用ペース（1 req/4s/レーン）のリミッタを有料キーにも
+        適用すると有料ユーザーを不必要に遅くしてしまうため（§7 で PAID tier をラウンドロビン
+        対象外にしたのと同じ理由）。tiers 未設定（configure に tiers を渡していない）の場合は
+        キー種別が判定できないため空リストを返し、キー軸のRRは自然に無効化される。
+        """
+        keys, tiers = self._view()
+        if not keys or not tiers:
+            return []
+        return [k for k, t in zip(keys, tiers) if t == "free"]
 
     def has_next(self) -> bool:
-        return bool(self._keys) and self._index < len(self._keys) - 1
+        keys, _ = self._view()
+        return bool(keys) and self._get_index() < len(keys) - 1
 
     def advance(self) -> Optional[str]:
         if self.has_next():
-            self._index += 1
+            self._set_index(self._get_index() + 1)
         return self.current()
+
+    def best_available(self, is_available: Callable[[Optional[str]], bool]) -> Optional[str]:
+        """429起点のフォールバック用。forward-only な advance() と異なり、クールダウンが
+        明けて回復したキー（例: free1 が429でクールダウン中に free2 へ進んだ後、free1 が
+        先に回復する）へ**戻れる**（docs/model_optimization.md §9、§6 既知の限界の解消）。
+
+        優先順位は configure() に渡した並び順そのまま（CLI/Web とも free キーを先・paid
+        キーを最後に渡す運用のため、"無料キーが1本でも生きているなら有料キーには落ちない"
+        という既存の優先順位がそのまま保たれる）。現在のキーがまだ available ならそれを
+        優先して返す（無駄な切替をしない）。現在のキー以外に available なキーがあれば、
+        並び順で最初に見つかったものへ切り替える。**全キーが使用不可（＝全レーンが
+        クールダウン中）の場合は、既存の forward-only な advance() にフォールバックする**
+        （新しい情報が無い以上、従来どおりの挙動に委ねるのが安全なため。呼び出し元は
+        戻り値が変化したかどうかで「実際に切り替わったか」を判定できる）。
+
+        既存の advance() 自体はシグネチャ・forward-only の挙動とも一切変更していない
+        （既存テストが依存しているため）。こちらは新規に追加した代替 API で、
+        call_gemini/call_gemini_async の429/503リトライループが advance() の代わりに使う。
+        """
+        keys, _ = self._view()
+        if not keys:
+            return None
+        current_key = self.current()
+        if is_available(current_key):
+            return current_key
+        for k in keys:
+            if k != current_key and is_available(k):
+                self._set_index(keys.index(k))
+                return self.current()
+        # 全キー使用不可 → 新しい判断材料が無いので従来の forward-only にフォールバック
+        return self.advance()
 
     @property
     def index(self) -> int:
-        return self._index
+        return self._get_index()
 
     @property
     def count(self) -> int:
-        return len(self._keys)
+        return len(self._view()[0])
 
 key_rotator = KeyRotator()
 
@@ -247,6 +352,227 @@ def get_free_pool_rate_limiters(api_key: str | None = None) -> Dict[str, AsyncLi
             limiters[cache_key] = AsyncLimiter(1, 4.0)
         result[m] = limiters[cache_key]
     return result
+
+
+class LaneCooldownRegistry:
+    """(api_key, model) 単位のレーンクールダウンレジストリ（docs/model_optimization.md §9）。
+
+    KeyRotator/ModelRotator/TierManager と異なり**意図的にスレッドローカルにしない**:
+    「このキーのこのモデルは枯渇している」という事実はスレッドを跨いで共有されるのが正しい
+    （プロセスグローバルな dict + threading.Lock）。(api_key, model) でキーイングするため、
+    Web の別ユーザー（＝別キー）を誤って巻き込むこともなく、書籍の章並列化（章スレッドごと
+    に別キーを排他割り当て、docs/model_optimization.md §8 の KeyRotator.restrict_to()）とも
+    自然に整合する。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._cooldowns: Dict[Tuple[Optional[str], Optional[str]], float] = {}
+
+    def mark(self, api_key: Optional[str], model: Optional[str], seconds: float) -> None:
+        """(api_key, model) レーンを seconds 秒クールダウンさせる。既に設定済みで、かつ
+        まだそちらの方が長く残っている場合は短縮しない（同一レーンへの多重リクエストが
+        並行して 429 を踏んでも、最も長いクールダウンが優先される）。"""
+        until = time.time() + max(seconds, 0.0)
+        key = (api_key, model)
+        with self._lock:
+            existing = self._cooldowns.get(key, 0.0)
+            self._cooldowns[key] = max(existing, until)
+
+    def is_cooling(self, api_key: Optional[str], model: Optional[str]) -> bool:
+        with self._lock:
+            until = self._cooldowns.get((api_key, model))
+        return bool(until) and time.time() < until
+
+    def remaining(self, api_key: Optional[str], model: Optional[str]) -> float:
+        with self._lock:
+            until = self._cooldowns.get((api_key, model), 0.0)
+        return max(0.0, until - time.time())
+
+    def clear(self) -> None:
+        """全レーンのクールダウンを解除する（主にテスト用。reset_pipeline_state() からは
+        意図的に呼ばない — 枯渇の事実はパイプライン・章を跨いで持続するのが正しいため、
+        詳細は docs/model_optimization.md §9 参照）。"""
+        with self._lock:
+            self._cooldowns.clear()
+
+
+lane_cooldown = LaneCooldownRegistry()
+
+
+# --- 429/503 のクールダウン秒数決定（docs/model_optimization.md §9） ---
+#
+# RetryInfo.retryDelay は取れれば使うが、信頼性に難があるという報告があるため
+# （429 errors despite waiting after retryDelay 等）、必ず上下限でクランプして使う。
+# 加えて quotaMetric/quotaId から RPM/TPM/RPD のどれに起因するかを判別し、
+# 回復スケールの大きく異なる RPD だけは別ロジック（日次リセット時刻までの残り秒数）にする。
+
+COOLDOWN_MIN_SECONDS = 1.0
+# RPM/TPM は1分単位のスライディングウィンドウでリセットされる（gemini_models.md §4）。
+# retryDelayが取れない場合の既定値、および取れた場合のクランプ上限としても使う
+# （60秒の2倍＝安全マージンを見て120秒を上限とする）。
+COOLDOWN_RPM_TPM_SECONDS = 60.0
+RETRY_DELAY_CLAMP_MAX_SECONDS = 120.0
+# quotaMetric が判別できない場合（503含む）の安全側デフォルト。RPM/TPMより短くしているのは、
+# 429/503全般では「本当にリソース枯渇かどうか」自体が不確かなケース（一時的なサーバ混雑等）
+# を含むため、長時間ふさぐより早めに再挑戦させる方が実害が小さいという判断。
+COOLDOWN_UNKNOWN_SECONDS = 30.0
+# RPD はその日いっぱい回復しない（太平洋時間の深夜にリセット）。retryDelayは短すぎることが
+# 多く信用できないため、実際の日次リセット時刻までの残り秒数を計算して使う。計算誤り・
+# タイムゾーンデータ異常時の安全弁として下限1時間・上限24時間でクランプする。
+COOLDOWN_RPD_MIN_SECONDS = 3600.0
+COOLDOWN_RPD_MAX_SECONDS = 24 * 3600.0
+
+
+def _seconds_until_next_pacific_midnight(now: Optional[datetime] = None) -> float:
+    """次の太平洋時間深夜（Gemini APIのRPDリセット時刻）までの残り秒数。
+
+    `now` を渡すとテストで任意時刻を注入できる（`time.time()`同様、本番では省略）。
+    """
+    tz = ZoneInfo("America/Los_Angeles")
+    current = now.astimezone(tz) if now is not None else datetime.now(tz)
+    next_day = (current + timedelta(days=1)).date()
+    next_midnight = datetime(next_day.year, next_day.month, next_day.day, tzinfo=tz)
+    return (next_midnight - current).total_seconds()
+
+
+def _quota_violation_text(exc: BaseException) -> str:
+    """429/503 エラーの詳細情報を検索用に小文字化した1本の文字列にまとめる。
+
+    google-genai の APIError.details は元の JSON エラーボディ（'error'キー配下に
+    'details': [...] としてRetryInfo/QuotaFailureが入る）をそのまま保持しているが、
+    最終的にはメッセージ文字列化（str(exc)、APIError.__init__ が
+    f'{code} {status}. {details}' の形で details を埋め込む）にも同じ情報が現れるため、
+    構造化アクセスに失敗しても文字列マッチにフォールバックできる。
+    `_classify_quota_violation()` / `_is_model_scoped_quota()` の共通ヘルパー。
+    """
+    text = ""
+    details = getattr(exc, "details", None)
+    if details is not None:
+        try:
+            text = json.dumps(details, ensure_ascii=False, default=str)
+        except Exception:
+            text = str(details)
+    return f"{text} {exc}".lower()
+
+
+def _classify_quota_violation(exc: BaseException) -> str:
+    """429エラーの quotaMetric/quotaId から起因を判別する。'rpm'/'tpm'/'rpd'/'unknown' を返す。"""
+    text = _quota_violation_text(exc)
+
+    # トークン系（TPM）の quotaId/quotaMetric は "...token..." を含む（例:
+    # GenerateContentInputTokensPerModelPerMinute-FreeTier）。RPDのトークン系quotaは
+    # 現状ドキュメント上確認できないため、token系はTPM扱いを既定とする。
+    if "token" in text:
+        return "tpm"
+    # 日次（RPD）の quotaId/quotaMetric は "day" を含む（例: PerDay, per_day）。
+    if "day" in text:
+        return "rpd"
+    # 分次（RPM）の quotaId/quotaMetric は "minute" もしくは "requests" を含む。
+    if "minute" in text or "requests" in text or "rpm" in text:
+        return "rpm"
+    return "unknown"
+
+
+def _is_model_scoped_quota(exc: BaseException) -> bool:
+    """quotaId 等に "PerModel" が含まれるか判定する（大文字小文字不問）。
+
+    2026-07-26、書籍モード章並列化の実走行検証で実際に踏んだ429の quotaId が
+    `GenerateContentInputTokensPerModelPerMinute-FreeTier`、quotaDimensions に
+    `{'model': 'gemini-3.1-flash-lite'}` が明示されていることを確認した。これは、この
+    TPM（入力トークン毎分）クォータがプロジェクト全体・モデル間で共有されているのではなく
+    **モデル単位で独立集計されている**ことを示す直接証拠である。§7/§9 が採用していた
+    「無料枠Liteプールの2モデルはTPM枠を共有している（`gemini_models.md`の実測で上限値が
+    同一の250,000だったため）」という前提は、"上限の値が同じ"と"集計カウンターを共有する"
+    を混同していた可能性が高く、この実データはその前提を覆す（docs/model_optimization.md
+    §9 の記述訂正・troubleshooting_log 参照）。
+    quotaId に "PerModel" という語が確認できる場合のみモデルローテーションを有効な回復策と
+    みなす。確認できない場合（quotaId の形式が不明、503 で details が乏しい等）は、
+    実証されていない前提で判断を変えるべきではないため、保守的に「不明」として扱う
+    （呼び出し側は必要に応じて別途 quota_kind で判断する）。
+    """
+    return "permodel" in _quota_violation_text(exc)
+
+
+def _extract_retry_delay_seconds(exc: BaseException) -> Optional[float]:
+    """RetryInfo.retryDelay（例: "19s"）を抽出する。取れなければ None。
+
+    構造化アクセス（APIError.details 経由）と、それが無い/合致しない場合の文字列
+    マッチ（str(exc)。テストが投げる素の Exception/RuntimeError もこちらでカバーする）
+    の両方を試す。旧実装が使っていた "retry in Xs" 形式（既存テストのフェイク例外）にも
+    後方互換で対応する。
+    """
+    candidates = []
+    details = getattr(exc, "details", None)
+    if details is not None:
+        try:
+            candidates.append(json.dumps(details, ensure_ascii=False, default=str))
+        except Exception:
+            candidates.append(str(details))
+    candidates.append(str(exc))
+
+    for text in candidates:
+        m = re.search(r'retryDelay["\']?\s*[:=]\s*["\']?(\d+(?:\.\d+)?)\s*s', text, re.IGNORECASE)
+        if m:
+            return float(m.group(1))
+    for text in candidates:
+        m = re.search(r"retry in ([\d.]+)s", text, re.IGNORECASE)
+        if m:
+            return float(m.group(1))
+    return None
+
+
+def _lane_cooldown_seconds(exc: BaseException, quota_kind: str) -> float:
+    """429/503を検知したレーンをどれだけクールダウンさせるかを決定する。
+
+    - RPD起因: 次の太平洋時間深夜までの残り秒数（下限1時間・上限24時間）。retryDelayは
+      不正確という報告があるため参考にせず、日次リセットの計算値をそのまま使う。
+    - RPM/TPM起因: 1分前後で回復するため既定60秒。retryDelayが取れれば
+      1〜120秒にクランプして使う（回復スケールを大きく超える値は信用しない）。
+    - quotaMetric不明（503含む）: 安全側で既定30秒。retryDelayが取れれば同様にクランプ。
+    """
+    if quota_kind == "rpd":
+        floor = _seconds_until_next_pacific_midnight()
+        return min(max(floor, COOLDOWN_RPD_MIN_SECONDS), COOLDOWN_RPD_MAX_SECONDS)
+
+    base = COOLDOWN_RPM_TPM_SECONDS if quota_kind in ("rpm", "tpm") else COOLDOWN_UNKNOWN_SECONDS
+    retry_delay = _extract_retry_delay_seconds(exc)
+    if retry_delay is not None:
+        return max(COOLDOWN_MIN_SECONDS, min(retry_delay, RETRY_DELAY_CLAMP_MAX_SECONDS))
+    return base
+
+
+def _record_lane_cooldown(exc: BaseException, api_key: Optional[str], model: Optional[str]) -> str:
+    """429/503 を検知したレーンをクールダウンレジストリに記録し、判定した quota_kind を返す。"""
+    quota_kind = _classify_quota_violation(exc)
+    seconds = _lane_cooldown_seconds(exc, quota_kind)
+    lane_cooldown.mark(api_key, model, seconds)
+    return quota_kind
+
+
+def pick_lane(pool: List[str], keys: List[str], rr_index: int) -> Optional[Tuple[Optional[str], str]]:
+    """クールダウン中でないレーンを、docs/model_optimization.md §8 のラウンドロビン順序を
+    維持したまま選ぶ（ParallelTranslator._pick_batch_target / OCRManager._pick_page_target
+    の共通ロジック、重複実装による分岐を避けるためここに集約する）。
+
+    候補は i を通し番号として key = keys[i % K]（K=len(keys)。keysが空ならkey=None、
+    モデル軸のみのRR）、model = pool[(i // max(K,1)) % M] という §8 と同じ式。rr_index
+    から候補を順に辿り、クールダウン中でない最初のレーンを返す。K*M 回探しても全滅なら
+    None を返す（例外を投げない・無限ループしない）— 呼び出し元はこの場合、クールダウンを
+    無視した §8 従来どおりの割り当てにフォールバックすること。
+    """
+    if not pool:
+        return None
+    K = len(keys)
+    M = len(pool)
+    total_lanes = max(K, 1) * M
+    for offset in range(total_lanes):
+        i = rr_index + offset
+        key = keys[i % K] if K > 0 else None
+        model = pool[(i // max(K, 1)) % M]
+        if not lane_cooldown.is_cooling(key, model):
+            return key, model
+    return None
 
 
 # Gemini クライアントのキャッシュ（スレッドごとに独立した辞書）。
@@ -427,6 +753,7 @@ def call_gemini(
     retry_delay: float = 3.0,
     log_dir: Optional[Any] = None, # Pathオブジェクトを想定
     model_pinned: bool = False,
+    key_pinned: bool = False,
     **kwargs,
 ) -> str:
     """
@@ -435,9 +762,15 @@ def call_gemini(
     model_pinned: True の場合、呼び出し元が明示した model を ModelRotator の
     resolve()/advance() で上書きしない（Phase4のラウンドロビン割り当てなど、呼び出し元が
     プール内のどのモデルを使うか自分で管理したい場合に使う。通常の呼び出しは False のまま）。
+
+    key_pinned: True の場合、呼び出し元が明示した api_key を KeyRotator.current()/advance()
+    で上書きしない（model_pinned の完全な鏡写し。キー軸ラウンドロビンで意図的に free_2 を
+    渡しても、上書きすると常に current() ＝ free_1 に引き戻されて分散が成立しないため）。
+    プロアクティブな負荷分散（ラウンドロビン）とリアクティブな429フォールバックを混ぜない
+    という §7/§8 の設計思想に従う。
     """
     use_default_model = (model is None)
-    effective_key = key_rotator.current() if key_rotator.is_configured() else api_key
+    effective_key = api_key if key_pinned else (key_rotator.current() if key_rotator.is_configured() else api_key)
     client = _get_client(api_key=effective_key)
 
     # デバッグプロンプトのダンプ
@@ -517,19 +850,35 @@ def call_gemini(
             if attempt < max_retries:
                 wait_time, is_resource_limit = _calc_retry_wait(msg, attempt, retry_delay)
                 rotated = False
-                if is_resource_limit and not model_pinned and model_rotator.is_pool_member(current_model) and model_rotator.has_next():
+                quota_kind = "unknown"
+                tpm_blocks_model_rotation = False
+                if is_resource_limit:
+                    # レーン（このキー・このモデル）をクールダウンに入れる（§9）。
+                    quota_kind = _record_lane_cooldown(e, effective_key, current_model)
+                    # TPM起因の429は、quotaIdに"PerModel"が確認できる場合はモデル単位で
+                    # 独立集計されている（2026-07-26 実データで確認、§9訂正）ため、モデル
+                    # ローテーションが有効な回復策になりうる。確認できない場合のみ、従来どおり
+                    # モデルローテーションをスキップしてキー切替へ直行する（保守的デフォルト）。
+                    tpm_blocks_model_rotation = quota_kind == "tpm" and not _is_model_scoped_quota(e)
+                if (is_resource_limit and not model_pinned and not tpm_blocks_model_rotation
+                        and model_rotator.is_pool_member(current_model) and model_rotator.has_next()):
                     new_model = model_rotator.advance()
                     wait_time = MODEL_ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
                     rotated = True
                     print_log(f"  [LLM] モデルローテーション: {new_model} に切替")
-                elif is_resource_limit and key_rotator.is_configured() and key_rotator.has_next():
-                    new_key = key_rotator.advance()
-                    client = _get_client(api_key=new_key)
-                    wait_time = ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
-                    rotated = True
-                    _maybe_restore_tier_after_rotation()
-                    model_rotator.reset()  # 新しいキー = 別プロジェクトの独立枠なのでプール先頭から再開させる
-                    print_log(f"  [LLM] キーローテーション: {key_rotator.index + 1}/{key_rotator.count} 番目のキーに切替")
+                elif is_resource_limit and not key_pinned and key_rotator.is_configured():
+                    old_key = effective_key
+                    new_key = key_rotator.best_available(
+                        lambda k: not lane_cooldown.is_cooling(k, current_model)
+                    )
+                    if new_key is not None and new_key != old_key:
+                        effective_key = new_key
+                        client = _get_client(api_key=new_key)
+                        wait_time = ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
+                        rotated = True
+                        _maybe_restore_tier_after_rotation()
+                        model_rotator.reset()  # 新しいキー = 別プロジェクトの独立枠なのでプール先頭から再開させる
+                        print_log(f"  [LLM] キーローテーション: {key_rotator.index + 1}/{key_rotator.count} 番目のキーに切替")
                 if is_resource_limit and not rotated:
                     print_log(f"  [LLM] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
                 time.sleep(wait_time)
@@ -549,6 +898,7 @@ async def call_gemini_async(
     retry_delay: float = 3.0,
     log_dir: Optional[Any] = None, # Pathオブジェクトを想定
     model_pinned: bool = False,
+    key_pinned: bool = False,
     **kwargs,
 ) -> str:
     """
@@ -557,9 +907,12 @@ async def call_gemini_async(
     model_pinned: True の場合、呼び出し元が明示した model を ModelRotator の
     resolve()/advance() で上書きしない（Phase4のラウンドロビン割り当てなど、呼び出し元が
     プール内のどのモデルを使うか自分で管理したい場合に使う。通常の呼び出しは False のまま）。
+
+    key_pinned: True の場合、呼び出し元が明示した api_key を KeyRotator.current()/advance()
+    で上書きしない（model_pinned の完全な鏡写し。詳細は call_gemini の docstring 参照）。
     """
     use_default_model = (model is None)
-    effective_key = key_rotator.current() if key_rotator.is_configured() else api_key
+    effective_key = api_key if key_pinned else (key_rotator.current() if key_rotator.is_configured() else api_key)
     client = _get_client(api_key=effective_key)
 
     # デバッグプロンプトのダンプ
@@ -642,19 +995,35 @@ async def call_gemini_async(
             if attempt < max_retries:
                 wait_time, is_resource_limit = _calc_retry_wait(msg, attempt, retry_delay)
                 rotated = False
-                if is_resource_limit and not model_pinned and model_rotator.is_pool_member(current_model) and model_rotator.has_next():
+                quota_kind = "unknown"
+                tpm_blocks_model_rotation = False
+                if is_resource_limit:
+                    # レーン（このキー・このモデル）をクールダウンに入れる（§9）。
+                    quota_kind = _record_lane_cooldown(e, effective_key, current_model)
+                    # TPM起因の429は、quotaIdに"PerModel"が確認できる場合はモデル単位で
+                    # 独立集計されている（2026-07-26 実データで確認、§9訂正）ため、モデル
+                    # ローテーションが有効な回復策になりうる。確認できない場合のみ、従来どおり
+                    # モデルローテーションをスキップしてキー切替へ直行する（保守的デフォルト）。
+                    tpm_blocks_model_rotation = quota_kind == "tpm" and not _is_model_scoped_quota(e)
+                if (is_resource_limit and not model_pinned and not tpm_blocks_model_rotation
+                        and model_rotator.is_pool_member(current_model) and model_rotator.has_next()):
                     new_model = model_rotator.advance()
                     wait_time = MODEL_ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
                     rotated = True
                     print_log(f"  [LLM async] モデルローテーション: {new_model} に切替")
-                elif is_resource_limit and key_rotator.is_configured() and key_rotator.has_next():
-                    new_key = key_rotator.advance()
-                    client = _get_client(api_key=new_key)
-                    wait_time = ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
-                    rotated = True
-                    _maybe_restore_tier_after_rotation()
-                    model_rotator.reset()  # 新しいキー = 別プロジェクトの独立枠なのでプール先頭から再開させる
-                    print_log(f"  [LLM async] キーローテーション: {key_rotator.index + 1}/{key_rotator.count} 番目のキーに切替")
+                elif is_resource_limit and not key_pinned and key_rotator.is_configured():
+                    old_key = effective_key
+                    new_key = key_rotator.best_available(
+                        lambda k: not lane_cooldown.is_cooling(k, current_model)
+                    )
+                    if new_key is not None and new_key != old_key:
+                        effective_key = new_key
+                        client = _get_client(api_key=new_key)
+                        wait_time = ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
+                        rotated = True
+                        _maybe_restore_tier_after_rotation()
+                        model_rotator.reset()  # 新しいキー = 別プロジェクトの独立枠なのでプール先頭から再開させる
+                        print_log(f"  [LLM async] キーローテーション: {key_rotator.index + 1}/{key_rotator.count} 番目のキーに切替")
                 if is_resource_limit and not rotated:
                     print_log(f"  [LLM async] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
                 await asyncio.sleep(wait_time)
@@ -680,6 +1049,7 @@ async def translate_batch(
     log_dir: Optional[Any] = None,
     max_parse_retries: int = 2,
     model_pinned: bool = False,
+    key_pinned: bool = False,
 ) -> List["TreeNode"]:
     """チャンク群を XML タグ形式で翻訳し、パース失敗時は再試行する。"""
     from .models import TreeNode
@@ -754,7 +1124,8 @@ async def translate_batch(
             metrics_meta = {"section": section_name, "batch_id": batch_id}
             response = await call_gemini_async(
                 current_prompt, model=model, api_key=api_key, thinking_level=thinking_level,
-                metrics_metadata=metrics_meta, log_dir=log_dir, model_pinned=model_pinned
+                metrics_metadata=metrics_meta, log_dir=log_dir,
+                model_pinned=model_pinned, key_pinned=key_pinned,
             )
 
         # 3. 一括パース

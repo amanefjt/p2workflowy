@@ -41,6 +41,7 @@ def run_pipeline(
     max_concurrent_sections: int = 8,
     cleanup_sessions: bool = True,
     state_base_dir: Optional[Path] = None,
+    vlm_concurrency: Optional[int] = None,
 ) -> List[Path]:
     """パイプライン全体を実行する。"""
     from .llm_client import tier_manager, GeminiTier, reset_pipeline_state
@@ -106,6 +107,7 @@ def run_pipeline(
                 input_path, state.phase1_preprocessor, api_key=api_key,
                 state=state, pdf_mode=pdf_mode, is_book=is_book,
                 heavy_ocr=heavy_ocr, max_pages=max_pages,
+                vlm_concurrency=vlm_concurrency,
             )
             print_log(f"  完了: Phase 1 解析完了\n")
 

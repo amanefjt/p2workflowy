@@ -9,7 +9,7 @@ from PIL import Image
 from typing import List, Dict, Any, Set, Optional
 from core.llm_client import (
     call_gemini_async, get_default_model, tier_manager, GeminiTier,
-    model_rotator, get_free_pool_rate_limiters,
+    model_rotator, key_rotator, get_free_pool_rate_limiters, pick_lane,
 )
 from core.config import print_log, PROJECT_ROOT
 
@@ -19,7 +19,13 @@ class OCRManager:
     """
     SYMBOL_DENSITY_THRESHOLD = 0.03
     FRAGMENT_RATIO_THRESHOLD = 0.08
-    VLM_SEMAPHORE_LIMIT = 10
+    # VLM OCR の同時実行数の既定値。2026-07-26 に 10 → 20 へ引き上げた（§8 実測、AL PDF 18p
+    # で Phase1 41s → 31s）。引き上げが安全になったのは、キー×モデルの2軸ラウンドロビン
+    # （§8）で FREE tier の各リクエストが (キー, モデル) レーンごとの AsyncLimiter を必ず
+    # 通るようになり、発行レートの上限がセマフォではなくリミッタ側で担保されるようになった
+    # ため。リミッタが付かない経路（PAID tier / ユーザーが model を明示指定した場合）では
+    # セマフォがそのままバースト幅になるが、PAID は RPM 上限が十分高く実害はない。
+    VLM_SEMAPHORE_LIMIT = 20
     MIN_TEXT_CHARS = 100
     
     # キャッシュファイルのパス
@@ -104,10 +110,16 @@ Markdown 形式で抽出してください。
 </specific_rules>
 {VLM_BASE_RULES}"""
 
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+    def __init__(
+        self, api_key: Optional[str] = None, model: Optional[str] = None,
+        vlm_concurrency: Optional[int] = None,
+    ):
+        """vlm_concurrency: VLM OCR の同時実行数（省略時は VLM_SEMAPHORE_LIMIT のクラス既定値）。
+        キー×モデルの2軸ラウンドロビン（§8）でレーン数が増えたため、呼び出し元から引き上げ
+        られるようにした。既定値は後方互換のため据え置き。"""
         self.api_key = api_key
         self.model = model  # None ならページ単位で動的決定する（_pick_page_target 参照）
-        self.semaphore = asyncio.Semaphore(self.VLM_SEMAPHORE_LIMIT)
+        self.semaphore = asyncio.Semaphore(vlm_concurrency or self.VLM_SEMAPHORE_LIMIT)
         self._rr_index = 0  # 無料枠Liteプールのラウンドロビン用カウンタ（ページ単位でインクリメント）
 
         # キャッシュのロード
@@ -115,23 +127,49 @@ Markdown 形式で抽出してください。
         self._load_cache()
 
     def _pick_page_target(self):
-        """ページ1件分の (model, rate_limiter, pinned) を決定する。
+        """ページ1件分の (api_key, model, rate_limiter, model_pinned, key_pinned) を決定する。
 
         DEFAULT_MODEL_VLM はティアに関わらず常に参照される値（get_default_model("vlm") はtier
-        追従しない）だが、無料枠Liteプールのラウンドロビンは FREE tier かつユーザーが model を
+        追従しない）だが、無料枠のラウンドロビンは FREE tier かつユーザーが model を
         明示指定していない場合のみ適用する。PAID tier では有料キーのレート上限が十分高く、
-        無料枠専用ペース（1 req/4s/モデル）を適用するとむしろ有料ユーザーの速度を不必要に
+        無料枠専用ペース（1 req/4s/レーン）を適用するとむしろ有料ユーザーの速度を不必要に
         落としてしまうため（Phase4のParallelTranslator._pick_batch_targetと同じ設計思想）。
+
+        割り当ては Phase4 と完全に同じ「キー × モデル」の2軸（docs/model_optimization.md §8）:
+        key = keys[i % K], model = models[(i // K) % M]。
+
+        §9: 429/503 を検知したレーンはクールダウンレジストリに記録され（`core.llm_client.
+        lane_cooldown`）、`pick_lane()` がクールダウン中でないレーンを優先的に選ぶ。全レーンが
+        クールダウン中の場合のみ、クールダウンを無視した従来どおりの割り当てにフォールバック
+        する（例外を投げない・処理を止めない）。
         """
         if self.model is None and tier_manager.current_tier == GeminiTier.FREE:
             pool = model_rotator.pool_models()
-            if len(pool) > 1:
-                limiters = get_free_pool_rate_limiters(self.api_key)
-                m = pool[self._rr_index % len(pool)]
+            keys = key_rotator.pool_keys() if key_rotator.is_configured() else []
+            key_axis = keys if len(keys) > 1 else []
+            if len(pool) > 1 or key_axis:
+                i = self._rr_index
                 self._rr_index += 1
-                return m, limiters[m], True
+                lane = pick_lane(pool, key_axis, i)
+                if lane is not None:
+                    page_key, page_model = lane
+                    key_pinned = bool(key_axis)
+                    if not key_pinned:
+                        page_key = self.api_key
+                elif key_axis:
+                    # 全レーンがクールダウン中 → クールダウンを無視した §8 従来どおりの割当て
+                    page_key = key_axis[i % len(key_axis)]
+                    page_model = pool[(i // len(key_axis)) % len(pool)] if pool else None
+                    key_pinned = True
+                else:
+                    page_key = self.api_key
+                    page_model = pool[i % len(pool)]
+                    key_pinned = False
+                if page_model is not None:
+                    limiters = get_free_pool_rate_limiters(page_key)
+                    return page_key, page_model, limiters[page_model], True, key_pinned
         resolved = self.model or get_default_model("vlm")
-        return resolved, None, False
+        return self.api_key, resolved, None, False, False
 
     def _load_cache(self):
         if self.CACHE_PATH.exists():
@@ -228,16 +266,18 @@ Markdown 形式で抽出してください。
                     debug_dir.mkdir(parents=True, exist_ok=True)
                     current_img.save(debug_dir / f"page_{page_idx:03d}_vlm_input.png")
 
-                # 無料枠Liteプールが複数モデルの場合はページ単位でラウンドロビン割り当て
-                page_model, page_limiter, page_pinned = self._pick_page_target()
+                # FREE tier ではページ単位でキー×モデルの2軸ラウンドロビン割り当て
+                page_key, page_model, page_limiter, page_model_pinned, page_key_pinned = self._pick_page_target()
                 if page_limiter is not None:
                     async with page_limiter:
                         raw_result = await self._call_gemini_raw(
-                            [current_img, prompt_text], model=page_model, model_pinned=page_pinned
+                            [current_img, prompt_text], model=page_model, api_key=page_key,
+                            model_pinned=page_model_pinned, key_pinned=page_key_pinned,
                         )
                 else:
                     raw_result = await self._call_gemini_raw(
-                        [current_img, prompt_text], model=page_model, model_pinned=page_pinned
+                        [current_img, prompt_text], model=page_model, api_key=page_key,
+                        model_pinned=page_model_pinned, key_pinned=page_key_pinned,
                     )
 
                 if raw_result:
@@ -250,7 +290,10 @@ Markdown 形式で抽出してください。
                 return ""
             return raw_result
 
-    async def _call_gemini_raw(self, content: list, model: Optional[str] = None, model_pinned: bool = False) -> str:
+    async def _call_gemini_raw(
+        self, content: list, model: Optional[str] = None, api_key: Optional[str] = None,
+        model_pinned: bool = False, key_pinned: bool = False,
+    ) -> str:
         # 例外は握り潰さず呼び出し元へ伝播させる。call_gemini_async は空応答を
         # 常に異常とみなしリトライ（I-19）するため、ここに到達する時点で
         # 「空文字列」は絶対に返らない。空文字列と「本当の失敗」を区別できなく
@@ -259,10 +302,11 @@ Markdown 形式で抽出してください。
             result = await call_gemini_async(
                 prompt=content,
                 model=model or self.model or get_default_model("vlm"),
-                api_key=self.api_key,
+                api_key=api_key if key_pinned else self.api_key,
                 temperature=0.0,
                 thinking_level="Low",
                 model_pinned=model_pinned,
+                key_pinned=key_pinned,
             )
             # コードブロックの除去
             result = re.sub(r"^```[a-zA-Z]*\n", "", result)

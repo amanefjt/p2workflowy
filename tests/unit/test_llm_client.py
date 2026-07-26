@@ -280,3 +280,713 @@ def test_get_client_recreates_when_event_loop_differs():
         assert client_a is not client_b
     finally:
         llm_client._get_clients_dict().pop("loop-mismatch-key", None)
+
+
+# --- §8: キー × モデルの2軸ラウンドロビン（KeyRotator.pool_keys / key_pinned / restrict_to） ---
+
+
+def test_pool_keys_returns_only_free_keys():
+    """pool_keys() は tier が "free" のキーだけを並び順どおりに返す（有料キーは含めない）。
+    無料枠専用ペースのリミッタを有料キーに適用すると有料ユーザーを不必要に遅くするため。"""
+    from core.llm_client import key_rotator
+
+    key_rotator.configure(
+        ["f1", "f2", "f3", "f4", "paid"], tiers=["free", "free", "free", "free", "paid"]
+    )
+    try:
+        assert key_rotator.pool_keys() == ["f1", "f2", "f3", "f4"]
+    finally:
+        key_rotator.configure([])
+
+
+def test_pool_keys_skips_unset_keys():
+    """未設定（None）のキーは configure() が除外するため、2本しか設定していない環境でも壊れない。"""
+    from core.llm_client import key_rotator
+
+    key_rotator.configure(["f1", None, None, "f4", "paid"],
+                          tiers=["free", "free", "free", "free", "paid"])
+    try:
+        assert key_rotator.pool_keys() == ["f1", "f4"]
+        assert key_rotator.count == 3
+    finally:
+        key_rotator.configure([])
+
+
+def test_pool_keys_empty_when_tiers_unknown():
+    """tiers を渡していない場合はキー種別が判定できないため空リスト（キー軸RRは自然に無効）。"""
+    from core.llm_client import key_rotator
+
+    key_rotator.configure(["a", "b"])
+    try:
+        assert key_rotator.pool_keys() == []
+    finally:
+        key_rotator.configure([])
+
+
+@pytest.mark.asyncio
+async def test_call_gemini_async_key_pinned_bypasses_key_rotator():
+    """key_pinned=True のとき、呼び出し元が渡した api_key が key_rotator.current() に
+    上書きされない（model_pinned の完全な鏡写し）。429 に遭遇してもキーは前進しない。"""
+    from core.llm_client import key_rotator
+
+    used_keys = []
+    call_count = {"n": 0}
+
+    def _fake_get_client(api_key=None):
+        used_keys.append(api_key)
+        return fake_client
+
+    async def _stream_side_effect(**kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded, retry in 0.1s")
+
+        async def _gen():
+            yield _FakeChunk("ok", usage_metadata=_FakeUsage(10, 5))
+        return _gen()
+
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content_stream = AsyncMock(side_effect=_stream_side_effect)
+
+    key_rotator.configure(["f1", "f2", "paid"], tiers=["free", "free", "paid"])
+    try:
+        with patch("core.llm_client._get_client", side_effect=_fake_get_client), \
+             patch("core.llm_client.asyncio.sleep", new=AsyncMock()):
+            result = await call_gemini_async(
+                "prompt", api_key="f2", model_pinned=True, key_pinned=True,
+                max_retries=3, retry_delay=0.01,
+            )
+
+        assert result == "ok"
+        # current() は f1 のままだが、渡した f2 がそのまま使われる
+        assert used_keys == ["f2"]
+        # 429 でもキーは前進していない（リアクティブなフォールバックを混ぜない）
+        assert key_rotator.current() == "f1"
+    finally:
+        key_rotator.configure([])
+
+
+@pytest.mark.asyncio
+async def test_call_gemini_async_without_key_pinned_still_rotates():
+    """key_pinned=False（既定）のときは従来どおり key_rotator.current() に上書きされ、
+    429 でキーローテーションが働く（既存挙動の回帰確認）。"""
+    from core.llm_client import key_rotator, model_rotator
+
+    used_keys = []
+    call_count = {"n": 0}
+
+    def _fake_get_client(api_key=None):
+        used_keys.append(api_key)
+        return fake_client
+
+    async def _stream_side_effect(**kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded, retry in 0.1s")
+
+        async def _gen():
+            yield _FakeChunk("ok", usage_metadata=_FakeUsage(10, 5))
+        return _gen()
+
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content_stream = AsyncMock(side_effect=_stream_side_effect)
+
+    key_rotator.configure(["f1", "f2", "paid"], tiers=["free", "free", "paid"])
+    model_rotator.reset()
+    try:
+        with patch("core.llm_client._get_client", side_effect=_fake_get_client), \
+             patch("core.llm_client.asyncio.sleep", new=AsyncMock()):
+            # model_pinned=True にしてモデル軸のローテーションを抑止し、キー軸だけを見る
+            result = await call_gemini_async(
+                "prompt", api_key="ignored", model="explicit-model", model_pinned=True,
+                max_retries=3, retry_delay=0.01,
+            )
+
+        assert result == "ok"
+        assert used_keys == ["f1", "f2"]
+        assert key_rotator.current() == "f2"
+    finally:
+        key_rotator.configure([])
+        model_rotator.reset()
+
+
+def test_restrict_to_is_thread_local():
+    """restrict_to() は呼び出したスレッドにしか効かない（書籍モードの章並列化フック）。
+    制限を設定していないスレッドの current()/pool_keys()/count はグローバル状態のまま。"""
+    import threading
+    from core.llm_client import key_rotator
+
+    key_rotator.configure(["f1", "f2", "f3", "f4", "paid"],
+                          tiers=["free"] * 4 + ["paid"])
+    observed = {}
+    barrier = threading.Barrier(2)
+
+    def worker():
+        key_rotator.restrict_to(["f3"], tiers=["free"])
+        try:
+            observed["worker_current"] = key_rotator.current()
+            observed["worker_pool"] = key_rotator.pool_keys()
+            observed["worker_has_next"] = key_rotator.has_next()
+            observed["worker_count"] = key_rotator.count
+            barrier.wait(timeout=5)   # メインスレッドが観測するまで制限を保持
+            barrier.wait(timeout=5)
+        finally:
+            key_rotator.clear_restriction()
+
+    t = threading.Thread(target=worker)
+    try:
+        t.start()
+        barrier.wait(timeout=5)
+        # メインスレッドから見て一切影響がない
+        assert key_rotator.current() == "f1"
+        assert key_rotator.pool_keys() == ["f1", "f2", "f3", "f4"]
+        assert key_rotator.count == 5
+        assert key_rotator.is_restricted() is False
+        barrier.wait(timeout=5)
+        t.join(timeout=5)
+
+        assert observed["worker_current"] == "f3"
+        assert observed["worker_pool"] == ["f3"]
+        assert observed["worker_has_next"] is False
+        assert observed["worker_count"] == 1
+    finally:
+        t.join(timeout=5)
+        key_rotator.configure([])
+
+
+def test_restrict_to_advance_does_not_touch_global_index():
+    """制限中の advance() はスレッドローカルなインデックスだけを動かし、
+    プロセスグローバルな _index には触れない。"""
+    from core.llm_client import key_rotator
+
+    key_rotator.configure(["f1", "f2", "f3"], tiers=["free"] * 3)
+    try:
+        key_rotator.restrict_to(["f2", "f3"], tiers=["free", "free"])
+        assert key_rotator.current() == "f2"
+        assert key_rotator.advance() == "f3"
+        assert key_rotator.has_next() is False
+        key_rotator.clear_restriction()
+        # 解除後はグローバル状態が無傷のまま戻る
+        assert key_rotator.current() == "f1"
+        assert key_rotator.index == 0
+    finally:
+        key_rotator.clear_restriction()
+        key_rotator.configure([])
+
+
+# --- §9: レーン単位のクールダウン（circuit breaker） ---
+
+
+def test_lane_cooldown_registry_expires_after_seconds():
+    """mark() 直後は is_cooling() が True。クールダウン秒数が経過すると False に戻る
+    （時刻は time.time() をパッチして注入し、sleep には依存しない）。"""
+    from core.llm_client import LaneCooldownRegistry
+
+    reg = LaneCooldownRegistry()
+    with patch("core.llm_client.time.time", return_value=1000.0):
+        reg.mark("k1", "m1", 5.0)
+        assert reg.is_cooling("k1", "m1") is True
+
+    with patch("core.llm_client.time.time", return_value=1004.9):
+        assert reg.is_cooling("k1", "m1") is True  # まだ5秒経っていない
+
+    with patch("core.llm_client.time.time", return_value=1005.1):
+        assert reg.is_cooling("k1", "m1") is False  # 5秒経過して復帰
+
+
+def test_lane_cooldown_registry_keeps_longest_when_marked_twice():
+    """同一レーンに短いクールダウンを後から重ねても、既存の長い方を短縮しない
+    （複数スレッドが同時に同じレーンで429を踏んでも安全側に倒す）。"""
+    from core.llm_client import LaneCooldownRegistry
+
+    reg = LaneCooldownRegistry()
+    with patch("core.llm_client.time.time", return_value=1000.0):
+        reg.mark("k1", "m1", 10.0)
+        reg.mark("k1", "m1", 2.0)
+        assert reg.remaining("k1", "m1") == pytest.approx(10.0)
+
+
+def test_lane_cooldown_registry_shared_across_threads():
+    """プロセスグローバル + Lock: 別スレッドで mark() したクールダウンが、
+    メインスレッドの is_cooling() からも即座に見える（TierManager/ModelRotatorの
+    スレッドローカル設計とは意図的に異なる。§9 の設計判断）。"""
+    import threading
+    from core.llm_client import LaneCooldownRegistry
+
+    reg = LaneCooldownRegistry()
+
+    def worker():
+        reg.mark("thread-key", "thread-model", 999.0)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join(timeout=5)
+
+    assert reg.is_cooling("thread-key", "thread-model") is True
+
+
+def test_classify_quota_violation_tpm():
+    """quotaId に "Token" を含む場合は TPM 起因と判定する。"""
+    from core.llm_client import _classify_quota_violation
+
+    exc = RuntimeError(
+        "429 RESOURCE_EXHAUSTED: quotaId=GenerateContentInputTokensPerModelPerMinute-FreeTier"
+    )
+    assert _classify_quota_violation(exc) == "tpm"
+
+
+def test_classify_quota_violation_rpd():
+    """quotaId に "Day" を含む場合は RPD 起因と判定する。"""
+    from core.llm_client import _classify_quota_violation
+
+    exc = RuntimeError(
+        "429 RESOURCE_EXHAUSTED: quotaId=GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+    )
+    assert _classify_quota_violation(exc) == "rpd"
+
+
+def test_classify_quota_violation_rpm():
+    """quotaId に "Minute"/"Requests" を含み Token を含まない場合は RPM 起因と判定する。"""
+    from core.llm_client import _classify_quota_violation
+
+    exc = RuntimeError(
+        "429 RESOURCE_EXHAUSTED: quotaId=GenerateRequestsPerMinutePerProjectPerModel-FreeTier"
+    )
+    assert _classify_quota_violation(exc) == "rpm"
+
+
+def test_classify_quota_violation_unknown_for_503():
+    """quotaMetric の手がかりが無い 503 は unknown 扱い（安全側デフォルトへ）。"""
+    from core.llm_client import _classify_quota_violation
+
+    exc = RuntimeError("503 UNAVAILABLE: The model is overloaded. Please try again later.")
+    assert _classify_quota_violation(exc) == "unknown"
+
+
+class _FakeAPIError(Exception):
+    """google.genai.errors.APIError を模した最小限のフェイク。`.details` に
+    レスポンスJSON全体（'error'キー配下にdetails配列）を保持する実装を再現する。"""
+
+    def __init__(self, code, details):
+        self.code = code
+        self.details = details
+        super().__init__(f"{code} . {details}")
+
+
+# 2026-07-26、書籍モード章並列化の実走行検証（relationspdf.pdf、直列ベースライン）で
+# 実際に踏んだ429のレスポンスJSONそのもの（book_sessions/relationspdf_.../Phase 0
+# グロッサリー生成中、10:27:34発生）。作成したテスト用データではなく実データ。
+REAL_TPM_429_DETAILS = {
+    "error": {
+        "code": 429,
+        "message": (
+            "You exceeded your current quota, please check your plan and billing details. "
+            "For more information on this error, head to: "
+            "https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, "
+            "head to: https://ai.dev/rate-limit. \n"
+            "* Quota exceeded for metric: "
+            "generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, "
+            "limit: 250000, model: gemini-3.1-flash-lite\n"
+            "Please retry in 25.708951197s."
+        ),
+        "status": "RESOURCE_EXHAUSTED",
+        "details": [
+            {
+                "@type": "type.googleapis.com/google.rpc.Help",
+                "links": [
+                    {
+                        "description": "Learn more about Gemini API quotas",
+                        "url": "https://ai.google.dev/gemini-api/docs/rate-limits",
+                    }
+                ],
+            },
+            {
+                "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                "violations": [
+                    {
+                        "quotaMetric": (
+                            "generativelanguage.googleapis.com/"
+                            "generate_content_free_tier_input_token_count"
+                        ),
+                        "quotaId": "GenerateContentInputTokensPerModelPerMinute-FreeTier",
+                        "quotaDimensions": {
+                            "location": "global",
+                            "model": "gemini-3.1-flash-lite",
+                        },
+                        "quotaValue": "250000",
+                    }
+                ],
+            },
+            {
+                "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                "retryDelay": "25s",
+            },
+        ],
+    }
+}
+
+
+def test_classify_quota_violation_real_429_payload_is_tpm():
+    """実際に踏んだ429（REAL_TPM_429_DETAILS）を _classify_quota_violation に食わせると
+    'tpm' と判定される（§9で「未確認」としていた、実レスポンスでの動作確認）。"""
+    from core.llm_client import _classify_quota_violation
+
+    exc = _FakeAPIError(429, REAL_TPM_429_DETAILS)
+    assert _classify_quota_violation(exc) == "tpm"
+
+
+def test_extract_retry_delay_seconds_real_429_payload():
+    """実際の429（REAL_TPM_429_DETAILS）から retryDelay '25s' を 25.0 として抽出できる
+    （§9で「未確認」としていた、実レスポンスでの動作確認）。"""
+    from core.llm_client import _extract_retry_delay_seconds
+
+    exc = _FakeAPIError(429, REAL_TPM_429_DETAILS)
+    assert _extract_retry_delay_seconds(exc) == 25.0
+
+
+def test_is_model_scoped_quota_true_for_real_429_payload():
+    """実際の429（quotaId='...PerModelPerMinute-FreeTier'、quotaDimensions.model明示）は
+    per-model スコープと判定される。この実データが根拠となり、§9の「TPMはLiteプール2モデルで
+    共有」という前提を訂正した（コード修正: TPM起因でもPerModelが確認できればモデル
+    ローテーションを試みる）。"""
+    from core.llm_client import _is_model_scoped_quota
+
+    exc = _FakeAPIError(429, REAL_TPM_429_DETAILS)
+    assert _is_model_scoped_quota(exc) is True
+
+
+def test_is_model_scoped_quota_false_when_permodel_absent():
+    """quotaIdに"PerModel"の手がかりが無い場合はFalse（判別できないケースは保守的に扱う）。"""
+    from core.llm_client import _is_model_scoped_quota
+
+    exc = RuntimeError(
+        "429 RESOURCE_EXHAUSTED: quotaId=GenerateContentInputTokensPerMinute-FreeTier"
+    )
+    assert _is_model_scoped_quota(exc) is False
+
+
+def test_is_model_scoped_quota_false_for_503_without_details():
+    """quotaMetricの手がかりが一切無い503はFalse（不明な場合に真としない安全側デフォルト）。"""
+    from core.llm_client import _is_model_scoped_quota
+
+    exc = RuntimeError("503 UNAVAILABLE: The model is overloaded. Please try again later.")
+    assert _is_model_scoped_quota(exc) is False
+
+
+def test_extract_retry_delay_seconds_from_retry_info_style_message():
+    from core.llm_client import _extract_retry_delay_seconds
+
+    exc = RuntimeError("429 RESOURCE_EXHAUSTED. {'retryDelay': '19s', 'quotaId': '...'}")
+    assert _extract_retry_delay_seconds(exc) == 19.0
+
+
+def test_extract_retry_delay_seconds_legacy_format_still_supported():
+    """既存のフェイクテスト例外（"retry in Xs"）形式にも後方互換で対応する。"""
+    from core.llm_client import _extract_retry_delay_seconds
+
+    exc = RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded, retry in 0.1s")
+    assert _extract_retry_delay_seconds(exc) == 0.1
+
+
+def test_extract_retry_delay_seconds_none_when_absent():
+    from core.llm_client import _extract_retry_delay_seconds
+
+    exc = RuntimeError("503 UNAVAILABLE")
+    assert _extract_retry_delay_seconds(exc) is None
+
+
+def test_lane_cooldown_seconds_clamps_oversized_retry_delay():
+    """retryDelay が異常に大きい場合、RPM/TPM由来なら上限(120秒)にクランプする
+    （retryDelayは不正確という報告があるため、回復スケールを超える値を信用しない）。"""
+    from core.llm_client import _lane_cooldown_seconds, RETRY_DELAY_CLAMP_MAX_SECONDS
+
+    exc = RuntimeError("429 RESOURCE_EXHAUSTED. {'retryDelay': '9999s'}")
+    assert _lane_cooldown_seconds(exc, "rpm") == RETRY_DELAY_CLAMP_MAX_SECONDS
+
+
+def test_lane_cooldown_seconds_clamps_undersized_retry_delay():
+    """retryDelay が異常に小さい(ほぼ0)場合、下限(1秒)にクランプする。"""
+    from core.llm_client import _lane_cooldown_seconds, COOLDOWN_MIN_SECONDS
+
+    exc = RuntimeError("429 RESOURCE_EXHAUSTED. {'retryDelay': '0.0001s'}")
+    assert _lane_cooldown_seconds(exc, "tpm") == COOLDOWN_MIN_SECONDS
+
+
+def test_lane_cooldown_seconds_rpd_ignores_unreliable_short_retry_delay():
+    """RPD起因では、短い(不正確な)retryDelayを採用せず日次リセット計算値を優先する。"""
+    from core.llm_client import _lane_cooldown_seconds, COOLDOWN_RPD_MIN_SECONDS
+
+    exc = RuntimeError("429 RESOURCE_EXHAUSTED. {'retryDelay': '5s'}")
+    seconds = _lane_cooldown_seconds(exc, "rpd")
+    assert seconds >= COOLDOWN_RPD_MIN_SECONDS
+
+
+def test_seconds_until_next_pacific_midnight_is_within_one_day():
+    from core.llm_client import _seconds_until_next_pacific_midnight
+
+    seconds = _seconds_until_next_pacific_midnight()
+    assert 0 < seconds <= 24 * 3600
+
+
+def test_pick_lane_skips_cooling_lane():
+    """クールダウン中のレーンはラウンドロビンの候補から外れ、生きているレーンが選ばれる。"""
+    from core.llm_client import pick_lane, lane_cooldown
+
+    pool = ["m1", "m2"]
+    keys = ["k1", "k2"]
+    # rr_index=0 が本来選ぶはずのレーン (k1, m1) をクールダウンさせる
+    lane_cooldown.mark("k1", "m1", 999.0)
+
+    lane = pick_lane(pool, keys, 0)
+
+    assert lane is not None
+    assert lane != ("k1", "m1")
+    key, model = lane
+    assert lane_cooldown.is_cooling(key, model) is False
+
+
+def test_pick_lane_returns_none_when_all_lanes_cooling():
+    """全レーンがクールダウン中なら None を返す（例外を投げない・呼び出し元がフォールバック）。"""
+    from core.llm_client import pick_lane, lane_cooldown
+
+    pool = ["m1", "m2"]
+    keys = ["k1", "k2"]
+    for k in keys:
+        for m in pool:
+            lane_cooldown.mark(k, m, 999.0)
+
+    assert pick_lane(pool, keys, 0) is None
+
+
+def test_pick_lane_model_axis_only_skips_cooling_model():
+    """キー軸が無い（keys=[]）場合はモデル軸だけで、クールダウン中のモデルを飛ばす。"""
+    from core.llm_client import pick_lane, lane_cooldown
+
+    pool = ["m1", "m2"]
+    lane_cooldown.mark(None, "m1", 999.0)
+
+    lane = pick_lane(pool, [], 0)
+
+    assert lane == (None, "m2")
+
+
+def test_best_available_returns_current_key_if_available():
+    from core.llm_client import key_rotator
+
+    key_rotator.configure(["f1", "f2", "paid"], tiers=["free", "free", "paid"])
+    try:
+        assert key_rotator.best_available(lambda k: True) == "f1"
+        assert key_rotator.current() == "f1"  # 無駄な切替をしていない
+    finally:
+        key_rotator.configure([])
+
+
+def test_best_available_picks_next_available_when_current_is_not():
+    from core.llm_client import key_rotator
+
+    key_rotator.configure(["f1", "f2", "paid"], tiers=["free", "free", "paid"])
+    try:
+        avail = {"f1": False, "f2": True, "paid": True}
+        assert key_rotator.best_available(lambda k: avail.get(k, False)) == "f2"
+        assert key_rotator.current() == "f2"
+    finally:
+        key_rotator.configure([])
+
+
+def test_best_available_returns_to_recovered_free_key():
+    """forward-only の不可逆性の解消（§6既知の限界 → §9で解消）:
+    free1がクールダウン中にfree2へ切り替わった後、free1が回復すればfree1に戻れる。"""
+    from core.llm_client import key_rotator
+
+    key_rotator.configure(["f1", "f2", "paid"], tiers=["free", "free", "paid"])
+    try:
+        avail = {"f1": False, "f2": True, "paid": True}
+        assert key_rotator.best_available(lambda k: avail.get(k, False)) == "f2"
+
+        # f1が回復し、逆にf2がクールダウンに入った状況を再現
+        avail = {"f1": True, "f2": False, "paid": True}
+        assert key_rotator.best_available(lambda k: avail.get(k, False)) == "f1"
+    finally:
+        key_rotator.configure([])
+
+
+def test_best_available_falls_back_to_paid_only_as_last_resort():
+    """無料キーが1本でも生きていれば有料キーには落ちない。全無料キーが不可の場合のみ
+    有料キーへフォールバックする（既存の優先順位を維持）。"""
+    from core.llm_client import key_rotator
+
+    key_rotator.configure(["f1", "f2", "paid"], tiers=["free", "free", "paid"])
+    try:
+        avail = {"f1": False, "f2": False, "paid": True}
+        assert key_rotator.best_available(lambda k: avail.get(k, False)) == "paid"
+    finally:
+        key_rotator.configure([])
+
+
+def test_best_available_all_unavailable_falls_back_to_forward_only_advance():
+    """全キーが使用不可（新しい情報が無い）場合は、既存の forward-only advance() と
+    同じ挙動にフォールバックする（例外を投げない・処理を止めない）。"""
+    from core.llm_client import key_rotator
+
+    key_rotator.configure(["f1", "f2", "paid"], tiers=["free", "free", "paid"])
+    try:
+        result = key_rotator.best_available(lambda k: False)
+        assert result == "f2"  # advance() と同じ: 現在地(f1)から1つだけ前進
+        assert key_rotator.current() == "f2"
+    finally:
+        key_rotator.configure([])
+
+
+@pytest.mark.asyncio
+async def test_call_gemini_async_cools_lane_and_avoids_it_via_key_rotation():
+    """429を検知したレーン(初期キー, model)がクールダウンに入り、KeyRotatorが
+    (旧advance()のforward-onlyではなく)クールダウン中でない別のフリーキーへ切り替わる。"""
+    from core.llm_client import key_rotator, model_rotator, lane_cooldown
+
+    captured_keys = []
+    call_count = {"n": 0}
+
+    def _fake_get_client(api_key=None):
+        captured_keys.append(api_key)
+        return fake_client
+
+    async def _stream_side_effect(**kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded, retry in 0.1s")
+
+        async def _gen():
+            yield _FakeChunk("ok", usage_metadata=_FakeUsage(10, 5))
+        return _gen()
+
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content_stream = AsyncMock(side_effect=_stream_side_effect)
+
+    key_rotator.configure(["f1", "f2", "paid"], tiers=["free", "free", "paid"])
+    model_rotator.reset()
+    try:
+        with patch("core.llm_client._get_client", side_effect=_fake_get_client), \
+             patch("core.llm_client.asyncio.sleep", new=AsyncMock()):
+            result = await call_gemini_async(
+                "prompt", api_key="f1", model="explicit-model", model_pinned=True,
+                max_retries=3, retry_delay=0.01,
+            )
+
+        assert result == "ok"
+        assert captured_keys == ["f1", "f2"]
+        assert key_rotator.current() == "f2"
+        # f1・explicit-model レーンがクールダウンに記録されている
+        assert lane_cooldown.is_cooling("f1", "explicit-model") is True
+    finally:
+        key_rotator.configure([])
+        model_rotator.reset()
+        lane_cooldown.clear()
+
+
+@pytest.mark.asyncio
+async def test_call_gemini_async_model_scoped_tpm_quota_rotates_model_not_key():
+    """quotaId に "PerModel" が確認できる TPM 起因の429では、モデルローテーションを
+    試す（キー切替へは直行しない）。
+
+    2026-07-26、書籍モード章並列化の実走行検証で実際に踏んだ429の quotaId が
+    "GenerateContentInputTokensPerModelPerMinute-FreeTier"、quotaDimensions に
+    {'model': 'gemini-3.1-flash-lite'} が明示されており、このTPMクォータはモデル単位で
+    独立集計されていることが実データで確認できた（§9訂正）。旧実装は「TPM起因なら常に
+    モデルローテーションをスキップ」だったが、これは誤りだったため、quotaIdに"PerModel"が
+    確認できる場合はモデルローテーションを優先するよう修正した。この文字列は実際の429の
+    quotaId をそのまま使っている（本テストのために作った値ではない）。
+    """
+    from core.llm_client import key_rotator, model_rotator, lane_cooldown
+
+    captured_models = []
+    call_count = {"n": 0}
+
+    async def _stream_side_effect(**kwargs):
+        captured_models.append(kwargs.get("model"))
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError(
+                "429 RESOURCE_EXHAUSTED: quotaId=GenerateContentInputTokensPerModelPerMinute-FreeTier"
+            )
+
+        async def _gen():
+            yield _FakeChunk("translated", usage_metadata=_FakeUsage(10, 5))
+        return _gen()
+
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content_stream = AsyncMock(side_effect=_stream_side_effect)
+
+    model_rotator.reset()
+    pool_first = model_rotator.current()
+    assert model_rotator.has_next(), "テスト前提: DEFAULT_MODEL_FREE_POOL に2要素以上必要"
+    pool_second = model_rotator.pool_models()[1]
+    key_rotator.configure(["f1", "f2", "paid"], tiers=["free", "free", "paid"])
+
+    try:
+        with patch("core.llm_client._get_client", return_value=fake_client), \
+             patch("core.llm_client.asyncio.sleep", new=AsyncMock()):
+            result = await call_gemini_async(
+                "prompt", model=pool_first, api_key="f1", max_retries=3, retry_delay=0.01
+            )
+
+        assert result == "translated"
+        # モデルが切り替わっている（PerModelスコープのTPMなのでモデルローテーションが有効）
+        assert captured_models == [pool_first, pool_second]
+        assert model_rotator.current() == pool_second
+        # キーは前進していない（モデル切替だけで回復したため）
+        assert key_rotator.current() == "f1"
+    finally:
+        model_rotator.reset()
+        key_rotator.configure([])
+        lane_cooldown.clear()
+
+
+@pytest.mark.asyncio
+async def test_call_gemini_async_unscoped_tpm_quota_skips_model_rotation_and_rotates_key():
+    """quotaId に "PerModel" の手がかりが無い（モデル単位かプロジェクト単位か判別できない）
+    TPM 起因の429では、根拠のない前提でモデルローテーションを試さず、保守的にキー切替へ
+    直行する（§9 の元々の設計を、判別できないケースに限定して維持）。"""
+    from core.llm_client import key_rotator, model_rotator, lane_cooldown
+
+    captured_models = []
+    call_count = {"n": 0}
+
+    async def _stream_side_effect(**kwargs):
+        captured_models.append(kwargs.get("model"))
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # "PerModel" を含まない TPM 起因のクォータ文字列（プロジェクト単位か
+            # モデル単位か判別できないケースを模擬）
+            raise RuntimeError(
+                "429 RESOURCE_EXHAUSTED: quotaId=GenerateContentInputTokensPerMinute-FreeTier"
+            )
+
+        async def _gen():
+            yield _FakeChunk("translated", usage_metadata=_FakeUsage(10, 5))
+        return _gen()
+
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content_stream = AsyncMock(side_effect=_stream_side_effect)
+
+    model_rotator.reset()
+    pool_first = model_rotator.current()
+    assert model_rotator.has_next(), "テスト前提: DEFAULT_MODEL_FREE_POOL に2要素以上必要"
+    key_rotator.configure(["f1", "f2", "paid"], tiers=["free", "free", "paid"])
+
+    try:
+        with patch("core.llm_client._get_client", return_value=fake_client), \
+             patch("core.llm_client.asyncio.sleep", new=AsyncMock()):
+            result = await call_gemini_async(
+                "prompt", model=pool_first, api_key="f1", max_retries=3, retry_delay=0.01
+            )
+
+        assert result == "translated"
+        # モデルは切り替わっていない（PerModelの手がかりが無いのでモデルローテーションはスキップ）
+        assert captured_models == [pool_first, pool_first]
+        assert model_rotator.current() == pool_first  # 共有状態も変化していない
+        # 代わりにキーが前進している
+        assert key_rotator.current() == "f2"
+    finally:
+        model_rotator.reset()
+        key_rotator.configure([])
+        lane_cooldown.clear()

@@ -164,6 +164,11 @@ def main():
     print(f"使用APIキー: 無料キー{free_count}本設定済み（1本目から使用{rr_note}）"
           f"{' + 有料キーあり（429/503が続いた場合の最終フォールバック）' if GEMINI_API_KEY else ''}")
 
+    # tier の既定値: 無料キーが1本でも設定されていれば、明示指定が無くても「無料から始めて、
+    # 尽きたら有料へ」（tier=free、429/503でのみ有料へフォールバック）を既定にする。
+    # --free/--lite は「無料キーが無い環境でも無料枠ペースを強制したい」場合の明示上書き用に残す。
+    default_tier = "free" if (free_count > 0 or args.free or args.lite) else "paid"
+
     # 引数がない場合は対話モード
     if not args.input_files:
         print("\n=== p2workflowy V2 対話モード ===")
@@ -218,7 +223,7 @@ def main():
                 glossary_path=args.glossary,
                 thinking_level=args.thinking,
                 pdf_mode=args.pdf_mode,
-                tier="free" if (args.free or args.lite) else "paid",
+                tier=default_tier,
                 heavy_ocr=args.heavy_ocr,
                 max_pages=args.max_pages,
                 max_chapters=args.max_chapters,
@@ -276,7 +281,7 @@ def main():
                     model=args.model,
                     thinking_level=args.thinking,
                     pdf_mode=pdf_mode,
-                    tier="free" if (args.free or args.lite) else "paid",
+                    tier=default_tier,
                     is_book=False,
                     structure_only=args.structure_only,
                     resume_only=args.resume_only,

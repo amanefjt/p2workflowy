@@ -367,7 +367,15 @@ class BookManager:
                     if assigned_key in free_keys else "unknown"
                 )
                 try:
-                    key_rotator.restrict_to([assigned_key], ["free"])
+                    # 割り当てた無料キー1本を基本としつつ、有料キーも末尾に含めて見えるようにする。
+                    # forward-only な advance()/best_available() は無料キーが尽きるまで有料キーへは
+                    # 進まないため、通常運用の挙動（無料優先）は変えずに「章の無料キーが本当に
+                    # 全滅した場合だけ有料へ逃がす」という全体方針を章並列時にも成立させる。
+                    paid_fallback = key_rotator.paid_keys()
+                    key_rotator.restrict_to(
+                        [assigned_key] + paid_fallback,
+                        ["free"] + ["paid"] * len(paid_fallback),
+                    )
                     set_log_prefix(f"[ch{idx+1}] ")
                     print_log(f"  [BookManager] 使用キー割り当て: {key_label}")
                     try:

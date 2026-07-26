@@ -231,6 +231,14 @@ class KeyRotator:
             return []
         return [k for k, t in zip(keys, tiers) if t == "free"]
 
+    def paid_keys(self) -> List[str]:
+        """tier が "paid" のキーだけを返す（書籍章並列化で、章スレッドに割り当てた無料キー1本が
+        枯渇し尽くした場合の最終フォールバック先として restrict_to() に渡すため）。"""
+        keys, tiers = self._view()
+        if not keys or not tiers:
+            return []
+        return [k for k, t in zip(keys, tiers) if t == "paid"]
+
     def has_next(self) -> bool:
         keys, _ = self._view()
         return bool(keys) and self._get_index() < len(keys) - 1
@@ -891,7 +899,13 @@ def call_gemini(
                         wait_time = MODEL_ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
                         rotated = True
                         print_log(f"  [LLM] モデルローテーション: {new_model} に切替")
-                elif is_resource_limit and not key_pinned and key_rotator.is_configured():
+                # モデルローテーションで解決しなかった場合（プール対象外のモデル、または同一キー内の
+                # 全レーンが冷却中でモデルを変えても状況が変わらない場合）はキー自体を切り替える。
+                # 以前は if/elif で片方しか試さなかったため、current_model が無料枠Liteプールの
+                # メンバーである限り（＝VLM OCR等の主要経路）この分岐に絶対に到達せず、
+                # 「このキーの無料枠が尽きたら次のキー・最終的には有料キーへ」が機能しなかった
+                # （2026-07-26 実運用で発覚）。if を2つ順に試す形にして両経路とも機能させる。
+                if is_resource_limit and not rotated and not key_pinned and key_rotator.is_configured():
                     old_key = effective_key
                     new_key = key_rotator.best_available(
                         lambda k: not lane_cooldown.is_cooling(k, current_model)
@@ -1039,7 +1053,8 @@ async def call_gemini_async(
                         wait_time = MODEL_ROTATION_RETRY_DELAY_BASE + random.uniform(0, 1.0)
                         rotated = True
                         print_log(f"  [LLM async] モデルローテーション: {new_model} に切替")
-                elif is_resource_limit and not key_pinned and key_rotator.is_configured():
+                # 理由は call_gemini の同一箇所コメント参照（if/elif→2つのifへ、2026-07-26）。
+                if is_resource_limit and not rotated and not key_pinned and key_rotator.is_configured():
                     old_key = effective_key
                     new_key = key_rotator.best_available(
                         lambda k: not lane_cooldown.is_cooling(k, current_model)

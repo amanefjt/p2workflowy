@@ -2,7 +2,9 @@
 # git commit 前のリマインドフック(非ブロッキング)。
 # core/ 配下の変更をコミットするのに requirements_log.md / troubleshooting_log.md の
 # どちらも更新していない場合にだけ、参考程度の注意喚起を表示する。
-# CLAUDE.md「変更管理」節 / .cursor/rules/90-verification-and-maintenance.mdc 参照。
+# CLAUDE.md「変更管理」節を参照。
+# 実行ビットが落ちるとサイレントに無効化される（settings.json から直接 exec される）ため、
+# このファイルの mode は 100755 を維持すること。
 
 input=$(cat)
 command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)

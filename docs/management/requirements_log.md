@@ -796,3 +796,33 @@ Web側で本当に5並行を許可する設計に変えることで露呈する�
   直列である理由を1〜2行で追記し、`docs/model_optimization.md`§3.1への参照を付けた。既存の
   章並列化・並列数・無料枠ラウンドロビンの記述にある節番号参照も新構成に合わせて更新した
   （§10→§2.5、§2・§7・§8→§2.3・§4、§8→§2.2）。
+
+## 2026-09-10: `DEFAULT_MODEL_RESUME` を `gemini-3.6-flash` → `gemini-3.8-flash` に切替
+
+- **背景**: `gemini-3.6-flash`（2026-07-21 GA）の後、3週間おきに `gemini-3.7-flash`
+  （2026-08-13）・`gemini-3.8-flash`（2026-09-02）がリリースされた。ユーザーが AI Studio の
+  Rate Limit ダッシュボード（`p2out1` プロジェクト）を確認し、両モデルの違いを調べて更新する
+  よう依頼した。
+- **調査結果**: `gemini-3.6-flash` / `gemini-3.7-flash` / `gemini-3.8-flash` は現在いずれも
+  同額の期間限定価格（入力$0.75・出力$3.75/1Mトークン、〜2026-12-31。2027-01-01から$1.50/$7.50
+  に倍増）で、無料枠 Rate Limit も同一（RPM 5 / RPD 20 / TPM 250,000）。過去バージョンの
+  `docs/gemini_models.md` にあった「`gemini-3.6-flash` = $1.50/$7.50 固定」という記載は誤りで、
+  2026-09-10 に公式 Pricing ページで訂正した。`gemini-3.8-flash` はベンチマーク上
+  `gemini-3.7-flash` を上回る（Artificial Analysis Intelligence Index 59 vs 56、DeepSWE
+  v1.1・HLE-Verified 等）が、`HIGH` 思考時のトークン消費が3.7比で約1.5〜1.7倍という報告がある。
+  詳細・出典は `docs/gemini_models.md` §1・§2・§5。
+- **決定**: 価格・無料枠 Rate Limit が3世代とも同額・同枠である以上 `gemini-3.6-flash` に
+  留まる理由がなく、`gemini-3.7-flash` も価格面で `gemini-3.8-flash` に対する優位がないため、
+  ベンチマーク最良の `gemini-3.8-flash` を新しい `DEFAULT_MODEL_RESUME` とした
+  （`core/coreprompts.json`）。ユーザーの判断により golden-verification 等の実データ検証は
+  今回スコープ外。
+- **未検証の懸念（申し送り）**: (1) `gemini-3.6/3.7/3.8-flash` が無料枠 RPD
+  のバケットを共有している可能性があり（`gemini-3.5-flash`↔`gemini-3.6-flash` の前例と同じ
+  形）、共有していれば世代交代しても無料枠の実効容量は増えない。(2)
+  `RESUME_MODEL_SAFE_CHAR_LIMIT`（`core/book_manager.py` / `core/phase2_meta.py`、
+  600,000字）は `gemini-3.5-flash` 時代の実測値をそのまま流用しており、`gemini-3.8-flash` で
+  同じ制約が出るかは未検証。(3) `HIGH` 思考時のトークン消費増によるコスト・TPM消費ペースへの
+  実影響は未計測。
+- **対応**: `core/coreprompts.json` の `DEFAULT_MODEL_RESUME` を変更。参照していた
+  `core/book_manager.py` / `core/phase2_meta.py` のコメントを更新。`~/Code/shared/
+  gemini_models.md`（正本）を更新し `sync.sh` で3リポジトリに配布。

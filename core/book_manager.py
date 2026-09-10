@@ -21,9 +21,9 @@ from .llm_client import call_gemini, get_default_model, load_coreprompts, Gemini
 # 書籍全文スキャンはこの規模を容易に超えるため、超過時は resume モデルを使わず
 # 既定モデル（gemini-3.1-flash-lite）にフォールバックする。安全マージンとして
 # 実測しきい値（734,997字=OK / 738,015字=FAIL）よりかなり低い値を設定。
-# 2026-07-22: DEFAULT_MODEL_RESUME を gemini-3.6-flash に切替済みだが、この上限は
-# gemini-3.5-flash 実測値のまま未検証（3.6-flash で同じ制約が出るかは要再測定）。
-# 保守的な値のため当面はこのまま流用する。
+# 2026-07-22: DEFAULT_MODEL_RESUME を gemini-3.6-flash に切替、2026-09-10 に
+# gemini-3.8-flash へ再切替済みだが、この上限は gemini-3.5-flash 実測値のまま未検証
+# （3.6/3.8-flash で同じ制約が出るかは要再測定）。保守的な値のため当面はこのまま流用する。
 RESUME_MODEL_SAFE_CHAR_LIMIT = 600_000
 
 # ①〜④ルーティング規則の実体は core/engine/p1_ingest/routing.py に一元化

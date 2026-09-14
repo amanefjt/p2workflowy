@@ -21,13 +21,13 @@ p2workflowy V3 における Gemini モデルの**ルーティング戦略・並�
 | `DEFAULT_MODEL_FREE` | `gemini-3.1-flash-lite` |
 | `DEFAULT_MODEL_FREE_POOL` | `["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]`（§2 のモデル軸ラウンドロビン対象） |
 | `DEFAULT_MODEL_VLM` | `gemini-3.1-flash-lite` |
-| `DEFAULT_MODEL_RESUME` | `gemini-3.6-flash` |
+| `DEFAULT_MODEL_RESUME` | `gemini-3.8-flash` |
 
 ドキュメントとコードが乖離している場合はコード側を優先し、このドキュメントを修正すること。
 
 ### 1.2 ハイブリッド構成（2026-07-11 決定、現行）
 
-レジュメ生成（論文全体・書籍全体・章単位）のみ `DEFAULT_MODEL_RESUME`（`gemini-3.6-flash`）を使い、**翻訳を含むそれ以外の全フェーズは `DEFAULT_MODEL`（`gemini-3.1-flash-lite`）を使う**。GA 移行後の価格改定で Flash と Flash-Lite の価格差が約 6 倍に拡大したため、品質影響が大きいレジュメ生成のみ高モデルを残し、他は Lite に統一した（根拠: 2026-07-11 Stage 1 モデル A/B、NST 論文、Arm B 採用）。
+レジュメ生成（論文全体・書籍全体・章単位）のみ `DEFAULT_MODEL_RESUME`（`gemini-3.8-flash`）を使い、**翻訳を含むそれ以外の全フェーズは `DEFAULT_MODEL`（`gemini-3.1-flash-lite`）を使う**。GA 移行後の価格改定で Flash と Flash-Lite の価格差が約 6 倍に拡大したため、品質影響が大きいレジュメ生成のみ高モデルを残し、他は Lite に統一した（根拠: 2026-07-11 Stage 1 モデル A/B、NST 論文、Arm B 採用）。
 
 `DEFAULT_MODEL_RESUME` は `TierManager` のティア追従の対象外（`core/llm_client.py::get_default_model("resume")`）。無料ティアへダウンシフトした場合でもレジュメ生成は常に `DEFAULT_MODEL_RESUME` で実行される。詳細は `docs/management/requirements_log.md`（2026-07-11 Stage 1 A/B）。
 
@@ -36,13 +36,14 @@ p2workflowy V3 における Gemini モデルの**ルーティング戦略・並�
 ### 1.3 後継モデルへ切替えたもの／切替えなかったもの
 
 - **`DEFAULT_MODEL_RESUME` は `gemini-3.5-flash` → `gemini-3.6-flash` へ切替済み（2026-07-22）**: Rate Limit が新旧完全一致（`gemini_models.md` §4）、価格は出力 -17%（入力同額）という純粋な改善のため。
+- **`DEFAULT_MODEL_RESUME` はさらに `gemini-3.6-flash` → `gemini-3.8-flash` へ切替済み（2026-09-10）**: `gemini-3.6/3.7/3.8-flash` は価格（期間限定 $0.75/$3.75、〜2026-12-31）・無料枠 Rate Limit（RPM 5 / RPD 20 / TPM 250,000）が3世代とも同一のため、ベンチマーク最良（Artificial Analysis Intelligence Index 59、`3.7-flash` は56）の `gemini-3.8-flash` を採用した。ただし `HIGH` 思考時のトークン消費が `3.7-flash` 比で約1.5〜1.7倍という報告があり、コスト・TPM消費への実影響は未計測。詳細・懸念事項は `docs/management/requirements_log.md`（2026-09-10）。
 - **`DEFAULT_MODEL` / `DEFAULT_MODEL_FREE` / `DEFAULT_MODEL_VLM`（`gemini-3.1-flash-lite`）は後継 `gemini-3.5-flash-lite` へ切替えていない**: Rate Limit は一致するが価格が値上げ（入力+20%・出力+67%、`gemini_models.md` §5）で、コスト最優先というハイブリッド構成の設計意図と衝突するため。GA 化して間もなく廃止予定もないため、現状維持のリスクは小さいと判断。
 
 > [!NOTE]
 > **「無料枠だから値上げは関係ない」わけではない**: 無料ティアは従量課金が $0 なので、無料キーで叩く限り価格改定は影響しない（効くのは Rate Limit のみで、これは新旧完全一致）。ただし `DEFAULT_MODEL`（PAID tier 既定）と `DEFAULT_MODEL_VLM`（tier 分岐なしで常時参照、`core/llm_client.py:35-58`）は、管理者の `APP_ADMIN_PASSCODE` 経由やユーザー自身の有料キーなど**課金対象の有料キーで呼ばれた場合はそのまま実 billing に乗る**。`DEFAULT_MODEL_FREE` も無料キー専用ではなく、有料キーのまま `TierManager` が 429/503 でモデルだけダウンシフトした場合にも使われうる。したがって Lite 系の値上げは「無料キー由来のトラフィックには影響しないが、有料キーが絡む経路には影響する」というのが正確な理解であり、これが上記の現状維持判断の根拠。
 
 > [!NOTE]
-> **`gemini-3.5-flash`（旧 resume モデル）の単発リクエスト実効入力上限は公称値よりかなり低い（2026-07-13 実測、`troubleshooting_log.md` I-20）**: 実測で約 186,000〜187,000 tok（概ね 735,000 字前後）を超えると `400 INVALID_ARGUMENT` になる。ただし後続の実測（2026-07-21、`Naven.pdf` 746,470字/165,673tok で成功）により、文字/トークン比が文書によって 3.9〜4.5 程度ブレるため**文字数だけを閾値にした判定は不正確**であることも判明した（`core/phase2_meta.py::MAX_INPUT_CHARS` は代理指標に過ぎない）。書籍モードの Phase 0 全文スキャンは `core/book_manager.py::RESUME_MODEL_SAFE_CHAR_LIMIT`（60万字）超で `DEFAULT_MODEL` へフォールバックするガードで対処済み。この上限は `gemini-3.5-flash` での実測であり `gemini-3.6-flash` では未検証（ガード自体は保守的な値のためそのまま流用）。より頑健にするなら `count_tokens` 相当での実測判定への切替が望ましいが未実装（2026-07-21 指摘、対応は見送り）。
+> **`gemini-3.5-flash`（旧 resume モデル）の単発リクエスト実効入力上限は公称値よりかなり低い（2026-07-13 実測、`troubleshooting_log.md` I-20）**: 実測で約 186,000〜187,000 tok（概ね 735,000 字前後）を超えると `400 INVALID_ARGUMENT` になる。ただし後続の実測（2026-07-21、`Naven.pdf` 746,470字/165,673tok で成功）により、文字/トークン比が文書によって 3.9〜4.5 程度ブレるため**文字数だけを閾値にした判定は不正確**であることも判明した（`core/phase2_meta.py::MAX_INPUT_CHARS` は代理指標に過ぎない）。書籍モードの Phase 0 全文スキャンは `core/book_manager.py::RESUME_MODEL_SAFE_CHAR_LIMIT`（60万字）超で `DEFAULT_MODEL` へフォールバックするガードで対処済み。この上限は `gemini-3.5-flash` での実測であり `gemini-3.6-flash` 以降（現行の `gemini-3.8-flash` 含む）では未検証（ガード自体は保守的な値のためそのまま流用）。より頑健にするなら `count_tokens` 相当での実測判定への切替が望ましいが未実装（2026-07-21 指摘、対応は見送り）。
 
 ### 1.4 フェーズ別ルーティング表
 
@@ -291,6 +292,7 @@ Rate Limit の具体的な数値・料金は `gemini_models.md` §4・§5 を参
 - **速度改善の実測はいずれも単発〜2回計測**で複数 trial での統計的検証は行っていない。Phase4 の所要時間は API 側のテールレイテンシ（単一リクエストが60〜144秒かかるスパイク）に強く左右されることを繰り返し観測している。
 - **無料キー4本運用のリスク**: 無料枠拡張目的の複数 GCP プロジェクト作成は Google の監視対象になりうるというコミュニティ報告がある（ブロッカーとはしていない）。
 - **クールダウンは half-open ではなく単純な即時フル復帰**（§3.7 で不採用の理由を記載）。クールダウン秒数（RPM/TPM=60秒、unknown=30秒）は今回新規に設計した値で実運用でのチューニング余地がある。
+- **`gemini-3.6/3.7/3.8-flash` が無料枠 RPD のバケットを共有している可能性**（`gemini-3.5-flash`↔`gemini-3.6-flash` の前例と同じ形）は未検証。共有していれば世代交代しても無料枠の実効容量は増えない（2026-09-10 申し送り、`requirements_log.md` 同日エントリ）。
 - **同一書籍の同時重複アップロード**: `BookManager.session_dir` は内容フィンガープリント基準で `task_id` に基づかないため、異なる2ユーザーがほぼ同時に同一書籍をアップロードすると競合書き込みの可能性が残る（Web版、対応保留）。
 - **キーローテーションは429/503のみをトリガーにする**。無効・失効した無料キーは `max_retries` 回リトライして失敗し、有料キーへは切り替わらない。
 - **`--book-concurrency` が無料キー本数を超えると無警告で頭打ちになる**（2026-07-26 コードレビュー指摘）。`book_manager.py` は指定値をそのまま `ThreadPoolExecutor(max_workers=...)` に渡すが、`key_queue` には `len(free_keys)` 本しか積まれないため、超過分のスレッドは `key_queue.get()` でブロックしたまま実質的な並列度が `len(free_keys)` に頭打ちになる。クラッシュ・デッドロックはしない（他章のキー返却で必ず再開する）が、`--help` の文言にもこの上限は明記されておらず、ユーザーが意図した並列度より遅くなっていることに気づきにくい。対応は見送り（実害が「遅いだけ」で小さいため）。直すなら `effective_concurrency = min(effective_concurrency, len(free_keys))` のクランプと、超過時の `print_log` 警告を追加する形になる。
@@ -313,3 +315,4 @@ Rate Limit の具体的な数値・料金は `gemini_models.md` §4・§5 を参
 - **2026-07-26（同日）**: レーン単位のクールダウン（circuit breaker、`LaneCooldownRegistry`）を実装し `KeyRotator`/`ModelRotator` の forward-only 不可逆性を緩和。書籍実走行検証で「TPMは2モデルで共有」という§7当初の前提が誤りだったと判明（`quotaId` が `PerModel` であることを実データで確認）し、`_is_model_scoped_quota()` で訂正（`troubleshooting_log.md` I-41）。
 - **2026-07-26（同日）**: 書籍モードの章並列化（`ThreadPoolExecutor` + `KeyRotator.restrict_to()`）を実装し3章限定で実走行検証。Phase4 のセクション内バッチは直列のまま維持することを決定（§3.1）。Gemma併用を不採用と結論（§3.2）。
 - **2026-07-26（コードレビュー）**: `ModelRotator` にも `KeyRotator.best_available()` と同じクールダウン考慮のフォールバックAPIを追加（`best_available()`）。`call_gemini`/`call_gemini_async` のリトライループを forward-only な `advance()` 直呼びから切替え、無料枠Liteプールを一巡した後に以前のモデルが回復していれば戻れるようにした（`troubleshooting_log.md` I-44）。
+- **2026-09-10**: `DEFAULT_MODEL_RESUME` を `gemini-3.6-flash` → `gemini-3.8-flash` へ切替（§1.3）。価格・無料枠 Rate Limit が3世代同一のためベンチマーク最良のものを採用。`RESUME_MODEL_SAFE_CHAR_LIMIT` 等の実測値は旧モデル基準のまま未検証（§6 に申し送り追記）。

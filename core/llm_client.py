@@ -770,6 +770,43 @@ def _calc_retry_wait(msg: str, attempt: int, retry_delay: float) -> tuple[float,
     return retry_delay * attempt, False
 
 
+def _build_final_error_message(prefix: str, last_error: Exception, model: str, max_retries: int) -> str:
+    """全リトライ失敗後の RuntimeError 用に、原因の見当と対処法を日本語で付記する。
+
+    call_gemini/call_gemini_async どちらの最終 raise からも使う共通ヘルパー。
+    ここで案内できるのは「何が起きているか」までで、`--session <id> --resume <N>`
+    の具体的なセッションID・フェーズ番号までは（呼び出し階層の上、main.py/pipeline.py
+    側の情報なので）分からない。そのため案内は「ログの『State 保存』行を見ればパスから
+    セッションIDが分かる」という一般的な誘導に留める。
+    """
+    msg = str(last_error)
+    base = f"{prefix}（{model}, {max_retries}回リトライ後も解消せず）: {last_error}"
+    resume_hint = (
+        "処理の続きから再開したい場合は、ログ中の「State 保存」行に出ているパス"
+        "（state/<セッションID>/...）からセッションIDを控え、"
+        "`--session <セッションID> --resume <再開したいフェーズ番号>` で保存済みの状態から再開できます。"
+    )
+    if any(code in msg for code in ["429", "RESOURCE_EXHAUSTED"]):
+        return (
+            f"{base}\n"
+            f"[原因] APIキー側のレート制限/クォータ超過（429）が解消しませんでした。\n"
+            f"[対処] 時間を置いてから再実行してください。{resume_hint}"
+        )
+    if any(code in msg for code in ["503", "UNAVAILABLE"]):
+        return (
+            f"{base}\n"
+            f"[原因] {model} が Google 側で混雑しています（503 UNAVAILABLE）。APIキー自体の問題ではありません。\n"
+            f"[対処] 数分待ってから再実行してください。{resume_hint}"
+        )
+    if any(code in msg for code in ["400", "INVALID_ARGUMENT"]):
+        return (
+            f"{base}\n"
+            f"[原因] リクエスト内容が不正と判定されました（入力が長すぎる場合に起きやすい）。\n"
+            f"[対処] 対象ファイルが極端に長い場合は分割等を検討してください。"
+        )
+    return base
+
+
 def call_gemini(
     prompt: str | list,
     model: str | None = None,
@@ -921,7 +958,7 @@ def call_gemini(
                 if is_resource_limit and not rotated:
                     print_log(f"  [LLM] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
                 time.sleep(wait_time)
-    raise RuntimeError(f"Gemini API 呼び出し失敗: {last_error}")
+    raise RuntimeError(_build_final_error_message("Gemini API 呼び出し失敗", last_error, current_model, max_retries))
 
 
 async def call_gemini_async(
@@ -1071,7 +1108,7 @@ async def call_gemini_async(
                     print_log(f"  [LLM async] リソース制限/混雑(503/429)を検知。ダウンシフトして{wait_time:.1f}秒待機...")
                 await asyncio.sleep(wait_time)
 
-    raise RuntimeError(f"Gemini API 非同期呼び出し失敗: {last_error}")
+    raise RuntimeError(_build_final_error_message("Gemini API 非同期呼び出し失敗", last_error, current_model, max_retries))
 
 
 # --- 高レベル API ラッパー ---

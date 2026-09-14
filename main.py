@@ -245,7 +245,7 @@ def main():
                         print(f"  -> {target_path.name}")
                         
         except Exception as e:
-            print(f"書籍処理中にエラー発生: {e}")
+            print(f"\n書籍処理中にエラー発生:\n{e}\n")
             traceback.print_exc()
     else:
         # --- 論文モード: 従来の個別ループ処理 ---
@@ -290,7 +290,7 @@ def main():
                     max_concurrent_sections=args.concurrent,
                 )
             except Exception as e:
-                print(f"[{i}/{len(input_files)}] エラー発生: {e}")
+                print(f"\n[{i}/{len(input_files)}] エラー発生:\n{e}\n")
                 traceback.print_exc()
 
 

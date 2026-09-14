@@ -826,3 +826,31 @@ Web側で本当に5並行を許可する設計に変えることで露呈する�
 - **対応**: `core/coreprompts.json` の `DEFAULT_MODEL_RESUME` を変更。参照していた
   `core/book_manager.py` / `core/phase2_meta.py` のコメントを更新。`~/Code/shared/
   gemini_models.md`（正本）を更新し `sync.sh` で3リポジトリに配布。
+- **副次的に判明したドキュメント乖離**: `docs/model_optimization.md` が上記切替（旧
+  `gemini-3.6-flash`）に追従できておらず、§1.1/§1.2/§1.3/§1.4/§6/§7 が古い値のまま
+  だった。実装（`coreprompts.json`）とドキュメントが食い違う場合はドキュメント側を直す
+  という本ファイル冒頭の原則に沿って、2026-09-14 にユーザー指摘を受けて追従修正した。
+
+## 2026-09-14: Gemini API 全リトライ失敗時のエラーメッセージにユーザー向けの原因・対処を付記
+
+- **背景**: `--resume` 前に `gemini-3.8-flash` が Google 側で混雑（503 UNAVAILABLE）し、
+  無料キー4本を順にローテーションしても同一モデルへのリクエストが5回とも失敗して CLI が
+  Python の `RuntimeError` トレースバックのみを出して終了した。ユーザーがこのログを見て
+  原因・対処が分かるようにしてほしいと依頼した。
+- **原因の切り分け**: レジュメ生成用の `DEFAULT_MODEL_RESUME` は明示的な `model` 指定で
+  `call_gemini` を呼ぶため `TierManager` のダウンシフトにもモデルローテーション（無料枠
+  Liteプールのメンバーではないため対象外）にも乗らない設計（既知・意図通り、§1.2参照）。
+  今回はこの固定モデル自体が Google 側で一時的に高負荷だったのが根本原因で、
+  p2workflowy 側のロジック不具合ではないと確認した。
+- **対応**: `core/llm_client.py` に `_build_final_error_message()` を追加し、
+  `call_gemini`/`call_gemini_async` の最終 `raise RuntimeError` をこれ経由に変更。
+  429/RESOURCE_EXHAUSTED・503/UNAVAILABLE・400/INVALID_ARGUMENT の3パターンを判別し、
+  「[原因]」「[対処]」を日本語で付記する（対処には `--session <id> --resume <N>` での
+  再開方法も案内）。`main.py` のエラー表示（論文モード・書籍モード両方）も
+  `print(f"...: {e}")` の1行詰め込みから改行区切りに変更し、複数行になった新メッセージが
+  読みやすいようにした。
+- **スコープ外**: セッションID・再開すべきフェーズ番号を自動算出して案内に埋め込むところ
+  までは踏み込んでいない（`call_gemini` は `pipeline.py`/`SessionState` の情報を持たない
+  ため、案内は「ログの『State 保存』行からセッションIDを控える」という一般的な誘導に
+  留めた）。より踏み込むなら `core/pipeline.py::run_pipeline()` 側で例外を捕捉し
+  `state.session_id` と完了済みフェーズから再開先を具体的に組み立てる形になる。

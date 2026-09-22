@@ -13,20 +13,29 @@ from .config import STATE_DIR, SessionState, print_log, set_log_prefix
 from .engine.p1_ingest.pdf_splitter import PDFSplitter
 from .engine.p1_ingest.routing import decide_pdf_mode as _decide_book_pdf_mode
 from .engine.p3_structure.state_integrator import StateIntegrator
-from .llm_client import call_gemini, get_default_model, load_coreprompts, GeminiTier, apply_tier_settings
+from .llm_client import call_gemini, get_default_model, load_coreprompts, GeminiTier, apply_tier_settings, key_rotator
 
 # gemini-3.5-flash（旧 DEFAULT_MODEL_RESUME）は公称入力上限（1,048,576 tok）とは別に、
 # 単発リクエストで実測 ~186,000〜187,000 tok（本文字数にして概ね 735,000 字前後）を超えると
 # 400 INVALID_ARGUMENT を返す（ドキュメント未記載の実挙動。troubleshooting_log I-20）。
-# 書籍全文スキャンはこの規模を容易に超えるため、超過時は resume モデルを使わず
-# 既定モデル（gemini-3.1-flash-lite）にフォールバックする。安全マージンとして
-# 実測しきい値（734,997字=OK / 738,015字=FAIL）よりかなり低い値を設定。
-# 2026-07-22: DEFAULT_MODEL_RESUME を gemini-3.6-flash に切替。2026-09-10 に
-# gemini-3.8-flash へ再切替したが、無料枠でこの規模の単発リクエストが 503 で
-# 通らないことが実運用で判明し（troubleshooting_log.md I-45）、2026-09-15 に
-# gemini-3.6-flash へ差し戻した。この上限自体は gemini-3.5-flash 実測値のまま未検証
-# （3.6-flash で同じ制約が出るかは要再測定）。保守的な値のため当面はこのまま流用する。
+# 2026-07-22 に DEFAULT_MODEL_RESUME を gemini-3.6-flash に切替した際はこの上限が
+# 3.6-flash でも再現するか未検証のまま、保守的にこのガードを引き継いでいた。
+# 2026-09-22、有料キー・gemini-3.6-flash で 1,113,493字（279,358tok）を単発送信し
+# 400 が再現しないことを実測で確認した（troubleshooting_log.md I-46）。そのため
+# このガードは「有料キーが無い（＝無料枠モデルにフォールバックせざるを得ない）場合」
+# にのみ適用する。有料キーがあるときは resume モデル（gemini-3.6-flash）のまま
+# 単発送信してよい（BookManager._generate_global_context_single 参照）。
 RESUME_MODEL_SAFE_CHAR_LIMIT = 600_000
+
+# 無料枠の TPM（Tokens Per Minute）上限は Lite・Flash 問わず一律 250,000（実際に踏んだ
+# 429 のエラー詳細でも実測・再確認済み。docs/gemini_models.md §4）。字/トークン比は
+# 文書により 3.9〜4.5 程度ブレる（troubleshooting_log I-32）ため、実測比（2026-09-22:
+# gemini-3.6-flash で 1,113,493字 = 279,358tok ≒ 3.99字/tok）を基準に、既存の
+# RESUME_MODEL_SAFE_CHAR_LIMIT と同程度の安全マージン（実測しきい値の8割程度）を
+# 取って 800,000 字とする。無料キーのみ（有料キーが無い）環境でこれを超える書籍は、
+# 単発リクエストでは無料枠のどのモデル・どのキーでも TPM 超過で 429 が確定するため、
+# チャンク分割の map-reduce 処理に回す（troubleshooting_log.md I-46）。
+FREE_TIER_TPM_SAFE_CHAR_LIMIT = 800_000
 
 # ①〜④ルーティング規則の実体は core/engine/p1_ingest/routing.py に一元化
 # （論文モードの main.py / server.py とも共有するため）。_decide_book_pdf_mode
@@ -64,6 +73,14 @@ class BookManager:
             import uuid
             return f"fallback_{uuid.uuid4().hex[:8]}"
 
+    def _get_paid_key(self) -> Optional[str]:
+        """設定済みの有料キーがあれば返す（無ければ None）。"""
+        if key_rotator.is_configured():
+            paid = key_rotator.paid_keys()
+            if paid:
+                return paid[0]
+        return None
+
     def _generate_global_context(self, expertise: str = "文化人類学"):
         """PDF 全編をスキャンし、書籍全体のレジュメと用語集を事前生成する。"""
         print_log(f"\n--- Phase 0: Global Context Generation (Full Scan) ---")
@@ -75,7 +92,7 @@ class BookManager:
         finally:
             doc.close()
 
-        # トークン制限対策
+        # トークン制限対策（極端に巨大な書籍のみ対象の最終防衛ライン）
         MAX_CHARS = 1_200_000
         if len(full_text) > MAX_CHARS:
             print_log(f"  [BookManager] テキストサンプリング実行 ({len(full_text)} chars)")
@@ -84,29 +101,16 @@ class BookManager:
             print_log(f"  [BookManager] フルテキスト抽出完了 ({len(full_text)} chars)")
 
         prompts = load_coreprompts()
+        paid_key = self._get_paid_key()
 
-        # 1. 全体レジュメ生成
-        print_log("  [BookManager] 書籍全体のレジュメを生成中...")
-        resume_prompt = prompts.get("BOOK_SUMMARY_PROMPT", "").replace("{expertise}", expertise) \
-                                     .replace("{context_guide}", "書籍全体の核心的問い、論理構成を俯瞰して下さい。") \
-                                     .replace("{text}", full_text)
-
-        resume_model = self.model or get_default_model("resume")
-        if not self.model and len(full_text) > RESUME_MODEL_SAFE_CHAR_LIMIT:
-            print_log(f"  [BookManager] 全文が{RESUME_MODEL_SAFE_CHAR_LIMIT}字超のため resume モデルの実効入力上限を回避し既定モデルへフォールバック")
-            resume_model = get_default_model("default")
-        self.global_resume = call_gemini(resume_prompt, api_key=self.api_key, model=resume_model, thinking_level="High")
-
-        # 2. 全体用語集生成
-        print_log("  [BookManager] 書籍全体の共通用語集を生成中...")
-        glossary_prompt = prompts.get("KEYWORD_EXTRACTION_PROMPT", "").replace("{expertise}", expertise) \
-                                         .replace("{text}", full_text)
-        
-        glossary_json = call_gemini(glossary_prompt, api_key=self.api_key, model=self.model, response_mime_type="application/json")
-        try:
-            self.global_glossary = json.loads(glossary_json)
-        except:
-            self.global_glossary = []
+        # 単発送信できる条件: ①ユーザーが --model を明示指定 / ②有料キーがある
+        # （TPM上限は無料枠のみの制約） / ③無料枠でもTPM安全域(800,000字)に収まる。
+        # いずれにも該当しない＝無料キーのみでTPM安全域を超える場合だけチャンク分割する。
+        if self.model or paid_key or len(full_text) <= FREE_TIER_TPM_SAFE_CHAR_LIMIT:
+            self._generate_global_context_single(full_text, expertise, prompts, paid_key)
+        else:
+            print_log(f"  [BookManager] 全文が無料枠のTPM安全域（{FREE_TIER_TPM_SAFE_CHAR_LIMIT}字）を超え、有料キーも無いためチャンク分割で処理します")
+            self._generate_global_context_chunked(full_text, expertise, prompts)
 
         # 結果を確実に保存して次回スキップ可能にする
         context_file = self.session_dir / "global_context.json"
@@ -117,6 +121,108 @@ class BookManager:
         }
         context_file.write_text(json.dumps(save_data, ensure_ascii=False, indent=2), encoding="utf-8")
         print_log(f"  [BookManager] Global Context を保存しました: {context_file.absolute()}")
+
+    def _generate_global_context_single(self, full_text: str, expertise: str, prompts: dict, paid_key: Optional[str]):
+        """全文を1回のリクエストで送って生成する経路。
+
+        _generate_global_context() のガード条件（--model明示 / 有料キーあり /
+        無料枠TPM安全域内）のいずれかを満たす場合に使う。
+        """
+        if self.model:
+            # ユーザー明示指定時は従来どおり尊重し、フォールバックは適用しない
+            resume_model = self.model
+            glossary_model = self.model
+            key, key_pinned = self.api_key, False
+        elif paid_key:
+            # 有料キーがあれば resume モデルのまま1回で送る。TPM上限は無料枠のみの
+            # 制約であり、400字数ガードも gemini-3.6-flash では未再現（RESUME_MODEL_SAFE_CHAR_LIMIT
+            # 冒頭コメント・troubleshooting_log.md I-46 参照）なのでフォールバック不要。
+            resume_model = get_default_model("resume")
+            glossary_model = resume_model
+            key, key_pinned = paid_key, True
+        else:
+            resume_model = get_default_model("resume")
+            if len(full_text) > RESUME_MODEL_SAFE_CHAR_LIMIT:
+                print_log(f"  [BookManager] 全文が{RESUME_MODEL_SAFE_CHAR_LIMIT}字超のため resume モデルの実効入力上限を回避し既定モデルへフォールバック")
+                resume_model = get_default_model("default")
+            glossary_model = self.model  # None → 既存どおり tier 追従（無料枠なら自動でLiteへ）
+            key, key_pinned = self.api_key, False
+
+        print_log("  [BookManager] 書籍全体のレジュメを生成中...")
+        resume_prompt = prompts.get("BOOK_SUMMARY_PROMPT", "").replace("{expertise}", expertise) \
+                                     .replace("{context_guide}", "書籍全体の核心的問い、論理構成を俯瞰して下さい。") \
+                                     .replace("{text}", full_text)
+        self.global_resume = call_gemini(resume_prompt, api_key=key, model=resume_model, thinking_level="High", key_pinned=key_pinned)
+
+        print_log("  [BookManager] 書籍全体の共通用語集を生成中...")
+        glossary_prompt = prompts.get("KEYWORD_EXTRACTION_PROMPT", "").replace("{expertise}", expertise) \
+                                         .replace("{text}", full_text)
+        glossary_json = call_gemini(glossary_prompt, api_key=key, model=glossary_model, response_mime_type="application/json", key_pinned=key_pinned)
+        try:
+            self.global_glossary = json.loads(glossary_json)
+        except:
+            self.global_glossary = []
+
+    @staticmethod
+    def _split_into_chunks(full_text: str, max_chars: int) -> List[str]:
+        """段落境界（\\n\\n）を優先して max_chars 以下のチャンクに分割する。"""
+        paragraphs = full_text.split("\n\n")
+        chunks: List[str] = []
+        current = ""
+        for para in paragraphs:
+            candidate = f"{current}\n\n{para}" if current else para
+            if len(candidate) > max_chars and current:
+                chunks.append(current)
+                current = para
+            else:
+                current = candidate
+        if current:
+            chunks.append(current)
+        return chunks
+
+    def _generate_global_context_chunked(self, full_text: str, expertise: str, prompts: dict):
+        """無料キーのみ・かつ無料枠TPM安全域を超える場合の map-reduce 処理。
+
+        チャンクごとに部分レジュメ・部分用語集を無料枠モデルで生成し、レジュメは
+        最後にもう1回のLLM呼び出しで統合し直す（用語集はコード側で重複除去して結合）。
+        書籍1冊あたりのAPI呼び出し数は増えるが、無料枠のみでも全文を欠落なく処理できる。
+        """
+        chunks = self._split_into_chunks(full_text, FREE_TIER_TPM_SAFE_CHAR_LIMIT)
+        print_log(f"  [BookManager] 全文を{len(chunks)}チャンクに分割して処理します")
+
+        partial_resumes = []
+        partial_glossaries = []
+        for i, chunk in enumerate(chunks, 1):
+            print_log(f"  [BookManager] チャンク {i}/{len(chunks)} のレジュメを生成中...")
+            chunk_prompt = prompts.get("BOOK_SUMMARY_PROMPT", "").replace("{expertise}", expertise) \
+                                         .replace("{context_guide}", f"これは書籍全体のうち分割ブロック {i}/{len(chunks)} 番目です。このブロックの範囲内で核心的な議論を俯瞰して下さい。") \
+                                         .replace("{text}", chunk)
+            partial = call_gemini(chunk_prompt, api_key=self.api_key, thinking_level="High")
+            partial_resumes.append(f"## [分割ブロック {i}/{len(chunks)}]\n\n{partial}")
+
+            print_log(f"  [BookManager] チャンク {i}/{len(chunks)} の用語集を生成中...")
+            chunk_glossary_prompt = prompts.get("KEYWORD_EXTRACTION_PROMPT", "").replace("{expertise}", expertise) \
+                                             .replace("{text}", chunk)
+            glossary_json = call_gemini(chunk_glossary_prompt, api_key=self.api_key, response_mime_type="application/json")
+            try:
+                partial_glossaries.extend(json.loads(glossary_json))
+            except:
+                pass
+
+        print_log("  [BookManager] 部分レジュメを統合中...")
+        combine_prompt = prompts.get("BOOK_SUMMARY_COMBINE_PROMPT", "").replace("{expertise}", expertise) \
+                                         .replace("{partial_summaries}", "\n\n---\n\n".join(partial_resumes))
+        self.global_resume = call_gemini(combine_prompt, api_key=self.api_key, thinking_level="High")
+
+        # 用語集は重複除去して結合（英語表記を大文字小文字無視でキーに、先勝ち）
+        seen = set()
+        merged_glossary = []
+        for item in partial_glossaries:
+            dedup_key = str(item.get("en", "")).strip().lower()
+            if dedup_key and dedup_key not in seen:
+                seen.add(dedup_key)
+                merged_glossary.append(item)
+        self.global_glossary = merged_glossary
 
     def run(self, resume_only: bool = False, structure_only: bool = False, max_chapters: Optional[int] = None,
             book_concurrency: Optional[int] = None, vlm_concurrency: Optional[int] = None,

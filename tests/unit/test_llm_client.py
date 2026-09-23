@@ -344,7 +344,7 @@ def test_get_client_recreates_when_event_loop_differs():
         llm_client._get_clients_dict().pop("loop-mismatch-key", None)
 
 
-# --- §8: キー × モデルの2軸ラウンドロビン（KeyRotator.pool_keys / key_pinned / restrict_to） ---
+# --- §8: キー × モデルの2軸ラウンドロビン（KeyRotator.pool_keys / key_pinned） ---
 
 
 def test_pool_keys_returns_only_free_keys():
@@ -470,70 +470,6 @@ async def test_call_gemini_async_without_key_pinned_still_rotates():
     finally:
         key_rotator.configure([])
         model_rotator.reset()
-
-
-def test_restrict_to_is_thread_local():
-    """restrict_to() は呼び出したスレッドにしか効かない（書籍モードの章並列化フック）。
-    制限を設定していないスレッドの current()/pool_keys()/count はグローバル状態のまま。"""
-    import threading
-    from core.llm_client import key_rotator
-
-    key_rotator.configure(["f1", "f2", "f3", "f4", "paid"],
-                          tiers=["free"] * 4 + ["paid"])
-    observed = {}
-    barrier = threading.Barrier(2)
-
-    def worker():
-        key_rotator.restrict_to(["f3"], tiers=["free"])
-        try:
-            observed["worker_current"] = key_rotator.current()
-            observed["worker_pool"] = key_rotator.pool_keys()
-            observed["worker_has_next"] = key_rotator.has_next()
-            observed["worker_count"] = key_rotator.count
-            barrier.wait(timeout=5)   # メインスレッドが観測するまで制限を保持
-            barrier.wait(timeout=5)
-        finally:
-            key_rotator.clear_restriction()
-
-    t = threading.Thread(target=worker)
-    try:
-        t.start()
-        barrier.wait(timeout=5)
-        # メインスレッドから見て一切影響がない
-        assert key_rotator.current() == "f1"
-        assert key_rotator.pool_keys() == ["f1", "f2", "f3", "f4"]
-        assert key_rotator.count == 5
-        assert key_rotator.is_restricted() is False
-        barrier.wait(timeout=5)
-        t.join(timeout=5)
-
-        assert observed["worker_current"] == "f3"
-        assert observed["worker_pool"] == ["f3"]
-        assert observed["worker_has_next"] is False
-        assert observed["worker_count"] == 1
-    finally:
-        t.join(timeout=5)
-        key_rotator.configure([])
-
-
-def test_restrict_to_advance_does_not_touch_global_index():
-    """制限中の advance() はスレッドローカルなインデックスだけを動かし、
-    プロセスグローバルな _index には触れない。"""
-    from core.llm_client import key_rotator
-
-    key_rotator.configure(["f1", "f2", "f3"], tiers=["free"] * 3)
-    try:
-        key_rotator.restrict_to(["f2", "f3"], tiers=["free", "free"])
-        assert key_rotator.current() == "f2"
-        assert key_rotator.advance() == "f3"
-        assert key_rotator.has_next() is False
-        key_rotator.clear_restriction()
-        # 解除後はグローバル状態が無傷のまま戻る
-        assert key_rotator.current() == "f1"
-        assert key_rotator.index == 0
-    finally:
-        key_rotator.clear_restriction()
-        key_rotator.configure([])
 
 
 # --- §9: レーン単位のクールダウン（circuit breaker） ---

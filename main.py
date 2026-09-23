@@ -43,8 +43,8 @@ def main():
         type=int,
         default=None,
         dest="book_concurrency",
-        help="書籍モード: 章の並列処理数（既定値: 無料キー本数と章数の小さい方。"
-             "無料キーが2本未満の場合は常に直列。1を指定すると完全直列になる）",
+        help="書籍モード: 章の並列処理数（有料キー使用時のみ有効。既定値4。"
+             "無料キー使用時は常に直列。1を指定すると完全直列になる）",
     )
     parser.add_argument(
         "--paper",
@@ -138,36 +138,29 @@ def main():
 
     args = parser.parse_args()
 
-    # --- APIキー選択: 無料キー最大4本→有料キーの順に自動フォールバック（開発時も通常利用時も常に無料から）。
-    #     さらに FREE tier ではキー×モデルの2軸ラウンドロビンで能動的に分散する（§8）。
-    #     未設定のキーは configure() が自動で除外するため、2本しか設定していない環境でも動く。 ---
-    from core.config import (
-        GEMINI_API_KEY, GEMINI_API_KEY_FREE_1, GEMINI_API_KEY_FREE_2,
-        GEMINI_API_KEY_FREE_3, GEMINI_API_KEY_FREE_4,
-    )
+    # --- APIキー選択: 無料キー（GEMINI_API_KEY_FREE_1）と有料キー（GEMINI_API_KEY）のうち
+    #     設定されている方を1本だけ使う（両方設定時は有料優先）。レート制限・ティアはキー
+    #     単位ではなくGCPプロジェクト単位のため、実行中の無料→有料自動フォールバックは
+    #     複数プロジェクトの併用になってしまい行わない（2026-09-23、
+    #     docs/management/requirements_log.md 同日エントリ）。 ---
+    from core.config import GEMINI_API_KEY, GEMINI_API_KEY_FREE_1
     from core.llm_client import key_rotator
 
-    free_keys = [
-        GEMINI_API_KEY_FREE_1, GEMINI_API_KEY_FREE_2,
-        GEMINI_API_KEY_FREE_3, GEMINI_API_KEY_FREE_4,
-    ]
-    ordered_keys = free_keys + [GEMINI_API_KEY]
-    key_rotator.configure(ordered_keys, tiers=["free"] * len(free_keys) + ["paid"])
-
-    if not key_rotator.is_configured():
-        print("エラー: GEMINI_API_KEY_FREE_1〜4 / GEMINI_API_KEY のいずれも未設定です。.env を確認してください。")
+    if GEMINI_API_KEY:
+        selected_api_key, selected_tier = GEMINI_API_KEY, "paid"
+    elif GEMINI_API_KEY_FREE_1:
+        selected_api_key, selected_tier = GEMINI_API_KEY_FREE_1, "free"
+    else:
+        print("エラー: GEMINI_API_KEY_FREE_1 / GEMINI_API_KEY のいずれも未設定です。.env を確認してください。")
         return
 
-    selected_api_key = key_rotator.current()
-    free_count = len(key_rotator.pool_keys())
-    rr_note = "、キー×モデルの2軸ラウンドロビンで分散" if free_count > 1 else ""
-    print(f"使用APIキー: 無料キー{free_count}本設定済み（1本目から使用{rr_note}）"
-          f"{' + 有料キーあり（429/503が続いた場合の最終フォールバック）' if GEMINI_API_KEY else ''}")
+    key_rotator.configure([selected_api_key], tiers=[selected_tier])
 
-    # tier の既定値: 無料キーが1本でも設定されていれば、明示指定が無くても「無料から始めて、
-    # 尽きたら有料へ」（tier=free、429/503でのみ有料へフォールバック）を既定にする。
-    # --free/--lite は「無料キーが無い環境でも無料枠ペースを強制したい」場合の明示上書き用に残す。
-    default_tier = "free" if (free_count > 0 or args.free or args.lite) else "paid"
+    print(f"使用APIキー: {'有料' if selected_tier == 'paid' else '無料'}キー1本")
+
+    # tier の既定値は選択したキーの種別。--free/--lite は有料キー選択時でも無料枠ペースを
+    # 強制したい場合の明示上書き用に残す。
+    default_tier = "free" if (args.free or args.lite) else selected_tier
 
     # 引数がない場合は対話モード
     if not args.input_files:

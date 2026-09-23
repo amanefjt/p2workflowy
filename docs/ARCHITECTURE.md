@@ -48,7 +48,7 @@ server.py (Web API) ┴──> core/pipeline.py :: run_pipeline()
 
 `main.py` / `server.py` はエントリーポイント専任、`run_pipeline` はフェーズのオーケストレーション専任です。個別のアルゴリズムはここには置かず、各フェーズのファサード（`core/phaseN_*.py`）経由で `core/engine/` 配下のエンジン層に閉じ込めます。この責務境界は `core/` のコード設計に組み込まれた必須要件で、リファクタリング時も崩さないことが求められています。
 
-書籍モードは `core/book_manager.py::BookManager` が入口で、章ごとに（通常モードと同じ）`run_pipeline()` を呼び出し、処理後の統合を `core/engine/p3_structure/state_integrator.py::StateIntegrator` が担当します。CLI (`main.py --book`) は無料キーが2本以上 `configure()` されている場合、章を `ThreadPoolExecutor` で並列に処理します（章スレッドごとにキーを1本排他割り当て。統合順序は完了順ではなく本の並び順を維持）。Web版 (`server.py`) は `key_rotator.configure()` を呼ばないため常に章を直列処理します。詳細は `docs/model_optimization.md` §10。
+書籍モードは `core/book_manager.py::BookManager` が入口で、章ごとに（通常モードと同じ）`run_pipeline()` を呼び出し、処理後の統合を `core/engine/p3_structure/state_integrator.py::StateIntegrator` が担当します。CLI (`main.py --book`) は有料キー使用時のみ、章を `ThreadPoolExecutor` で並列に処理します（全章スレッドが単一の有料キーを共有。統合順序は完了順ではなく本の並び順を維持）。無料キー使用時、および Web版 (`server.py`、常に `tier="free"`) は常に章を直列処理します。詳細は `docs/model_optimization.md` §2.5。
 
 ### 2.2 5 フェーズパイプライン
 
@@ -89,11 +89,11 @@ server.py (Web API) ┴──> core/pipeline.py :: run_pipeline()
 全ての Gemini API 呼び出しがここを通ります。単一の機構ではなく、直交する複数の自己修復・負荷分散の仕組みが組み合わさっています。
 
 - **`TierManager`**（シングルトン）: 429/503 を検知すると自動的に有料ティアから無料ティア（Lite モデル）へダウンシフトする。
-- **`KeyRotator`**: 複数の無料枠 API キー（別 GCP プロジェクト）と有料キーを束ね、429/503 起点でキーを切り替える。forward-only な `advance()` に加え、クールダウンが明けたキーへ**戻れる** `best_available()` を持つ。
-- **`ModelRotator`**: 同一キー内で、RPM/RPD が独立集計されている無料枠 Lite モデル複数種をローテーションする。`KeyRotator` と対になる設計で、`advance()`／`best_available()` の両方を持つ。
-- **`LaneCooldownRegistry`**（`lane_cooldown`）: `(api_key, model)` 単位でクールダウン中かどうかを記録する。`KeyRotator`/`ModelRotator`/`TierManager` が `threading.local()` ベースでスレッドごとに独立しているのに対し、こちらは「このレーンは枯渇している」という事実がスレッドを跨いで正しいという理由から**意図的にプロセスグローバル**にしている。
+- **`KeyRotator`**: CLI用の無料/有料キーを管理する（2026-09-23〜、常に1本のみ。レート制限・ティアはキー単位ではなくGCPプロジェクト単位のため、複数プロジェクトの無料キーをプールする運用はGoogle API Termsに抵触しうると判断し撤去。`docs/management/requirements_log.md` 同日エントリ参照）。
+- **`ModelRotator`**: 同一キー内で、RPM/RPD が独立集計されている無料枠 Lite モデル複数種をローテーションする。`advance()`／`best_available()` を持つ。複数プロジェクトの問題を含まないため撤去の対象外。
+- **`LaneCooldownRegistry`**（`lane_cooldown`）: `(api_key, model)` 単位でクールダウン中かどうかを記録する。`ModelRotator`/`TierManager` が `threading.local()` ベースでスレッドごとに独立しているのに対し、こちらは「このレーンは枯渇している」という事実がスレッドを跨いで正しいという理由から**意図的にプロセスグローバル**にしている。
 
-書籍モードの章並列化（§2.1）は、`KeyRotator`/`ModelRotator`/`TierManager` がスレッドローカルであることを前提に、章スレッドごとに `KeyRotator.restrict_to()` でキーを1本排他割り当てすることで、複数スレッドが同一レートリミッタを共有して429を多発させないよう安全性を担保しています。設計判断の経緯・実測値は `docs/model_optimization.md` §6〜§10 を参照してください。
+書籍モードの章並列化は**有料キー使用時のみ**有効で、全章スレッドが単一の有料キーをそのまま共有する（無料キー使用時は常に完全直列）。設計判断の経緯・実測値は `docs/model_optimization.md` §2.1・§2.5 を参照してください。
 
 モデル名やプロンプトのハードコードを避けるため、プロンプトは `core/coreprompts.json` に一元管理され、`@lru_cache` でキャッシュされます（変更後はプロセス再起動が必要な点に注意）。
 

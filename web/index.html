@@ -24,15 +24,27 @@
                 <p>学術論文・学術書をWorkflowyに最適な構造化された日本語アウトラインへ変換します。</p>
                 <p>質を追求しているため、翻訳はゆっくりです（通常数分程度）。</p>
                 <div class="important-note">
-                    ⚠️ 無料枠のAPIキーで動いているため、Googleの規約上、入力内容がモデル改善に利用される場合があります。機密性の高い文書の取り扱いにはご注意ください。
+                    ⚠️ ご自身の Gemini APIキーを入力していただく必要があります。無料枠のキーの場合、Googleの規約上、入力内容がモデル改善に利用される場合があります。機密性の高い文書の取り扱いにはご注意ください。
                 </div>
             </section>
 
             <form id="process-form">
                 <div class="setup-grid">
+                    <!-- API Key -->
+                    <div class="setup-item">
+                        <h3>1. Gemini APIキー</h3>
+                        <div class="form-group">
+                            <label>ご自身の Gemini APIキー（無料枠・有料枠どちらでも可）</label>
+                            <input type="password" id="api_key" name="api_key" placeholder="AIza...">
+                            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.4rem;">
+                                <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> で取得できます（ブラウザに保存され、サーバーには保存されません）。
+                            </p>
+                        </div>
+                    </div>
+
                     <!-- Expertise -->
                     <div class="setup-item">
-                        <h3>1. 翻訳の専門設定</h3>
+                        <h3>2. 翻訳の専門設定</h3>
                         <div class="form-group">
                             <label>専門分野（例：文化人類学、社会学、心理学...）</label>
                             <input type="text" id="expertise" name="expertise" value="文化人類学" placeholder="専門分野名を入力...">
@@ -41,7 +53,7 @@
 
                     <!-- Glossary -->
                     <div class="setup-item">
-                        <h3>2. 用語集 (任意)</h3>
+                        <h3>3. 用語集 (任意)</h3>
                         <div class="file-row">
                             <input type="file" id="glossary_file" name="glossary" accept=".csv">
                             <a id="sample-glossary-link" href="/api/glossary/sample"
@@ -51,7 +63,7 @@
 
                     <!-- Paper / Book -->
                     <div class="setup-item">
-                        <h3>3. 論文 / 書籍</h3>
+                        <h3>4. 論文 / 書籍</h3>
                         <div class="pill-toggle">
                             <button type="button" id="tab-paper" class="pill-btn active" onclick="switchBookMode(false)">論文</button>
                             <button type="button" id="tab-book" class="pill-btn" onclick="switchBookMode(true)">書籍（PDFのみ）</button>
@@ -70,7 +82,7 @@
 
                     <!-- Input -->
                     <div class="setup-item">
-                        <h3>4. 入力（PDF または テキスト）</h3>
+                        <h3>5. 入力（PDF または テキスト）</h3>
 
                         <!-- タブ切り替え -->
                         <div class="pill-toggle">

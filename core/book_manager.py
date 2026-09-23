@@ -3,7 +3,6 @@ import shutil
 import fitz
 import re
 import hashlib
-import queue
 import threading
 import concurrent.futures
 from pathlib import Path
@@ -74,11 +73,9 @@ class BookManager:
             return f"fallback_{uuid.uuid4().hex[:8]}"
 
     def _get_paid_key(self) -> Optional[str]:
-        """設定済みの有料キーがあれば返す（無ければ None）。"""
-        if key_rotator.is_configured():
-            paid = key_rotator.paid_keys()
-            if paid:
-                return paid[0]
+        """設定済みのキーが有料キーならそれを返す（無料キーまたは未設定なら None）。"""
+        if key_rotator.is_configured() and key_rotator.current_tier() == "paid":
+            return key_rotator.current()
         return None
 
     def _generate_global_context(self, expertise: str = "文化人類学"):
@@ -421,22 +418,21 @@ class BookManager:
                 }
 
         # --- 章並列化の有効化条件（安全装置）---
-        # レートリミッタ・TierManager・ModelRotator は threading.local() ベース（§6〜§8）
-        # なので、複数の章スレッドが同じ (キー, モデル) レーンを共有すると各スレッドが
-        # 「自分は15RPM使える」と思い込んで同じ枠を多重に叩き、429が多発する。これを避ける
-        # ため、無料キーが2本以上 configure() されている場合のみ章並列を有効にする。
-        # server.py は key_rotator.configure() を一切呼ばないため is_configured() が常に
-        # False になり、Web経路では自動的に完全直列にフォールバックする（Web版の挙動は不変）。
-        free_keys = key_rotator.pool_keys() if key_rotator.is_configured() else []
-        can_parallelize = len(free_keys) >= 2 and len(pending) > 1
+        # 章並列化は「単一の有料キーを複数スレッドで共有する」ことでのみ行う（無料キーの
+        # 複数プロジェクトへの分散は2026-09-23に撤去済み、docs/management/requirements_log.md
+        # 同日エントリ）。無料キー使用時は常に直列にする——無料ティアはRPMの絶対値が低く、
+        # 単一キーへの複数スレッド同時アクセスでも429が起きやすいため（有料ティアは
+        # レート上限が高く、実測ではなく既存の429/503リトライ・バックオフに委ねる設計、
+        # docs/model_optimization.md §2.5 参照）。
+        DEFAULT_BOOK_CONCURRENCY = 4
+        can_parallelize = tier == "paid" and len(pending) > 1
 
-        if book_concurrency is not None:
-            effective_concurrency = max(1, book_concurrency) if can_parallelize else 1
-        elif can_parallelize:
-            # 既定値: 無料キー本数と（スキップ済みを除いた）処理対象章数の小さい方
-            effective_concurrency = min(len(free_keys), len(pending))
-        else:
+        if not can_parallelize:
             effective_concurrency = 1
+        elif book_concurrency is not None:
+            effective_concurrency = max(1, book_concurrency)
+        else:
+            effective_concurrency = min(DEFAULT_BOOK_CONCURRENCY, len(pending))
 
         if effective_concurrency <= 1 or len(pending) <= 1:
             print_log(f"  [BookManager] 章を直列処理します（対象{len(pending)}章）。")
@@ -454,45 +450,16 @@ class BookManager:
             )
             print_log(
                 f"  [BookManager] 章並列処理を有効化: {effective_concurrency}並列"
-                f"（無料キー{len(free_keys)}本 / 処理対象{len(pending)}章、"
+                f"（有料キー1本を共有 / 処理対象{len(pending)}章、"
                 f"章あたりVLM同時実行数={chapter_vlm_concurrency}）"
             )
 
-            # 章スレッドごとにキーを1本ずつ排他割り当てするためのプール。
-            # 章タスクが1本取り出し、終わったら返すことで「同時に同じキーを使う章は
-            # 高々1つ」を構造的に保証する（有料キーはpool_keys()が含まないため対象外）。
-            key_queue: "queue.Queue[str]" = queue.Queue()
-            for k in free_keys:
-                key_queue.put(k)
-
             def worker(idx: int, ch: Dict[str, Any], ch_session_id: str, ch_state_dir: Path) -> None:
-                assigned_key = key_queue.get()
-                # ログには生のキー値ではなく free_keys 内の位置（1始まり）だけを出す。
-                # 実測検証（docs/model_optimization.md §10）で「各章スレッドが実際に別々の
-                # キーを使っているか」を目視確認できるようにするための識別ラベル。
-                key_label = (
-                    f"free{free_keys.index(assigned_key)+1}"
-                    if assigned_key in free_keys else "unknown"
-                )
+                set_log_prefix(f"[ch{idx+1}] ")
                 try:
-                    # 割り当てた無料キー1本を基本としつつ、有料キーも末尾に含めて見えるようにする。
-                    # forward-only な advance()/best_available() は無料キーが尽きるまで有料キーへは
-                    # 進まないため、通常運用の挙動（無料優先）は変えずに「章の無料キーが本当に
-                    # 全滅した場合だけ有料へ逃がす」という全体方針を章並列時にも成立させる。
-                    paid_fallback = key_rotator.paid_keys()
-                    key_rotator.restrict_to(
-                        [assigned_key] + paid_fallback,
-                        ["free"] + ["paid"] * len(paid_fallback),
-                    )
-                    set_log_prefix(f"[ch{idx+1}] ")
-                    print_log(f"  [BookManager] 使用キー割り当て: {key_label}")
-                    try:
-                        run_one_chapter(idx, ch, ch_session_id, ch_state_dir, chapter_vlm_concurrency)
-                    finally:
-                        set_log_prefix(None)
-                        key_rotator.clear_restriction()
+                    run_one_chapter(idx, ch, ch_session_id, ch_state_dir, chapter_vlm_concurrency)
                 finally:
-                    key_queue.put(assigned_key)
+                    set_log_prefix(None)
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=effective_concurrency) as executor:
                 futures = [

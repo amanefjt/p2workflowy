@@ -5,11 +5,10 @@ BookManager のユニットテスト
   - 章単位 resume: output_paths.json によるスキップ
   - 失敗章の記録と継続
   - book_sessions クリーンアップ
-  - 章並列化（キープール排他割り当て・統合順序・例外時継続・有効化条件の安全装置）
+  - 章並列化（統合順序・例外時継続・有効化条件の安全装置。tier=="paid"のみ有効）
 """
 
 import json
-import threading
 import time
 import pytest
 from pathlib import Path
@@ -434,229 +433,158 @@ class TestDecideBookPdfMode:
 # ============================================================
 
 class TestChapterParallelization:
-    def test_key_pool_exclusive_use_when_fewer_keys_than_chapters(self, tmp_path):
-        """キー本数(2) < 章数(5) でも、同時に同じキーを使う章は高々1つに保たれる
-        （queue.Queue によるプール方式で構造的に保証される）。"""
-        from core.llm_client import key_rotator
-
-        manager = make_ready_manager(tmp_path, "poolbook", "poolfp")
-        key_rotator.configure(["free1", "free2", "paid1"], tiers=["free", "free", "paid"])
-        try:
-            chapters = make_chapter_pdfs(tmp_path, [f"Ch{i}" for i in range(5)])
-            splitter = MagicMock()
-            splitter.split.return_value = chapters
-
-            active_counts = {}
-            violations = []
-            lock = threading.Lock()
-
-            def fake_run_pipeline(**kwargs):
-                key = key_rotator.current()
-                with lock:
-                    active_counts[key] = active_counts.get(key, 0) + 1
-                    if active_counts[key] > 1:
-                        violations.append(key)
-                time.sleep(0.05)
-                with lock:
-                    active_counts[key] -= 1
-                return []
-
-            run_manager_with_mocks(manager, splitter, fake_run_pipeline)
-
-            assert violations == [], f"同一キーが同時に複数章で使われた: {violations}"
-        finally:
-            key_rotator.configure([])
+    """2026-09-23〜: 章並列化は tier=="paid" のときのみ有効（無料キー使用時は常に直列）。
+    全章スレッドが単一の有料キーを共有する設計に変更したため、キー本数や key_rotator の
+    設定は並列化の可否に一切関係しない（旧: 無料キー本数ベースのテストは撤去・作り直し）。
+    """
 
     def test_integration_order_follows_book_order_not_completion_order(self, tmp_path):
         """完了順を意図的に入れ替えても、StateIntegrator に渡す並びは本の並び順（インデックス順）
-        のまま保たれる（[None]*N をインデックスで埋める設計）。"""
-        from core.llm_client import key_rotator
-
+        のまま保たれる（[None]*N をインデックスで埋める設計）。tier未指定時の既定 "paid" で
+        並列パスが自然に有効化される。"""
         manager = make_ready_manager(tmp_path, "orderbook", "orderfp")
-        key_rotator.configure(["free1", "free2"], tiers=["free", "free"])
-        try:
-            titles = ["Ch0", "Ch1", "Ch2"]
-            chapters = make_chapter_pdfs(tmp_path, titles)
-            splitter = MagicMock()
-            splitter.split.return_value = chapters
+        titles = ["Ch0", "Ch1", "Ch2"]
+        chapters = make_chapter_pdfs(tmp_path, titles)
+        splitter = MagicMock()
+        splitter.split.return_value = chapters
 
-            # Ch0 を意図的に一番遅く終わらせ、完了順を book 順とずらす
-            delays = {"Ch0": 0.15, "Ch1": 0.05, "Ch2": 0.0}
+        # Ch0 を意図的に一番遅く終わらせ、完了順を book 順とずらす
+        delays = {"Ch0": 0.15, "Ch1": 0.05, "Ch2": 0.0}
 
-            def fake_run_pipeline(**kwargs):
-                title = kwargs["title"]
-                time.sleep(delays.get(title, 0))
-                out = tmp_path / f"{title}_p2.txt"
-                out.write_text("dummy")
-                return [out]
+        def fake_run_pipeline(**kwargs):
+            title = kwargs["title"]
+            time.sleep(delays.get(title, 0))
+            out = tmp_path / f"{title}_p2.txt"
+            out.write_text("dummy")
+            return [out]
 
-            captured = {}
+        captured = {}
 
-            def fake_integrate(sessions, **kwargs):
-                captured["sessions"] = sessions
-                return []
+        def fake_integrate(sessions, **kwargs):
+            captured["sessions"] = sessions
+            return []
 
-            with patch("core.book_manager.PDFSplitter", return_value=splitter), \
-                 patch("core.book_manager.apply_tier_settings"), \
-                 patch("core.engine.p1_ingest.pdf_ingester.diagnose_pdf_quality", return_value=True), \
-                 patch("core.engine.p1_ingest.spread_splitter.is_spread_pdf", return_value=False), \
-                 patch("core.pipeline.run_pipeline", side_effect=fake_run_pipeline), \
-                 patch("core.book_manager.StateIntegrator") as MockIntegrator:
-                MockIntegrator.return_value.integrate_to_book.side_effect = fake_integrate
-                manager.run()
+        with patch("core.book_manager.PDFSplitter", return_value=splitter), \
+             patch("core.book_manager.apply_tier_settings"), \
+             patch("core.engine.p1_ingest.pdf_ingester.diagnose_pdf_quality", return_value=True), \
+             patch("core.engine.p1_ingest.spread_splitter.is_spread_pdf", return_value=False), \
+             patch("core.pipeline.run_pipeline", side_effect=fake_run_pipeline), \
+             patch("core.book_manager.StateIntegrator") as MockIntegrator:
+            MockIntegrator.return_value.integrate_to_book.side_effect = fake_integrate
+            manager.run()
 
-            assert [s["title"] for s in captured["sessions"]] == titles
-        finally:
-            key_rotator.configure([])
+        assert [s["title"] for s in captured["sessions"]] == titles
 
     def test_one_chapter_exception_continues_others_in_parallel_path(self, tmp_path):
         """並列パスでも1章の例外は他章の処理を止めず、失敗章として記録される
         （output_paths.json が失敗章だけ作られないことで検証）。"""
-        from core.llm_client import key_rotator
-
         manager = make_ready_manager(tmp_path, "failbook", "failfp")
-        key_rotator.configure(["free1", "free2"], tiers=["free", "free"])
-        try:
-            titles = ["Good1", "Bad", "Good2"]
-            chapters = make_chapter_pdfs(tmp_path, titles)
-            splitter = MagicMock()
-            splitter.split.return_value = chapters
+        titles = ["Good1", "Bad", "Good2"]
+        chapters = make_chapter_pdfs(tmp_path, titles)
+        splitter = MagicMock()
+        splitter.split.return_value = chapters
 
-            def fake_run_pipeline(**kwargs):
-                title = kwargs["title"]
-                if title == "Bad":
-                    raise RuntimeError("OCR failed")
-                out = tmp_path / f"{title}_p2.txt"
-                out.write_text("ok")
-                return [out]
+        def fake_run_pipeline(**kwargs):
+            title = kwargs["title"]
+            if title == "Bad":
+                raise RuntimeError("OCR failed")
+            out = tmp_path / f"{title}_p2.txt"
+            out.write_text("ok")
+            return [out]
 
-            run_manager_with_mocks(manager, splitter, fake_run_pipeline)
+        run_manager_with_mocks(manager, splitter, fake_run_pipeline, tier="paid")
 
-            for i, title in enumerate(titles):
-                cache = manager.session_dir / "chapters_state" / f"ch{i+1}" / "output_paths.json"
-                if title == "Bad":
-                    assert not cache.exists(), "失敗章に output_paths.json が作られてはいけない"
-                else:
-                    assert cache.exists(), f"{title} は成功したので output_paths.json が必要"
-        finally:
-            key_rotator.configure([])
+        for i, title in enumerate(titles):
+            cache = manager.session_dir / "chapters_state" / f"ch{i+1}" / "output_paths.json"
+            if title == "Bad":
+                assert not cache.exists(), "失敗章に output_paths.json が作られてはいけない"
+            else:
+                assert cache.exists(), f"{title} は成功したので output_paths.json が必要"
 
-    def test_serial_when_key_rotator_not_configured(self, tmp_path):
-        """key_rotator.configure() が呼ばれていない（Web経路相当）場合は常に完全直列。"""
-        from core.llm_client import key_rotator
+    def test_serial_when_tier_is_free(self, tmp_path):
+        """無料キー使用時（tier="free"）は章数が複数でも常に完全直列（安全側）。
+        Web経路（server.py が manager.run(..., tier="free", ...) を渡す）もこの分岐を通る。"""
+        manager = make_ready_manager(tmp_path, "freebook", "freefp")
+        chapters = make_chapter_pdfs(tmp_path, ["Ch0", "Ch1", "Ch2"])
+        splitter = MagicMock()
+        splitter.split.return_value = chapters
 
-        manager = make_ready_manager(tmp_path, "webbook", "webfp")
-        key_rotator.configure([])  # is_configured() が False になる状態を明示的に作る
-        try:
-            chapters = make_chapter_pdfs(tmp_path, ["Ch0", "Ch1", "Ch2"])
-            splitter = MagicMock()
-            splitter.split.return_value = chapters
+        def fake_run_pipeline(**kwargs):
+            return []
 
-            def fake_run_pipeline(**kwargs):
-                return []
+        with patch("core.book_manager.print_log") as mock_log:
+            run_manager_with_mocks(manager, splitter, fake_run_pipeline, tier="free")
 
-            with patch("core.book_manager.print_log") as mock_log:
-                run_manager_with_mocks(manager, splitter, fake_run_pipeline)
+        logs = " ".join(str(c.args[0]) for c in mock_log.call_args_list if c.args)
+        assert "直列処理します" in logs
+        assert "並列処理を有効化" not in logs
 
-            logs = " ".join(str(c.args[0]) for c in mock_log.call_args_list if c.args)
-            assert "直列処理します" in logs
-            assert "並列処理を有効化" not in logs
-        finally:
-            key_rotator.configure([])
+    def test_free_tier_ignores_book_concurrency_override(self, tmp_path):
+        """tier="free" では --book-concurrency を明示指定しても並列化しない
+        （無料キー使用時は常に直列という安全装置が book_concurrency より優先される）。"""
+        manager = make_ready_manager(tmp_path, "freeoverridebook", "freeoverridefp")
+        chapters = make_chapter_pdfs(tmp_path, ["Ch0", "Ch1", "Ch2"])
+        splitter = MagicMock()
+        splitter.split.return_value = chapters
 
-    def test_serial_when_only_one_free_key(self, tmp_path):
-        """無料キーが1本しか configure() されていない場合も安全側で完全直列。"""
-        from core.llm_client import key_rotator
+        def fake_run_pipeline(**kwargs):
+            return []
 
-        manager = make_ready_manager(tmp_path, "onekeybook", "onekeyfp")
-        key_rotator.configure(["free1", "paid1"], tiers=["free", "paid"])
-        try:
-            chapters = make_chapter_pdfs(tmp_path, ["Ch0", "Ch1", "Ch2"])
-            splitter = MagicMock()
-            splitter.split.return_value = chapters
+        with patch("core.book_manager.print_log") as mock_log:
+            run_manager_with_mocks(manager, splitter, fake_run_pipeline, tier="free", book_concurrency=4)
 
-            def fake_run_pipeline(**kwargs):
-                return []
+        logs = " ".join(str(c.args[0]) for c in mock_log.call_args_list if c.args)
+        assert "直列処理します" in logs
+        assert "並列処理を有効化" not in logs
 
-            with patch("core.book_manager.print_log") as mock_log:
-                run_manager_with_mocks(manager, splitter, fake_run_pipeline)
+    def test_serial_when_only_one_chapter_even_with_paid_tier(self, tmp_path):
+        """有料キー使用時でも、処理対象章が1件だけなら並列化しない。"""
+        manager = make_ready_manager(tmp_path, "onechapterbook", "onechapterfp")
+        chapters = make_chapter_pdfs(tmp_path, ["Ch0"])
+        splitter = MagicMock()
+        splitter.split.return_value = chapters
 
-            logs = " ".join(str(c.args[0]) for c in mock_log.call_args_list if c.args)
-            assert "直列処理します" in logs
-            assert "並列処理を有効化" not in logs
-        finally:
-            key_rotator.configure([])
+        def fake_run_pipeline(**kwargs):
+            return []
 
-    def test_book_concurrency_one_forces_serial_even_with_multiple_free_keys(self, tmp_path):
-        """--book-concurrency 1（book_concurrency=1）は無料キーが複数あっても完全直列にする
+        with patch("core.book_manager.print_log") as mock_log:
+            run_manager_with_mocks(manager, splitter, fake_run_pipeline, tier="paid")
+
+        logs = " ".join(str(c.args[0]) for c in mock_log.call_args_list if c.args)
+        assert "直列処理します" in logs
+        assert "並列処理を有効化" not in logs
+
+    def test_book_concurrency_one_forces_serial_even_with_paid_tier(self, tmp_path):
+        """--book-concurrency 1（book_concurrency=1）は有料キー使用時でも完全直列にする
         （回帰時の逃げ道）。"""
-        from core.llm_client import key_rotator
-
         manager = make_ready_manager(tmp_path, "forceserialbook", "forceserialfp")
-        key_rotator.configure(["free1", "free2", "free3"], tiers=["free", "free", "free"])
-        try:
-            chapters = make_chapter_pdfs(tmp_path, ["Ch0", "Ch1", "Ch2"])
-            splitter = MagicMock()
-            splitter.split.return_value = chapters
+        chapters = make_chapter_pdfs(tmp_path, ["Ch0", "Ch1", "Ch2"])
+        splitter = MagicMock()
+        splitter.split.return_value = chapters
 
-            def fake_run_pipeline(**kwargs):
-                return []
+        def fake_run_pipeline(**kwargs):
+            return []
 
-            with patch("core.book_manager.print_log") as mock_log:
-                run_manager_with_mocks(manager, splitter, fake_run_pipeline, book_concurrency=1)
+        with patch("core.book_manager.print_log") as mock_log:
+            run_manager_with_mocks(manager, splitter, fake_run_pipeline, tier="paid", book_concurrency=1)
 
-            logs = " ".join(str(c.args[0]) for c in mock_log.call_args_list if c.args)
-            assert "直列処理します" in logs
-            assert "並列処理を有効化" not in logs
-        finally:
-            key_rotator.configure([])
+        logs = " ".join(str(c.args[0]) for c in mock_log.call_args_list if c.args)
+        assert "直列処理します" in logs
+        assert "並列処理を有効化" not in logs
 
-    def test_parallel_enabled_with_two_or_more_free_keys(self, tmp_path):
-        """無料キーが2本以上あり章数も複数なら章並列が有効化される（既定 book_concurrency）。"""
-        from core.llm_client import key_rotator
-
+    def test_parallel_enabled_when_tier_is_paid(self, tmp_path):
+        """有料キー使用時（tier="paid"）かつ章数が複数なら、全章スレッドが単一キーを
+        共有する形で章並列が有効化される（既定 book_concurrency）。"""
         manager = make_ready_manager(tmp_path, "parallelbook", "parallelfp")
-        key_rotator.configure(["free1", "free2"], tiers=["free", "free"])
-        try:
-            chapters = make_chapter_pdfs(tmp_path, ["Ch0", "Ch1", "Ch2"])
-            splitter = MagicMock()
-            splitter.split.return_value = chapters
+        chapters = make_chapter_pdfs(tmp_path, ["Ch0", "Ch1", "Ch2"])
+        splitter = MagicMock()
+        splitter.split.return_value = chapters
 
-            def fake_run_pipeline(**kwargs):
-                return []
+        def fake_run_pipeline(**kwargs):
+            return []
 
-            with patch("core.book_manager.print_log") as mock_log:
-                run_manager_with_mocks(manager, splitter, fake_run_pipeline)
+        with patch("core.book_manager.print_log") as mock_log:
+            run_manager_with_mocks(manager, splitter, fake_run_pipeline, tier="paid")
 
-            logs = " ".join(str(c.args[0]) for c in mock_log.call_args_list if c.args)
-            assert "並列処理を有効化" in logs
-        finally:
-            key_rotator.configure([])
-
-    def test_restrict_to_and_clear_restriction_pair_even_on_exception(self, tmp_path):
-        """restrict_to()/clear_restriction() は、章が例外で失敗しても必ず対で呼ばれる
-        （章スレッドの try/finally による保証）。"""
-        from core.llm_client import key_rotator
-
-        manager = make_ready_manager(tmp_path, "pairbook", "pairfp")
-        key_rotator.configure(["free1", "free2"], tiers=["free", "free"])
-        try:
-            titles = ["Good1", "Bad", "Good2"]
-            chapters = make_chapter_pdfs(tmp_path, titles)
-            splitter = MagicMock()
-            splitter.split.return_value = chapters
-
-            def fake_run_pipeline(**kwargs):
-                title = kwargs["title"]
-                if title == "Bad":
-                    raise RuntimeError("boom")
-                return []
-
-            with patch.object(key_rotator, "restrict_to", wraps=key_rotator.restrict_to) as spy_restrict, \
-                 patch.object(key_rotator, "clear_restriction", wraps=key_rotator.clear_restriction) as spy_clear:
-                run_manager_with_mocks(manager, splitter, fake_run_pipeline)
-
-            assert spy_restrict.call_count == len(titles)
-            assert spy_clear.call_count == len(titles)
-        finally:
-            key_rotator.configure([])
+        logs = " ".join(str(c.args[0]) for c in mock_log.call_args_list if c.args)
+        assert "並列処理を有効化" in logs

@@ -123,27 +123,24 @@ tier_manager = TierManager()
 
 
 class KeyRotator:
-    """CLI (main.py) 用の複数APIキーローテーション管理シングルトン。
+    """CLI (main.py) 用のAPIキー管理シングルトン。
 
-    既定ではプロセスグローバルな状態（スレッドローカル化しない）— CLIはスレッドを使わず単一
+    2026-09-23: 複数GCPプロジェクトの無料キーをプールして枠を水増しする運用が Google API
+    Terms の "will not attempt to circumvent" 条項に抵触しうると判断し撤去（
+    docs/management/requirements_log.md 同日エントリ）。現在は「無料キー1本」または
+    「有料キー1本」のいずれか1本だけを configure() に渡す運用に統一し、実行中の無料→有料
+    自動フォールバックは行わない（有料/無料の切替はプロジェクト単位のため、両方を併用する
+    こと自体が複数プロジェクトをまたぐ構成になってしまうため）。
+
+    プロセスグローバルな状態（スレッドローカル化しない）— CLIはスレッドを使わず単一
     プロセス内で完結するため（Phase4の並行も単一イベントループ内の asyncio.Semaphore のみ）。
-    forward-only（一度進んだキーインデックスは戻らない、TierManager.downgrade() と同じ設計
-    思想）。main.py が起動時に configure() を一度だけ呼ぶ。server.py は一切呼ばないため、
+    main.py が起動時に configure() を一度だけ呼ぶ。server.py は一切呼ばないため、
     Webアプリの挙動には影響しない（is_configured() が常に False のまま）。
 
-    2つの使われ方がある:
-      1. リアクティブなフォールバック: 429/503 検知時に advance() で次のキーへ前進する
-         （forward-only。call_gemini/call_gemini_async のリトライループが呼ぶ）。
-      2. プロアクティブな負荷分散: pool_keys() が返す無料キー群へ、呼び出し元（Phase4 の
-         ParallelTranslator / Phase1 の OCRManager）がバッチ・ページ単位でラウンドロビン
-         割り当てする（docs/model_optimization.md §8）。
-
-    さらに restrict_to() で「呼び出したスレッドだけが使えるキーの部分集合」を設定できる
-    （書籍モードの章並列化で、章スレッドごとにキーを1本ずつ排他割り当てするためのフック）。
-    制限を設定していないスレッドの挙動はプロセスグローバル状態そのままで一切変わらない。
+    advance()/best_available() は429/503リトライループ用に残しているが、configure() に
+    渡すキーが常に1本のため has_next() は常に False となり、実質的に無害な no-op になる。
     """
     _instance = None
-    _local = threading.local()
 
     def __new__(cls):
         if cls._instance is None:
@@ -153,53 +150,17 @@ class KeyRotator:
             cls._instance._index = 0
         return cls._instance
 
-    # --- スレッドローカルな使用キー制限 ---
-
-    def restrict_to(self, keys: List[Optional[str]], tiers: Optional[List[str]] = None) -> None:
-        """呼び出したスレッドに限り、使用キーを keys の部分集合に制限する。
-
-        制限中は current()/current_tier()/pool_keys()/has_next()/advance()/index/count が
-        すべてこの部分集合に対して動作し、プロセスグローバルな _keys/_index には一切触れない
-        （＝他スレッドから完全に不可視）。書籍モードの章並列化で、章スレッドごとに別キーを
-        排他割り当てし、同じ (キー, モデル) レーンを複数スレッドが多重に叩かないようにする
-        ための下ごしらえ（レートリミッタは threading.local() ベースなので、スレッド間で
-        レーンを共有すると枠を二重に消費して429が多発する）。
-        """
-        pairs = [(k, t) for k, t in zip(keys, tiers or [None] * len(keys)) if k]
-        self._local.keys = [k for k, _ in pairs]
-        self._local.tiers = [t for _, t in pairs]
-        self._local.index = 0
-
-    def clear_restriction(self) -> None:
-        """このスレッドの使用キー制限を解除し、プロセスグローバルな状態に戻す。"""
-        self._local.keys = None
-        self._local.tiers = None
-        self._local.index = 0
-
-    def is_restricted(self) -> bool:
-        return bool(getattr(self._local, "keys", None))
-
     def _view(self) -> tuple:
-        """(keys, tiers) の現在有効なビューを返す（制限中はスレッドローカル、それ以外はグローバル）。"""
-        if self.is_restricted():
-            return self._local.keys, self._local.tiers
         return self._keys, self._tiers
 
     def _get_index(self) -> int:
-        if self.is_restricted():
-            return getattr(self._local, "index", 0)
         return self._index
 
     def _set_index(self, value: int) -> None:
-        if self.is_restricted():
-            self._local.index = value
-        else:
-            self._index = value
-
-    # --- 通常 API ---
+        self._index = value
 
     def configure(self, keys: List[Optional[str]], tiers: Optional[List[str]] = None) -> None:
-        """keys と同じ並びの tiers（例: ["free","free","paid"]）を渡すと、ローテーション後に
+        """keys と同じ並びの tiers（例: ["free"] や ["paid"]）を渡すと、ローテーション後に
         現在のキーが有料かどうかを current_tier() で判定できる。省略時は全キー種別不明扱い。"""
         pairs = [(k, t) for k, t in zip(keys, tiers or [None] * len(keys)) if k]
         self._keys = [k for k, _ in pairs]
@@ -219,25 +180,15 @@ class KeyRotator:
         return tiers[self._get_index()] if tiers else None
 
     def pool_keys(self) -> List[str]:
-        """tier が "free" のキーだけを並び順どおりに返す（キー軸ラウンドロビン割り当て用）。
+        """tier が "free" のキーだけを並び順どおりに返す（キー×モデルのラウンドロビン割り当て用）。
 
-        有料キーを含めないのは、無料枠専用ペース（1 req/4s/レーン）のリミッタを有料キーにも
-        適用すると有料ユーザーを不必要に遅くしてしまうため（§7 で PAID tier をラウンドロビン
-        対象外にしたのと同じ理由）。tiers 未設定（configure に tiers を渡していない）の場合は
-        キー種別が判定できないため空リストを返し、キー軸のRRは自然に無効化される。
+        キーは常に0本か1本（複数プロジェクトの無料キープールは撤去済み）。1本の場合、
+        pick_lane() のキー軸は自然にそのキー固定＝モデル軸のみの回転に縮退する。
         """
         keys, tiers = self._view()
         if not keys or not tiers:
             return []
         return [k for k, t in zip(keys, tiers) if t == "free"]
-
-    def paid_keys(self) -> List[str]:
-        """tier が "paid" のキーだけを返す（書籍章並列化で、章スレッドに割り当てた無料キー1本が
-        枯渇し尽くした場合の最終フォールバック先として restrict_to() に渡すため）。"""
-        keys, tiers = self._view()
-        if not keys or not tiers:
-            return []
-        return [k for k, t in zip(keys, tiers) if t == "paid"]
 
     def has_next(self) -> bool:
         keys, _ = self._view()
@@ -249,22 +200,12 @@ class KeyRotator:
         return self.current()
 
     def best_available(self, is_available: Callable[[Optional[str]], bool]) -> Optional[str]:
-        """429起点のフォールバック用。forward-only な advance() と異なり、クールダウンが
-        明けて回復したキー（例: free1 が429でクールダウン中に free2 へ進んだ後、free1 が
-        先に回復する）へ**戻れる**（docs/model_optimization.md §9、§6 既知の限界の解消）。
-
-        優先順位は configure() に渡した並び順そのまま（CLI/Web とも free キーを先・paid
-        キーを最後に渡す運用のため、"無料キーが1本でも生きているなら有料キーには落ちない"
-        という既存の優先順位がそのまま保たれる）。現在のキーがまだ available ならそれを
-        優先して返す（無駄な切替をしない）。現在のキー以外に available なキーがあれば、
-        並び順で最初に見つかったものへ切り替える。**全キーが使用不可（＝全レーンが
-        クールダウン中）の場合は、既存の forward-only な advance() にフォールバックする**
-        （新しい情報が無い以上、従来どおりの挙動に委ねるのが安全なため。呼び出し元は
-        戻り値が変化したかどうかで「実際に切り替わったか」を判定できる）。
-
-        既存の advance() 自体はシグネチャ・forward-only の挙動とも一切変更していない
-        （既存テストが依存しているため）。こちらは新規に追加した代替 API で、
-        call_gemini/call_gemini_async の429/503リトライループが advance() の代わりに使う。
+        """429起点のフォールバック用。configure() に渡すキーは常に0本か1本（2026-09-23、
+        複数プロジェクト併用の撤去により無料/有料の自動フォールバックは廃止）のため、
+        実質的には「現在のキーが available か」を返すだけの no-op に近い。汎用実装として
+        残しているが、call_gemini/call_gemini_async のリトライループから呼ばれた場合、
+        キーが1本しかなければ何も切り替わらず既存の forward-only advance() にフォールバック
+        する（advance() 自体もキーが1本ならその場に留まる）。
         """
         keys, _ = self._view()
         if not keys:
@@ -390,9 +331,9 @@ class LaneCooldownRegistry:
     KeyRotator/ModelRotator/TierManager と異なり**意図的にスレッドローカルにしない**:
     「このキーのこのモデルは枯渇している」という事実はスレッドを跨いで共有されるのが正しい
     （プロセスグローバルな dict + threading.Lock）。(api_key, model) でキーイングするため、
-    Web の別ユーザー（＝別キー）を誤って巻き込むこともなく、書籍の章並列化（章スレッドごと
-    に別キーを排他割り当て、docs/model_optimization.md §8 の KeyRotator.restrict_to()）とも
-    自然に整合する。
+    Web の別ユーザー（＝別キー）を誤って巻き込むこともない。書籍モードの章並列化（有料キー
+    使用時のみ、全章スレッドが同一の有料キーを共有する）でも、このクールダウンはキー単位で
+    正しく共有される。
     """
 
     def __init__(self) -> None:

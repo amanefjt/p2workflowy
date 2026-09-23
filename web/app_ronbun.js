@@ -14,6 +14,8 @@ const API_BASE = window.location.hostname === 'localhost' || window.location.hos
 
 // Load saved values from localStorage
 document.addEventListener('DOMContentLoaded', () => {
+    const savedApiKey = localStorage.getItem('p2workflowy_api_key');
+    if (savedApiKey) document.getElementById('api_key').value = savedApiKey;
     const savedExpertise = localStorage.getItem('p2workflowy_expertise');
     if (savedExpertise) document.getElementById('expertise').value = savedExpertise;
 
@@ -45,6 +47,12 @@ form.addEventListener('submit', async (e) => {
     }
 
     // 設定の保存
+    const apiKey = document.getElementById('api_key').value.trim();
+    if (apiKey) {
+        localStorage.setItem('p2workflowy_api_key', apiKey);
+    } else {
+        localStorage.removeItem('p2workflowy_api_key');
+    }
     localStorage.setItem('p2workflowy_expertise', expertise);
 
     formData.set('expertise', expertise); // name属性で既に入っている場合があるためsetで上書き

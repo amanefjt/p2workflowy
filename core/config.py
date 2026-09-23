@@ -25,32 +25,16 @@ MAX_SESSION_HISTORY = 10
 # LLM 設定 (環境変数から取得)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 
-# CLI (main.py) 用の無料枠キー（最大4本）。429/503時に free1→…→free4→GEMINI_API_KEY(有料)
-# の順で自動フォールバックするほか、FREE tier では「キー × モデル」の2軸ラウンドロビンで
-# 能動的に負荷分散する（docs/model_optimization.md §8、core/llm_client.py::KeyRotator）。
-# 各キーは別GCPプロジェクトである必要がある（無料枠のRPM/RPD/TPMはキー単位ではなく
-# プロジェクト単位、docs/gemini_models.md §4）。未設定のキーは KeyRotator.configure() が
-# 自動的に除外するため、2本しか設定していない環境でもそのまま動く。
+# CLI (main.py) 用の無料枠キー（1本のみ）。Gemini APIのレート制限・ティア（無料/有料）は
+# キー単位ではなくGCPプロジェクト単位のため、複数プロジェクトの無料キーをプールして枠を
+# 水増しする運用はGoogle API Termsの "will not attempt to circumvent" 条項に抵触しうる
+# （2026-09-23、docs/management/requirements_log.md 同日エントリ参照）。そのため CLI は
+# GEMINI_API_KEY_FREE_1（無料）と GEMINI_API_KEY（有料）のうち設定されている方を1本だけ
+# 使う（両方設定時は有料優先、main.py参照）。実行中の無料→有料の自動フォールバックはしない。
 GEMINI_API_KEY_FREE_1 = os.environ.get("GEMINI_API_KEY_FREE_1")
-GEMINI_API_KEY_FREE_2 = os.environ.get("GEMINI_API_KEY_FREE_2")
-GEMINI_API_KEY_FREE_3 = os.environ.get("GEMINI_API_KEY_FREE_3")
-GEMINI_API_KEY_FREE_4 = os.environ.get("GEMINI_API_KEY_FREE_4")
 
-# 設定済みの CLI 用無料キーだけを並び順どおりに集めたリスト（main.py が参照）。
-GEMINI_API_KEY_FREE_KEYS: List[str] = [
-    k for k in (
-        GEMINI_API_KEY_FREE_1, GEMINI_API_KEY_FREE_2,
-        GEMINI_API_KEY_FREE_3, GEMINI_API_KEY_FREE_4,
-    ) if k
-]
-
-# Webアプリ (server.py) 用の無料枠キー（最大5本）。429/503フォールバック用途ではなく、
-# 同時実行数の上限として使う「並行スロット」（core/llm_client.py::WebKeyPool は server.py 側）。
-# 各キーは別GCPプロジェクトかつ、CLI用の2本とも別プロジェクトである必要がある。
-_GEMINI_API_KEY_WEB_RAW = [
-    os.environ.get(f"GEMINI_API_KEY_WEB_{i}") for i in range(1, 6)
-]
-GEMINI_API_KEY_WEB_KEYS: List[str] = [k for k in _GEMINI_API_KEY_WEB_RAW if k]
+# 設定済みの CLI 用無料キーを集めたリスト（main.py が参照。長さは0か1）。
+GEMINI_API_KEY_FREE_KEYS: List[str] = [k for k in (GEMINI_API_KEY_FREE_1,) if k]
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
 APP_ADMIN_PASSCODE = os.environ.get("APP_ADMIN_PASSCODE")

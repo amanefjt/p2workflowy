@@ -20,6 +20,8 @@ python3 main.py data/paper.pdf --session <id> --resume 4   # フェーズ 4 か�
 
 テストは `python3 -m pytest tests/unit/ -v`。
 
+日本語の本（章ごとの Markdown）のレジュメだけが欲しいときは `venv/bin/python scripts/resume_from_md.py <章MDのフォルダ>`（本全体＋章別。翻訳・構造化なし、続きから再開可）。前提は 1 章 1 ファイルの連番 MD と、書名・著者を書いた `_meta.md`（`- 書名：…`／`- 著者：…` の行。なくても動くが、章レジュメが書名を取り違えやすい）。OPML なら先に Cultivator の `scripts/opml_to_library.py` で章 MD に分ける。
+
 ## パイプラインのハマりどころ
 
 5 フェーズ構成（Phase 1 前処理 → 2 DNA 抽出 → 3 構造化 → 4 翻訳 → 5 出力）とモジュール対応は `docs/ARCHITECTURE.md` §2 を参照。中間状態は `state/<session_id>/phaseN_*.json` に永続化され、`--resume <N>` で任意フェーズから再開できる。**この永続化互換性を壊さないこと**（`from_dict()` が未知キーを無視するのはそのため）。
